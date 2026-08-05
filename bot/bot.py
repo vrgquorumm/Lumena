@@ -3440,11 +3440,15 @@ async def handle_founder_edit_text(msg: Message):
     brand.save_custom_texts()
 
     label = brand.TEXT_LABELS.get(key, key)
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛠 Открыть редактор", callback_data="editor:menu")]
+    ])
     await msg.reply(
         f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
         "Бот будет использовать твой текст с Premium emoji.\n\n"
         f"<code>/resettext {key}</code> — сбросить к дефолту.",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=back_kb,
     )
 
 
@@ -3630,11 +3634,8 @@ def _editor_btn_detail_kb(key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@dp.message(Command("изменить", "edit"))
-async def cmd_editor(msg: Message):
-    """Главный редактор контента бота — только для разрешённых, только в ЛС."""
-    if not is_owner(msg) or msg.chat.type != "private":
-        return
+async def _send_editor_menu(msg):
+    """Отправляет главное меню редактора (используется из нескольких мест)."""
     await msg.answer(
         "🛠 <b>Редактор Лумены</b>\n\n"
         "Выбери, что хочешь изменить:\n"
@@ -3643,6 +3644,23 @@ async def cmd_editor(msg: Message):
         parse_mode="HTML",
         reply_markup=_editor_main_menu_kb(),
     )
+
+
+# /edit — латиница (рабочая команда)
+@dp.message(Command("edit"))
+async def cmd_editor_latin(msg: Message):
+    if not is_owner(msg) or msg.chat.type != "private":
+        return
+    await _send_editor_menu(msg)
+
+
+# «изменить» — кириллица, Telegram не распознаёт как команду, ловим текстом
+@dp.message(F.chat.type == "private",
+            F.func(lambda m: (m.text or "").strip().lower().lstrip("/") == "изменить"))
+async def cmd_editor_ru(msg: Message):
+    if not is_owner(msg):
+        return
+    await _send_editor_menu(msg)
 
 
 @dp.callback_query(F.data == "editor:menu")
@@ -3848,11 +3866,15 @@ async def handle_btn_edit_input(msg: Message):
     brand.save_custom_buttons()
 
     what = "Ссылка" if step == "url" else "Название"
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔘 К кнопкам", callback_data="editor:btns")],
+        [InlineKeyboardButton(text="🛠 Главное меню", callback_data="editor:menu")],
+    ])
     await msg.reply(
         f"✅ {what} кнопки <b>{html.escape(df.get('desc', key))}</b> обновлено!\n\n"
-        f"Новое значение: <code>{html.escape(text)}</code>\n\n"
-        "Используй /изменить чтобы продолжить редактирование.",
+        f"Новое значение: <code>{html.escape(text)}</code>",
         parse_mode="HTML",
+        reply_markup=back_kb,
     )
 
 
