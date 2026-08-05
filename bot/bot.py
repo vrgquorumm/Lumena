@@ -4170,6 +4170,13 @@ async def universal_handler(msg: Message):
     if not msg.text:
         return
 
+    # ── Редактор: фаундер пишет «изменить» или «/изменить» в ЛС — приоритет
+    if (msg.chat.type == "private"
+            and is_owner(msg)
+            and msg.text.strip().lower().lstrip("/") == "изменить"):
+        await _send_editor_menu(msg)
+        return
+
     # Проверка на оскорбление верхушки (до остального)
     if await _check_admin_insult(msg):
         return
