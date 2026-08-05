@@ -3633,7 +3633,7 @@ def _editor_btn_detail_kb(key: str) -> InlineKeyboardMarkup:
 @dp.message(Command("изменить", "edit"))
 async def cmd_editor(msg: Message):
     """Главный редактор контента бота — только для разрешённых, только в ЛС."""
-    if not is_editor(msg) or msg.chat.type != "private":
+    if not is_owner(msg) or msg.chat.type != "private":
         return
     await msg.answer(
         "🛠 <b>Редактор Лумены</b>\n\n"
@@ -3647,7 +3647,7 @@ async def cmd_editor(msg: Message):
 
 @dp.callback_query(F.data == "editor:menu")
 async def cb_editor_menu(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     await cb.message.edit_text(
         "🛠 <b>Редактор Лумены</b>\n\n"
@@ -3662,7 +3662,7 @@ async def cb_editor_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "editor:texts")
 async def cb_editor_texts(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     custom = brand.all_custom_texts()
     total  = sum(len(keys) for _, keys in _EDITOR_TEXT_CATEGORIES
@@ -3681,7 +3681,7 @@ async def cb_editor_texts(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("editor:cat:"))
 async def cb_editor_cat(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     try:
         cat_idx = int(cb.data.split(":")[-1])
@@ -3708,7 +3708,7 @@ async def cb_editor_cat(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "editor:btns")
 async def cb_editor_btns(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     lines = ["🔘 <b>Кнопки бота</b>\n",
              "✅ — изменена   ⬜ — стандартная\n"]
@@ -3726,7 +3726,7 @@ async def cb_editor_btns(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("editor:btn:"))
 async def cb_editor_btn_detail(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     key = cb.data.split(":", 2)[-1]
     if key not in brand.BUTTON_DEFS:
@@ -3753,7 +3753,7 @@ async def cb_editor_btn_detail(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("editor:btn_label:"))
 async def cb_editor_btn_label(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     key = cb.data.split(":", 2)[-1]
     if key not in brand.BUTTON_DEFS:
@@ -3772,7 +3772,7 @@ async def cb_editor_btn_label(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("editor:btn_url:"))
 async def cb_editor_btn_url(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     key = cb.data.split(":", 2)[-1]
     df  = brand.BUTTON_DEFS.get(key, {})
@@ -3792,7 +3792,7 @@ async def cb_editor_btn_url(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("editor:btn_reset:"))
 async def cb_editor_btn_reset(cb: CallbackQuery):
-    if not is_editor(cb):
+    if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     key = cb.data.split(":", 2)[-1]
     if key not in brand.BUTTON_DEFS:
