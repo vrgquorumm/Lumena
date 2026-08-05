@@ -218,3 +218,111 @@ def load_custom_texts(path: str = "data/custom_texts.json") -> None:
         pass
     except Exception as ex:
         print(f"⚠️ load_custom_texts: {ex}")
+
+
+# ── Кастомные кнопки ──────────────────────────────────────
+_custom_buttons: dict[str, dict] = {}
+
+# Все редактируемые кнопки бота: ключ → {label, url|None, desc}
+BUTTON_DEFS: dict[str, dict] = {
+    "main_chat":      {
+        "label": "💬 Чат проекта",
+        "url":   "https://t.me/+_K2SJRYIhq9hYjFi",
+        "desc":  "Главное меню — кнопка «Чат»",
+        "type":  "url",
+    },
+    "main_channel":   {
+        "label": "📢 Канал",
+        "url":   "https://t.me/lmnfff",
+        "desc":  "Главное меню — кнопка «Канал»",
+        "type":  "url",
+    },
+    "main_help":      {
+        "label": "📖 Все команды",
+        "url":   None,
+        "desc":  "Главное меню — кнопка «Все команды»",
+        "type":  "callback",
+    },
+    "verify_start":   {
+        "label": "✅ Пройти верификацию",
+        "url":   None,
+        "desc":  "Кнопка старта верификации",
+        "type":  "callback",
+    },
+    "verify_confirm": {
+        "label": "✅ Я не бот — подтвердить",
+        "url":   None,
+        "desc":  "Кнопка подтверждения верификации",
+        "type":  "callback",
+    },
+    "welcome_btn":    {
+        "label": "📌 Добро пожаловать!",
+        "url":   None,
+        "desc":  "Кнопка в приветственном сообщении",
+        "type":  "callback",
+    },
+}
+
+
+def btn_label(key: str) -> str:
+    """Текущий label кнопки (кастомный или дефолтный)."""
+    cb = _custom_buttons.get(key, {})
+    return cb.get("label") or BUTTON_DEFS.get(key, {}).get("label", key)
+
+
+def btn_url(key: str) -> str | None:
+    """Текущий URL кнопки (кастомный или дефолтный). None для callback-кнопок."""
+    cb = _custom_buttons.get(key, {})
+    if "url" in cb:
+        return cb["url"]
+    return BUTTON_DEFS.get(key, {}).get("url")
+
+
+def set_custom_button(key: str, label: str | None = None, url: str | None = None) -> None:
+    existing = dict(_custom_buttons.get(key, {}))
+    if label is not None:
+        existing["label"] = label
+    if url is not None:
+        existing["url"] = url
+    _custom_buttons[key] = existing
+
+
+def get_custom_button(key: str) -> dict | None:
+    return dict(_custom_buttons[key]) if key in _custom_buttons else None
+
+
+def reset_custom_button(key: str) -> None:
+    _custom_buttons.pop(key, None)
+
+
+def all_custom_buttons() -> dict:
+    return dict(_custom_buttons)
+
+
+def is_btn_customized(key: str) -> bool:
+    """True если кнопка была изменена относительно дефолта."""
+    cb = _custom_buttons.get(key)
+    if not cb:
+        return False
+    df = BUTTON_DEFS.get(key, {})
+    label_changed = "label" in cb and cb["label"] != df.get("label")
+    url_changed   = "url"   in cb and cb["url"]   != df.get("url")
+    return label_changed or url_changed
+
+
+def save_custom_buttons(path: str = "data/custom_buttons.json") -> None:
+    import json, os
+    os.makedirs("data", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_custom_buttons, f, ensure_ascii=False, indent=2)
+
+
+def load_custom_buttons(path: str = "data/custom_buttons.json") -> None:
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            _custom_buttons.update(json.load(f))
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        print(f"⚠️ load_custom_buttons: {ex}")

@@ -44,7 +44,8 @@ import anketa as _ank
 import ai_agent
 import brand
 
-_edit_sessions: dict[int, str] = {}   # uid → ключ текста на редактирование (ЛС с фаундером)
+_edit_sessions:     dict[int, str]  = {}  # uid → ключ текста на редактирование (ЛС с фаундером)
+_btn_edit_sessions: dict[int, dict] = {}  # uid → {"key": str, "step": "label"|"url"}  (редактор кнопок)
 
 # ═══════════════════════════════════════════════════════
 # КОНФИГУРАЦИЯ
@@ -347,6 +348,18 @@ def is_owner(msg) -> bool:
     if u is None:
         return False
     return u.id == OWNER_ID or (u.username or "").lower() == OWNER_USERNAME.lower()
+
+# Пользователи, которым разрешено редактировать все тексты/кнопки бота
+_EDITOR_USERNAMES = {OWNER_USERNAME.lower(), "veroniksssxa"}
+
+def is_editor(msg) -> bool:
+    """True для фаундера и всех, кому разрешено редактировать контент бота."""
+    u = getattr(msg, "from_user", None)
+    if u is None:
+        return False
+    if u.id == OWNER_ID:
+        return True
+    return (u.username or "").lower() in _EDITOR_USERNAMES
 
 def is_super(msg) -> bool:
     return msg.from_user.id in SUPER_IDS or is_owner(msg)
@@ -3078,13 +3091,23 @@ _START_TEXT = (
     "📋 Анкета знакомств — команда <code>/анкета</code>"
 )
 
-_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="💬 Чат проекта", url="https://t.me/+_K2SJRYIhq9hYjFi"),
-        InlineKeyboardButton(text="📢 Канал", url="https://t.me/lmnfff"),
-    ],
-    [InlineKeyboardButton(text="📖 Все команды", callback_data="help:menu")],
-])
+def build_main_kb() -> InlineKeyboardMarkup:
+    """Главная клавиатура /start — читает кастомные label/url из brand."""
+    chat_label = brand.btn_label("main_chat")
+    chat_url   = brand.btn_url("main_chat")
+    chan_label  = brand.btn_label("main_channel")
+    chan_url    = brand.btn_url("main_channel")
+    help_label  = brand.btn_label("main_help")
+    row1 = []
+    if chat_url:
+        row1.append(InlineKeyboardButton(text=chat_label, url=chat_url))
+    if chan_url:
+        row1.append(InlineKeyboardButton(text=chan_label, url=chan_url))
+    rows = []
+    if row1:
+        rows.append(row1)
+    rows.append([InlineKeyboardButton(text=help_label, callback_data="help:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @dp.message(Command("start"), F.chat.type == "private")
@@ -3100,14 +3123,14 @@ async def cmd_start_private(msg: Message):
             msg, "start_text",
             _START_TEXT.format(name=name),
             name=raw_name,
-            reply_markup=_MAIN_KB,
+            reply_markup=build_main_kb(),
         )
         return
 
     # Новый пользователь — сначала верификация
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=_btn_text("verify_btn", "✅ Пройти верификацию"),
+            text=brand.btn_label("verify_start"),
             callback_data="verify:go",
         )]
     ])
@@ -3128,7 +3151,7 @@ async def cb_verify_go(cb: CallbackQuery):
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text=_btn_text("verify_confirm_btn", "✅ Я не бот — подтвердить"),
+            text=brand.btn_label("verify_confirm"),
             callback_data="verify:done",
         )]
     ])
@@ -3159,7 +3182,7 @@ async def cb_verify_done(cb: CallbackQuery):
         cb.message, "start_text",
         _START_TEXT.format(name=name),
         name=raw_name,
-        reply_markup=_MAIN_KB,
+        reply_markup=build_main_kb(),
     )
     await cb.answer()
 
@@ -3254,10 +3277,13 @@ async def cmd_give_premium(msg: Message, command: CommandObject):
 async def cmd_cancel_ank(msg: Message):
     if msg.chat.type == "private":
         uid = msg.from_user.id
-        # Если фаундер в сессии редактирования текста — сбрасываем её
+        # Если редактор в сессии — сбрасываем
         if uid in _edit_sessions:
             _edit_sessions.pop(uid)
             return await msg.reply("✏️ Редактирование отменено.")
+        if uid in _btn_edit_sessions:
+            _btn_edit_sessions.pop(uid)
+            return await msg.reply("✏️ Редактирование кнопки отменено.")
         if uid in support_sessions:
             del support_sessions[uid]
             await msg.reply("❌ Обращение отменено.")
@@ -3361,6 +3387,7 @@ async def cmd_setemoji(msg: Message):
     F.func(lambda m: (
         not any(e.type == "bot_command" for e in (m.entities or []))
         and (m.from_user is None or m.from_user.id not in _edit_sessions)
+        and (m.from_user is None or m.from_user.id not in _btn_edit_sessions)
     ))
 )
 async def handle_emoji_extract(msg: Message):
@@ -3515,6 +3542,317 @@ async def cmd_resettext(msg: Message):
     await msg.reply(
         f"🔄 <b>{html.escape(brand.TEXT_LABELS[key])}</b> — сброшен к дефолту.",
         parse_mode="HTML"
+    )
+
+
+# ═══════════════════════════════════════════════════════
+# КОМАНДА «ИЗМЕНИТЬ» — полный редактор контента бота
+# Доступно: фаундеру и @veroniksssxa (только в ЛС)
+# ═══════════════════════════════════════════════════════
+
+_EDITOR_TEXT_CATEGORIES = [
+    ("🏠 Главный экран",   ["start_text", "start_unverified"]),
+    ("✅ Верификация",      ["verify_btn", "verify_prompt", "verify_confirm_btn", "verify_done"]),
+    ("👋 Приветствие",      ["welcome_msg", "welcome_btn"]),
+    ("📝 Анкета — флоу",   ["anketa_start", "anketa_cancel", "anketa_confirm",
+                             "anketa_duplicate", "anketa_cancel_none",
+                             "anketa_private_only", "anketa_no_verify", "step_accepted"]),
+    ("🛡 Модерация",        ["anketa_approve", "anketa_reject", "anketa_delete",
+                             "mod_comment", "revoke_notify"]),
+    ("👑 VIP & Поддержка", ["vip_activated", "support_prompt", "support_sent"]),
+]
+
+
+def _editor_main_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✏️ Тексты",  callback_data="editor:texts"),
+            InlineKeyboardButton(text="🔘 Кнопки",  callback_data="editor:btns"),
+        ],
+    ])
+
+
+def _editor_texts_kb() -> InlineKeyboardMarkup:
+    """Кнопки категорий текстов."""
+    rows = []
+    for i, (cat_name, _) in enumerate(_EDITOR_TEXT_CATEGORIES):
+        rows.append([InlineKeyboardButton(text=cat_name, callback_data=f"editor:cat:{i}")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _editor_cat_kb(cat_idx: int) -> InlineKeyboardMarkup:
+    """Кнопки конкретных текстов в категории."""
+    _, keys = _EDITOR_TEXT_CATEGORIES[cat_idx]
+    custom = brand.all_custom_texts()
+    btns = []
+    for k in keys:
+        if k not in brand.TEXT_LABELS:
+            continue
+        status = "✅" if k in custom else "⬜"
+        short  = brand.TEXT_LABELS[k][:24]
+        btns.append(InlineKeyboardButton(
+            text=f"{status} {short}",
+            callback_data=f"edittext:{k}",
+        ))
+    rows = [btns[i:i+2] for i in range(0, len(btns), 2)]
+    rows.append([InlineKeyboardButton(text="◀️ Категории", callback_data="editor:texts")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _editor_btns_kb() -> InlineKeyboardMarkup:
+    """Кнопки для редактирования кнопок бота."""
+    rows = []
+    for key, df in brand.BUTTON_DEFS.items():
+        status = "✅" if brand.is_btn_customized(key) else "⬜"
+        short  = df["desc"][:28]
+        rows.append([InlineKeyboardButton(
+            text=f"{status} {short}",
+            callback_data=f"editor:btn:{key}",
+        )])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _editor_btn_detail_kb(key: str) -> InlineKeyboardMarkup:
+    df = brand.BUTTON_DEFS.get(key, {})
+    is_url_btn = df.get("type") == "url"
+    btns_row = [InlineKeyboardButton(text="✏️ Изм. название", callback_data=f"editor:btn_label:{key}")]
+    if is_url_btn:
+        btns_row.append(InlineKeyboardButton(text="🔗 Изм. ссылку", callback_data=f"editor:btn_url:{key}"))
+    rows = [
+        btns_row,
+        [
+            InlineKeyboardButton(text="🔄 Сбросить",       callback_data=f"editor:btn_reset:{key}"),
+            InlineKeyboardButton(text="◀️ К кнопкам",      callback_data="editor:btns"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dp.message(Command("изменить", "edit"))
+async def cmd_editor(msg: Message):
+    """Главный редактор контента бота — только для разрешённых, только в ЛС."""
+    if not is_editor(msg) or msg.chat.type != "private":
+        return
+    await msg.answer(
+        "🛠 <b>Редактор Лумены</b>\n\n"
+        "Выбери, что хочешь изменить:\n"
+        "✏️ <b>Тексты</b> — все сообщения и фразы бота\n"
+        "🔘 <b>Кнопки</b> — названия и ссылки кнопок",
+        parse_mode="HTML",
+        reply_markup=_editor_main_menu_kb(),
+    )
+
+
+@dp.callback_query(F.data == "editor:menu")
+async def cb_editor_menu(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    await cb.message.edit_text(
+        "🛠 <b>Редактор Лумены</b>\n\n"
+        "Выбери, что хочешь изменить:\n"
+        "✏️ <b>Тексты</b> — все сообщения и фразы бота\n"
+        "🔘 <b>Кнопки</b> — названия и ссылки кнопок",
+        parse_mode="HTML",
+        reply_markup=_editor_main_menu_kb(),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "editor:texts")
+async def cb_editor_texts(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    custom = brand.all_custom_texts()
+    total  = sum(len(keys) for _, keys in _EDITOR_TEXT_CATEGORIES
+                 if any(k in brand.TEXT_LABELS for k in keys))
+    done   = sum(1 for _, keys in _EDITOR_TEXT_CATEGORIES
+                 for k in keys if k in custom and k in brand.TEXT_LABELS)
+    await cb.message.edit_text(
+        f"✏️ <b>Тексты бота</b>\n\n"
+        f"Изменено: <b>{done}</b> из <b>{total}</b>\n"
+        "Выбери категорию для редактирования:",
+        parse_mode="HTML",
+        reply_markup=_editor_texts_kb(),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:cat:"))
+async def cb_editor_cat(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    try:
+        cat_idx = int(cb.data.split(":")[-1])
+    except (ValueError, IndexError):
+        return await cb.answer("Ошибка", show_alert=True)
+    if cat_idx >= len(_EDITOR_TEXT_CATEGORIES):
+        return await cb.answer("Ошибка", show_alert=True)
+    cat_name, keys = _EDITOR_TEXT_CATEGORIES[cat_idx]
+    custom = brand.all_custom_texts()
+    lines  = [f"✏️ <b>{html.escape(cat_name)}</b>\n",
+              "✅ — кастомный текст   ⬜ — дефолт\n"]
+    for k in keys:
+        if k not in brand.TEXT_LABELS:
+            continue
+        status = "✅" if k in custom else "⬜"
+        lines.append(f"  {status} {html.escape(brand.TEXT_LABELS[k])}")
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_editor_cat_kb(cat_idx),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "editor:btns")
+async def cb_editor_btns(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    lines = ["🔘 <b>Кнопки бота</b>\n",
+             "✅ — изменена   ⬜ — стандартная\n"]
+    for key, df in brand.BUTTON_DEFS.items():
+        status     = "✅" if brand.is_btn_customized(key) else "⬜"
+        cur_label  = html.escape(brand.btn_label(key))
+        lines.append(f"  {status} <b>{html.escape(df['desc'])}</b>: {cur_label}")
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_editor_btns_kb(),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:btn:"))
+async def cb_editor_btn_detail(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    if key not in brand.BUTTON_DEFS:
+        return await cb.answer("Неизвестная кнопка", show_alert=True)
+    df         = brand.BUTTON_DEFS[key]
+    cur_label  = html.escape(brand.btn_label(key))
+    cur_url    = brand.btn_url(key)
+    is_url_btn = df.get("type") == "url"
+    lines = [
+        f"🔘 <b>{html.escape(df['desc'])}</b>\n",
+        f"Название: <b>{cur_label}</b>",
+    ]
+    if is_url_btn:
+        lines.append(f"Ссылка: <code>{html.escape(cur_url or '—')}</code>")
+    if brand.is_btn_customized(key):
+        lines.append("\n<i>Изменена относительно дефолта.</i>")
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_editor_btn_detail_kb(key),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:btn_label:"))
+async def cb_editor_btn_label(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    if key not in brand.BUTTON_DEFS:
+        return await cb.answer("Неизвестная кнопка", show_alert=True)
+    _btn_edit_sessions[cb.from_user.id] = {"key": key, "step": "label"}
+    cur = html.escape(brand.btn_label(key))
+    await cb.message.answer(
+        f"✏️ <b>Новое название кнопки</b>\n\n"
+        f"Сейчас: <b>{cur}</b>\n\n"
+        "Отправь новый текст кнопки.\n"
+        "/отмена — выйти без сохранения.",
+        parse_mode="HTML",
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:btn_url:"))
+async def cb_editor_btn_url(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    df  = brand.BUTTON_DEFS.get(key, {})
+    if df.get("type") != "url":
+        return await cb.answer("Эта кнопка без ссылки", show_alert=True)
+    _btn_edit_sessions[cb.from_user.id] = {"key": key, "step": "url"}
+    cur = html.escape(brand.btn_url(key) or "не задана")
+    await cb.message.answer(
+        f"🔗 <b>Новая ссылка кнопки</b>\n\n"
+        f"Сейчас: <code>{cur}</code>\n\n"
+        "Отправь новую ссылку (https://...).\n"
+        "/отмена — выйти без сохранения.",
+        parse_mode="HTML",
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:btn_reset:"))
+async def cb_editor_btn_reset(cb: CallbackQuery):
+    if not is_editor(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    if key not in brand.BUTTON_DEFS:
+        return await cb.answer("Неизвестная кнопка", show_alert=True)
+    brand.reset_custom_button(key)
+    brand.save_custom_buttons()
+    df = brand.BUTTON_DEFS[key]
+    await cb.answer(f"🔄 «{df['desc']}» сброшена к дефолту", show_alert=True)
+    # Обновляем сообщение
+    lines = ["🔘 <b>Кнопки бота</b>\n",
+             "✅ — изменена   ⬜ — стандартная\n"]
+    for k, d in brand.BUTTON_DEFS.items():
+        status    = "✅" if brand.is_btn_customized(k) else "⬜"
+        cur_label = html.escape(brand.btn_label(k))
+        lines.append(f"  {status} <b>{html.escape(d['desc'])}</b>: {cur_label}")
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_editor_btns_kb(),
+    )
+
+
+@dp.message(F.chat.type == "private",
+            F.func(lambda m: m.from_user is not None
+                   and m.from_user.id in _btn_edit_sessions
+                   and not (m.text or "").startswith("/")))
+async def handle_btn_edit_input(msg: Message):
+    """Принимает ввод для редактирования названия или ссылки кнопки."""
+    uid    = msg.from_user.id
+    state  = _btn_edit_sessions.pop(uid, None)
+    if not state:
+        return
+    key  = state["key"]
+    step = state["step"]
+    text = (msg.text or "").strip()
+    if not text:
+        _btn_edit_sessions[uid] = state  # вернуть состояние
+        return await msg.reply("❌ Пустое сообщение — отправь текст.")
+
+    df = brand.BUTTON_DEFS.get(key, {})
+
+    if step == "url":
+        if not (text.startswith("http://") or text.startswith("https://") or text.startswith("tg://")):
+            _btn_edit_sessions[uid] = state
+            return await msg.reply("❌ Ссылка должна начинаться с https:// или tg://")
+        brand.set_custom_button(key, url=text)
+    else:
+        if len(text) > 64:
+            _btn_edit_sessions[uid] = state
+            return await msg.reply("❌ Название кнопки не может быть длиннее 64 символов.")
+        brand.set_custom_button(key, label=text)
+
+    brand.save_custom_buttons()
+
+    what = "Ссылка" if step == "url" else "Название"
+    await msg.reply(
+        f"✅ {what} кнопки <b>{html.escape(df.get('desc', key))}</b> обновлено!\n\n"
+        f"Новое значение: <code>{html.escape(text)}</code>\n\n"
+        "Используй /изменить чтобы продолжить редактирование.",
+        parse_mode="HTML",
     )
 
 
@@ -4118,6 +4456,7 @@ async def main():
     load_data()
     _ank.load_anketa_settings()
     brand.load_custom_texts()
+    brand.load_custom_buttons()
 
     # ── Загружаем emoji пак при старте ───────────────────
     _startup_pack = brand.get_pack_name() or "adaptiveqp_by_emsetbot"
