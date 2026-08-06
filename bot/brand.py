@@ -8,6 +8,77 @@ from __future__ import annotations
 _pack_ids: list[str] = []
 _pack_name: str = ""
 
+# ── Кастомный стиль ───────────────────────────────────────
+_custom_style: dict[str, str] = {}
+
+# Описания редактируемых параметров стиля
+STYLE_DEFS: dict[str, dict] = {
+    "header_text":  {
+        "desc":    "Текст заголовка",
+        "default": "L U M E N A",
+        "hint":    'Показывается в шапке каждого ответа. Пример: «L U M E N A» или «✨ LUMENA ✨»',
+        "max":     40,
+    },
+    "divider_char": {
+        "desc":    "Символ разделителя",
+        "default": "▬",
+        "hint":    "Повторяется 10 раз как горизонтальная черта. Один символ или emoji.",
+        "max":     8,
+    },
+    "bullet_char":  {
+        "desc":    "Буллет-поинт",
+        "default": "◾",
+        "hint":    "Символ в начале пунктов списка. Один символ или emoji.",
+        "max":     8,
+    },
+    "accent_char":  {
+        "desc":    "Акцентный символ",
+        "default": "◆",
+        "hint":    "Используется для выделения важного. Один символ или emoji.",
+        "max":     8,
+    },
+}
+
+
+def get_style(key: str) -> str:
+    """Текущее значение стиля (кастомное или дефолтное)."""
+    return _custom_style.get(key) or STYLE_DEFS.get(key, {}).get("default", "")
+
+
+def is_style_customized(key: str) -> bool:
+    return key in _custom_style and _custom_style[key] != STYLE_DEFS.get(key, {}).get("default")
+
+
+def set_style(key: str, value: str) -> None:
+    _custom_style[key] = value
+
+
+def reset_style(key: str) -> None:
+    _custom_style.pop(key, None)
+
+
+def all_custom_styles() -> dict:
+    return dict(_custom_style)
+
+
+def save_custom_style(path: str = "data/custom_style.json") -> None:
+    import json, os
+    os.makedirs("data", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_custom_style, f, ensure_ascii=False, indent=2)
+
+
+def load_custom_style(path: str = "data/custom_style.json") -> None:
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            _custom_style.update(json.load(f))
+    except FileNotFoundError:
+        pass
+    except Exception as ex:
+        print(f"⚠️ load_custom_style: {ex}")
+
+
 # Текстовые fallback для каждой роли
 _FALLBACK: dict[str, str] = {
     "header":  "🖤",
@@ -65,25 +136,26 @@ def get_role_id(role: str) -> str | None:
 
 
 def hdr() -> str:
-    """Заголовок  EM  L U M E N A  EM  с Premium emoji."""
-    em = e("header")
-    return f"{em}  L U M E N A  {em}"
+    """Заголовок  EM  НАЗВАНИЕ  EM."""
+    em   = e("header")
+    name = _custom_style.get("header_text") or "L U M E N A"
+    return f"{em}  {name}  {em}"
 
 
 def div(n: int = 10) -> str:
-    """Разделитель из n кастомных emoji."""
-    em = e("divider", "▬")
-    return em * n
+    """Разделитель из n символов."""
+    ch = _custom_style.get("divider_char") or e("divider", "▬")
+    return ch * n
 
 
 def bul() -> str:
     """Буллет-поинт."""
-    return e("bullet")
+    return _custom_style.get("bullet_char") or e("bullet", "◾")
 
 
 def acc() -> str:
     """Акцентный символ."""
-    return e("accent")
+    return _custom_style.get("accent_char") or e("accent", "◆")
 
 
 def chk() -> str:

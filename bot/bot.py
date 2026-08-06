@@ -45,7 +45,8 @@ import ai_agent
 import brand
 
 _edit_sessions:     dict[int, str]  = {}  # uid → ключ текста на редактирование (ЛС с фаундером)
-_btn_edit_sessions: dict[int, dict] = {}  # uid → {"key": str, "step": "label"|"url"}  (редактор кнопок)
+_btn_edit_sessions: dict[int, dict] = {}    # uid → {"key": str, "step": "label"|"url"}  (редактор кнопок)
+_style_edit_sessions: dict[int, str] = {}  # uid → style_key  (редактор оформления)
 # (chat_id, message_id) → text_key — трекинг исходящих сообщений для reply-редактора
 _tracked_bot_msgs:  dict[tuple[int, int], str] = {}
 
@@ -3187,6 +3188,7 @@ TEXT_COMMANDS.update({
     "роль": cmd_set_role, "setrole": cmd_set_role,
     "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
     "роли": cmd_roles, "roles": cmd_roles,
+    "настройки": cmd_editor_latin, "settings": cmd_editor_latin,
     "списокбраков": cmd_marriages, "список браков": cmd_marriages, "браки": cmd_marriages,
     # Отношения
     "корабль": cmd_ship, "шип": cmd_ship,
@@ -4288,9 +4290,36 @@ _PAGE_SIZE = 8  # строк на страницу в категории
 def _editor_main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✏️ Тексты",  callback_data="editor:texts"),
-            InlineKeyboardButton(text="🔘 Кнопки",  callback_data="editor:btns"),
+            InlineKeyboardButton(text="✏️ Тексты",     callback_data="editor:texts"),
+            InlineKeyboardButton(text="🔘 Кнопки",     callback_data="editor:btns"),
         ],
+        [
+            InlineKeyboardButton(text="🎨 Оформление", callback_data="editor:style"),
+        ],
+    ])
+
+
+def _editor_style_kb() -> InlineKeyboardMarkup:
+    """Список редактируемых параметров оформления."""
+    rows = []
+    for key, df in brand.STYLE_DEFS.items():
+        status = "✅" if brand.is_style_customized(key) else "⬜"
+        cur    = brand.get_style(key)
+        rows.append([InlineKeyboardButton(
+            text=f"{status} {df['desc']}: {cur[:20]}",
+            callback_data=f"editor:style_edit:{key}",
+        )])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _editor_style_detail_kb(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✏️ Изменить",  callback_data=f"editor:style_input:{key}"),
+            InlineKeyboardButton(text="🔄 Сбросить",  callback_data=f"editor:style_reset:{key}"),
+        ],
+        [InlineKeyboardButton(text="◀️ К оформлению", callback_data="editor:style")],
     ])
 
 
@@ -4375,10 +4404,12 @@ def _editor_btn_detail_kb(key: str) -> InlineKeyboardMarkup:
 async def _send_editor_menu(msg):
     """Отправляет главное меню редактора (используется из нескольких мест)."""
     await msg.answer(
-        "🛠 <b>Редактор Лумены</b>\n\n"
-        "Выбери, что хочешь изменить:\n"
-        "✏️ <b>Тексты</b> — все сообщения и фразы бота\n"
-        "🔘 <b>Кнопки</b> — названия и ссылки кнопок",
+        f"{brand.hdr()}\n\n"
+        "🛠 <b>Настройки Лумены</b>\n\n"
+        "Выбери раздел:\n"
+        "✏️ <b>Тексты</b> — все фразы и сообщения бота\n"
+        "🔘 <b>Кнопки</b> — названия и ссылки кнопок\n"
+        "🎨 <b>Оформление</b> — заголовок, разделитель, буллеты",
         parse_mode="HTML",
         reply_markup=_editor_main_menu_kb(),
     )
@@ -4470,7 +4501,7 @@ async def cb_reply_edit_cancel(cb: CallbackQuery):
 
 
 # /edit — латиница. is_owner вынесен В ФИЛЬТР: если не совпало — сообщение идёт дальше
-@dp.message(Command("edit"),
+@dp.message(Command("edit", "настройки", "settings"),
             F.chat.type == "private",
             F.func(lambda m: is_owner(m)))
 async def cmd_editor_latin(msg: Message):
@@ -4492,10 +4523,12 @@ async def cb_editor_menu(cb: CallbackQuery):
     if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     await cb.message.edit_text(
-        "🛠 <b>Редактор Лумены</b>\n\n"
-        "Выбери, что хочешь изменить:\n"
-        "✏️ <b>Тексты</b> — все сообщения и фразы бота\n"
-        "🔘 <b>Кнопки</b> — названия и ссылки кнопок",
+        f"{brand.hdr()}\n\n"
+        "🛠 <b>Настройки Лумены</b>\n\n"
+        "Выбери раздел:\n"
+        "✏️ <b>Тексты</b> — все фразы и сообщения бота\n"
+        "🔘 <b>Кнопки</b> — названия и ссылки кнопок\n"
+        "🎨 <b>Оформление</b> — заголовок, разделитель, буллеты",
         parse_mode="HTML",
         reply_markup=_editor_main_menu_kb(),
     )
@@ -4674,6 +4707,127 @@ async def cb_editor_btn_reset(cb: CallbackQuery):
         "\n".join(lines),
         parse_mode="HTML",
         reply_markup=_editor_btns_kb(),
+    )
+
+
+@dp.callback_query(F.data == "editor:style")
+async def cb_editor_style(cb: CallbackQuery):
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    lines = ["🎨 <b>Оформление бота</b>\n",
+             "✅ — изменено   ⬜ — стандартное\n"]
+    for key, df in brand.STYLE_DEFS.items():
+        status = "✅" if brand.is_style_customized(key) else "⬜"
+        cur    = html.escape(brand.get_style(key))
+        lines.append(f"  {status} <b>{html.escape(df['desc'])}</b>: <code>{cur}</code>")
+    lines.append(f"\n{brand.div()}")
+    lines.append(f"Заголовок: {brand.hdr()}")
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_editor_style_kb(),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:style_edit:"))
+async def cb_editor_style_detail(cb: CallbackQuery):
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    if key not in brand.STYLE_DEFS:
+        return await cb.answer("Неизвестный параметр", show_alert=True)
+    df  = brand.STYLE_DEFS[key]
+    cur = html.escape(brand.get_style(key))
+    status = "✅ изменено" if brand.is_style_customized(key) else "⬜ стандартное"
+    await cb.message.edit_text(
+        f"🎨 <b>{html.escape(df['desc'])}</b>\n\n"
+        f"Статус: {status}\n"
+        f"Сейчас: <code>{cur}</code>\n\n"
+        f"<i>{html.escape(df['hint'])}</i>",
+        parse_mode="HTML",
+        reply_markup=_editor_style_detail_kb(key),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:style_input:"))
+async def cb_editor_style_input(cb: CallbackQuery):
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    if key not in brand.STYLE_DEFS:
+        return await cb.answer("Неизвестный параметр", show_alert=True)
+    df = brand.STYLE_DEFS[key]
+    _style_edit_sessions[cb.from_user.id] = key
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"editor:style_edit:{key}"),
+    ]])
+    await cb.message.answer(
+        f"✏️ <b>{html.escape(df['desc'])}</b>\n\n"
+        f"Сейчас: <code>{html.escape(brand.get_style(key))}</code>\n\n"
+        f"<i>{html.escape(df['hint'])}</i>\n\n"
+        "Отправь новое значение:",
+        parse_mode="HTML",
+        reply_markup=cancel_kb,
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("editor:style_reset:"))
+async def cb_editor_style_reset(cb: CallbackQuery):
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    key = cb.data.split(":", 2)[-1]
+    if key not in brand.STYLE_DEFS:
+        return await cb.answer("Неизвестный параметр", show_alert=True)
+    brand.reset_style(key)
+    brand.save_custom_style()
+    df = brand.STYLE_DEFS[key]
+    await cb.answer(f"🔄 «{df['desc']}» сброшено к дефолту", show_alert=False)
+    # обновить экран детали
+    cur = html.escape(brand.get_style(key))
+    await cb.message.edit_text(
+        f"🎨 <b>{html.escape(df['desc'])}</b>\n\n"
+        f"Статус: ⬜ стандартное\n"
+        f"Сейчас: <code>{cur}</code>\n\n"
+        f"<i>{html.escape(df['hint'])}</i>",
+        parse_mode="HTML",
+        reply_markup=_editor_style_detail_kb(key),
+    )
+
+
+@dp.message(F.chat.type == "private",
+            F.func(lambda m: m.from_user is not None
+                   and m.from_user.id in _style_edit_sessions
+                   and not (m.text or "").startswith("/")))
+async def handle_style_edit_input(msg: Message):
+    """Принимает новое значение параметра оформления."""
+    uid  = msg.from_user.id
+    key  = _style_edit_sessions.pop(uid, None)
+    if not key or key not in brand.STYLE_DEFS:
+        return
+    df   = brand.STYLE_DEFS[key]
+    text = (msg.text or "").strip()
+    if not text:
+        _style_edit_sessions[uid] = key
+        return await msg.reply("❌ Пустое сообщение — отправь значение.")
+    if len(text) > df["max"]:
+        _style_edit_sessions[uid] = key
+        return await msg.reply(f"❌ Слишком длинно (максимум {df['max']} символов).")
+    brand.set_style(key, text)
+    brand.save_custom_style()
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎨 К оформлению", callback_data="editor:style")],
+        [InlineKeyboardButton(text="🛠 Главное меню", callback_data="editor:menu")],
+    ])
+    await msg.reply(
+        f"✅ <b>{html.escape(df['desc'])}</b> обновлено!\n\n"
+        f"Новое значение: <code>{html.escape(text)}</code>\n\n"
+        f"Заголовок теперь: {brand.hdr()}\n"
+        f"Разделитель: {brand.div()}",
+        parse_mode="HTML",
+        reply_markup=back_kb,
     )
 
 
@@ -5338,6 +5492,7 @@ async def main():
     _ank.load_anketa_settings()
     brand.load_custom_texts()
     brand.load_custom_buttons()
+    brand.load_custom_style()
 
     # ── Загружаем emoji пак при старте ───────────────────
     _startup_pack = brand.get_pack_name() or "adaptiveqp_by_emsetbot"
