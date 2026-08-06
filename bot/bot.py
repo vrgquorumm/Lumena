@@ -256,11 +256,18 @@ def load_data():
         print(f"⚠️ load_data error: {e}")
 
 async def auto_save_loop():
-    """Автосохранение каждые 60 секунд."""
+    """Автосохранение каждые 60 секунд + надёжный пуш в GitHub."""
     while True:
         await asyncio.sleep(60)
         save_data()
-        print("💾 Автосохранение выполнено")
+        # Явно чекаємо пуш — create_task в save_data() ненадійний при частих збереженнях
+        try:
+            with open(DATA_FILE, "rb") as _f:
+                _raw = _f.read()
+            await brand.push_bot_data_to_github(_raw)
+            print("💾 Автосохранение + GitHub ✅")
+        except Exception as _e:
+            print(f"⚠️ auto_save GitHub push: {_e}")
 
 async def coin_rain_loop():
     """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
@@ -3512,7 +3519,6 @@ _HELP_SECTIONS = {
         "<code>монетка</code> · <code>кубик</code> · <code>ролл</code>\n"
         "<code>рандом [от] [до]</code>\n\n"
         "🕹 <b>Мини-игры:</b>\n"
-        "<code>кнб</code> — камень, ножницы, бумага\n"
         "<code>выбрать [а/б/в]</code> — выбор\n"
         "<code>оценить</code> · <code>загадка</code> · <code>виселица</code>\n\n"
         "⚡ <b>Риск:</b>\n"
@@ -3724,7 +3730,7 @@ TEXT_COMMANDS.update({
     "нумерология": cmd_numerology,
     # Игры
     "монетка": cmd_coin, "кубик": cmd_dice,
-    "кнб": cmd_rps, "рандом": cmd_random_num,
+    "рандом": cmd_random_num,
     "ролл": cmd_roll, "выбрать": cmd_choose, "выбери": cmd_choose,
     "оценить": cmd_rate, "оценка": cmd_rate,
     "правда": cmd_truth, "действие": cmd_dare,
@@ -3771,7 +3777,7 @@ for slash_name, func in [
     ("fortune", cmd_fortune), ("8ball", cmd_8ball), ("horoscope", cmd_horoscope),
     ("tarot", cmd_tarot), ("predict", cmd_predict), ("destiny", cmd_destiny),
     # Игры (без декоратора)
-    ("coin", cmd_coin), ("dice", cmd_dice), ("rps", cmd_rps),
+    ("coin", cmd_coin), ("dice", cmd_dice),
     ("random", cmd_random_num), ("choose", cmd_choose), ("rate", cmd_rate),
     ("truth", cmd_truth), ("dare", cmd_dare), ("riddle", cmd_riddle),
     ("roulette", cmd_roulette), ("roulette_start", cmd_roulette_start),
@@ -5234,11 +5240,14 @@ async def cb_reply_edit_cancel(cb: CallbackQuery):
     await cb.answer()
 
 
-# /edit — латиница. is_owner вынесен В ФИЛЬТР: если не совпало — сообщение идёт дальше
+# /edit — латиница. is_owner вынесен В ФИЛЬТР и дублируется в теле
+# (TEXT_COMMANDS диспетчер викликає без фільтра — потрібна перевірка в тілі)
 @dp.message(Command("edit", "настройки", "settings"),
             F.chat.type == "private",
             F.func(lambda m: is_owner(m)))
 async def cmd_editor_latin(msg: Message):
+    if not is_owner(msg):
+        return
     await _send_editor_menu(msg)
 
 
@@ -6512,8 +6521,16 @@ async def main():
                 polling_timeout=30,
             )
         except asyncio.CancelledError:
-            print("🛑 Бот остановлен вручную")
+            print("🛑 Бот остановлен вручную — финальное сохранение...")
             save_data()
+            # Фінальний await-пуш перед закриттям (create_task вже не виконається)
+            try:
+                with open(DATA_FILE, "rb") as _f:
+                    _raw = _f.read()
+                await brand.push_bot_data_to_github(_raw)
+                print("✅ Данные сохранены в GitHub перед остановкой")
+            except Exception as _e:
+                print(f"⚠️ Финальный GitHub push: {_e}")
             break
         except Exception as e:
             logging.error(f"💥 Polling упал: {e}. Перезапуск через {retry_delay}с...")
