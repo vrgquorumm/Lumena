@@ -3188,7 +3188,6 @@ TEXT_COMMANDS.update({
     "роль": cmd_set_role, "setrole": cmd_set_role,
     "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
     "роли": cmd_roles, "roles": cmd_roles,
-    "настройки": cmd_editor_latin, "settings": cmd_editor_latin,
     "списокбраков": cmd_marriages, "список браков": cmd_marriages, "браки": cmd_marriages,
     # Отношения
     "корабль": cmd_ship, "шип": cmd_ship,
@@ -4506,6 +4505,13 @@ async def cb_reply_edit_cancel(cb: CallbackQuery):
             F.func(lambda m: is_owner(m)))
 async def cmd_editor_latin(msg: Message):
     await _send_editor_menu(msg)
+
+
+# Регистрируем после определения функции
+TEXT_COMMANDS.update({
+    "настройки": cmd_editor_latin,
+    "settings":  cmd_editor_latin,
+})
 
 
 # «изменить» / «/изменить» — кириллица без reply: открываем общее меню.
