@@ -240,19 +240,28 @@ async def coin_rain_loop():
         _last_rain_time = time.time()
         save_data()
 
+        _rain_texts = [
+            ("🌧 <b>ДОЖДЬ ИЗ МОНЕТ!</b>", "💰 Монеты LMN посыпались в чат!", "Напиши <b>подобрать</b> — первый забирает!"),
+            ("💸 <b>МОНЕТОПАД!</b>", "Кто-то уронил кошелёк!", "Напиши <b>подобрать</b> и монеты твои!"),
+            ("🎁 <b>НЕОЖИДАННЫЙ ПОДАРОК!</b>", "LMN монеты упали с неба!", "Первый кто напишет <b>подобрать</b> — забирает всё!"),
+            ("⚡ <b>МОЛНИЯ ПРИНЕСЛА МОНЕТЫ!</b>", "Случайная раздача LMN в чате!", "Напиши <b>подобрать</b> и забери приз!"),
+            ("🍀 <b>УДАЧА ПРИШЛА В ЧАТ!</b>", "💰 LMN монеты ищут хозяина!", "Напиши <b>подобрать</b> — быстрее всех!"),
+        ]
+
         active_chats = [cid for cid in chat_members.keys() if cid < 0]
         for chat_id in active_chats:
             amount = random.randint(150, 600)
             _active_rain[chat_id] = amount
+            title, desc, call = random.choice(_rain_texts)
             try:
                 await bot.send_message(
                     chat_id,
                     f"{brand.hdr()}\n\n"
-                    f"🌧 <b>ДОЖДЬ ИЗ МОНЕТ!</b>\n\n"
+                    f"{title}\n\n"
                     f"{brand.div()}\n"
-                    f"💰 В чате упали монеты LMN!\n\n"
-                    f"Напиши <b>подобрать</b> — первым забирает!\n\n"
-                    f"🎁 Приз: <b>{fmt_lmn(amount)}</b>\n"
+                    f"{desc}\n\n"
+                    f"{call}\n\n"
+                    f"🎁 Приз: <b>{fmt_lmn(amount)} LMN</b>\n"
                     f"{brand.div()}",
                     parse_mode="HTML",
                 )
@@ -1426,6 +1435,14 @@ async def marry_callback(cb: CallbackQuery):
         await cb.answer("Это предложение не для тебя 😄", show_alert=True)
         return
     del marriage_proposals[(chat_id, target_id)]
+    _marry_accept = [
+        "💍 Совет да любовь!", "❤️ Они вместе!", "🎊 Это случилось!",
+        "💕 Новая пара в чате!", "🥂 Совет да любовь!",
+    ]
+    _marry_reject = [
+        "💔 Отказ...", "😬 Нет значит нет", "💔 Сердце разбито",
+        "😔 В этот раз не судьба", "🙅 Отказано",
+    ]
     if action == "y":
         cid = econ_cid(chat_id)
         marriages.setdefault(cid, {})
@@ -1434,21 +1451,27 @@ async def marry_callback(cb: CallbackQuery):
         add_balance(proposer_id, 500)
         add_balance(target_id, 500)
         save_data()
+        header = random.choice(_marry_accept)
         await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
-            f"💍 Совет да любовь!\n\n"
+            f"{header}\n\n"
             f"💕 <b>{proposal['proposer_full']}</b>\n"
             f"❤️ <b>{cb.from_user.full_name}</b>\n\n"
-            f"🎊 Поздравляем! +500 LMN каждому\n\n"
+            f"🎊 +500 LMN каждому в подарок!\n\n"
             f"{brand.div()}",
             parse_mode="HTML"
         )
     else:
+        header = random.choice(_marry_reject)
+        reject_lines = [
+            f"<b>{cb.from_user.full_name}</b> отказал(а) <b>{proposal['proposer_full']}</b>",
+            f"<b>{proposal['proposer_full']}</b> получил(а) отказ от <b>{cb.from_user.full_name}</b>",
+            f"<b>{cb.from_user.full_name}</b> не готов(а)... <b>{proposal['proposer_full']}</b> ждёт",
+        ]
         await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
-            f"💔 Отказ\n\n"
-            f"<b>{cb.from_user.full_name}</b> отказал(а)\n"
-            f"<b>{proposal['proposer_full']}</b>...\n\n"
+            f"{header}\n\n"
+            f"{random.choice(reject_lines)}\n\n"
             f"{brand.div()}",
             parse_mode="HTML"
         )
@@ -1470,11 +1493,22 @@ async def cmd_divorce(msg: Message):
     marriages[cid].pop(uid, None)
     marriages[cid].pop(partner_id, None)
     save_data()
+    _divorce_txt = [
+        "💔 Развод оформлен", "😔 Всё кончено", "💔 Пути разошлись",
+        "😶 Расстались", "💔 История закрыта",
+    ]
+    _divorce_comment = [
+        "Бывает. Жизнь продолжается 🙂",
+        "Новая глава начинается",
+        "Иногда лучше отпустить",
+        "Всему своё время",
+        "Не судьба — значит так надо",
+    ]
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"💔 Развод\n\n"
-        f"<b>{msg.from_user.full_name}</b>\n"
-        f"и <b>{partner_name}</b> расстались\n\n"
+        f"{random.choice(_divorce_txt)}\n\n"
+        f"<b>{msg.from_user.full_name}</b> и <b>{partner_name}</b> расстались\n\n"
+        f"<i>{random.choice(_divorce_comment)}</i>\n\n"
         f"{brand.div()}",
         parse_mode="HTML")
 
@@ -1727,26 +1761,41 @@ async def cmd_casino(msg: Message, command: CommandObject):
     if bet <= 0: return await msg.reply("Ставка должна быть положительной")
     if get_balance(msg.from_user.id) < bet: return await msg.reply("❌ Недостаточно LMN")
     uid = msg.from_user.id
+    _casino_win_txt = [
+        "удача улыбнулась 🎉", "сегодня твой день 🔥", "вот это повезло!",
+        "казино плачет 😄", "фартовый(ая)!", "удача на твоей стороне!",
+        "красота! монеты твои 💸", "сегодня везёт 🍀",
+    ]
+    _casino_loss_txt = [
+        "не сегодня 😔", "казино не спит 😄", "бывает...",
+        "попробуй ещё раз 🤞", "казино wins 😔", "в следующий раз повезёт",
+        "эх, мимо 😅", "риск — благородное дело. но не сегодня",
+    ]
+    _casino_jackpot_txt = [
+        "ТЫ СЛОМАЛ(А) КАЗИНО!! 💎", "это нереально!! x3 🎊🎊🎊",
+        "ДЖЕКПОТ! администрация в шоке 👑", "невозможное возможно!! 🎊",
+        "легенда чата! джекпот!! 🔥",
+    ]
     roll = random.random()
     if roll < 0.45:
         win = bet
         add_balance(uid, win)
         result = f"🟢 ВЫИГРЫШ  +{fmt_lmn(win)} LMN"
-        outcome = "Удача на твоей стороне! 🎉"
+        outcome = random.choice(_casino_win_txt)
     elif roll < 0.5:
         win = bet * 3
         add_balance(uid, win)
         result = f"💎 ДЖЕКПОТ  +{fmt_lmn(win)} LMN"
-        outcome = "Невероятно! Тройной выигрыш! 🎊"
+        outcome = random.choice(_casino_jackpot_txt)
     else:
         add_balance(uid, -bet)
         result = f"🔴 ПРОИГРЫШ  -{fmt_lmn(bet)} LMN"
-        outcome = "Не повезло. Попробуй снова 😔"
+        outcome = random.choice(_casino_loss_txt)
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🎰 Казино\n\n"
         f"💰 Ставка: <b>{fmt_lmn(bet)} LMN</b>\n"
-        f"🎲 Результат: <b>{result}</b>\n\n"
+        f"🎲 {result}\n\n"
         f"✨ {outcome}\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         f"{brand.div()}",
@@ -1760,6 +1809,21 @@ async def cmd_slots(msg: Message, command: CommandObject):
     except: return await msg.reply("Укажи число")
     if bet <= 0: return await msg.reply("Ставка должна быть положительной")
     if get_balance(msg.from_user.id) < bet: return await msg.reply("❌ Недостаточно LMN")
+    _slots_jackpot_txt = [
+        "ДЖЕКПОТ! ты что, читерил(а)?! 😱", "это невозможно!! 🎊",
+        "барабаны в шоке 💎", "три в ряд!! легенда! 🔥",
+        "вот это крутануло!! 🎰👑",
+    ]
+    _slots_pair_txt = [
+        "пара есть — уже неплохо 😄", "почти! пара зачтена ✨",
+        "два из трёх — уже победа 😊", "пара! монеты твои 💸",
+        "неплохо! пара 🍀",
+    ]
+    _slots_miss_txt = [
+        "мимо 😔 барабаны не в настроении", "не сегодня 😅",
+        "крути ещё! 🎰", "казино смеётся 😄", "эх, промах...",
+        "судьба сказала нет 😔", "барабаны решили иначе 😄",
+    ]
     icons = ["🍒","🍋","🍊","🍇","⭐","💎","7️⃣"]
     s = [random.choice(icons) for _ in range(3)]
     line = " | ".join(s)
@@ -1772,18 +1836,22 @@ async def cmd_slots(msg: Message, command: CommandObject):
         win = bet * mult
         add_balance(uid, win)
         result = f"💎 ДЖЕКПОТ x{mult}  +{fmt_lmn(win)} LMN"
+        comment = random.choice(_slots_jackpot_txt)
     elif len(set(s))==2:
         win = bet
         add_balance(uid, win)
         result = f"✨ Пара  +{fmt_lmn(win)} LMN"
+        comment = random.choice(_slots_pair_txt)
     else:
         add_balance(uid, -bet)
         result = f"😔 Промах  -{fmt_lmn(bet)} LMN"
+        comment = random.choice(_slots_miss_txt)
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🎰 Слоты\n\n"
         f"┃  {line}  ┃\n\n"
         f"🎲 {result}\n"
+        f"💬 {comment}\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
@@ -1804,27 +1872,54 @@ async def cmd_rob(msg: Message):
     if last and (now - last).seconds < 7200:
         return await msg.reply("⏳ Следующее ограбление через 2 часа")
     rob_cooldown[robber.id] = now
+    _rob_win_txt = [
+        "тихо, быстро, чисто 🦹", "как в кино 😄 ограбление века",
+        "жертва даже не заметила 🤫", "профессионально!",
+        "стремительно и без следов 🕶",
+        "мастер-класс по карманному делу 😄",
+    ]
+    _rob_fail_txt = [
+        "схватили за руку 🚔", "охрана не спала 😅",
+        "план провалился. штраф выписан 😔",
+        "камеры везде! попался(лась) 📸",
+        "жертва оказалась бывшим полицейским 😬",
+        "не повезло. штрафуют 😔",
+    ]
     if random.random() < 0.4:
         # Гарантируем корректный диапазон: минимум 50, но не больше трети баланса
         max_steal = max(50, min(vic_bal // 3, 5000))
         stolen = random.randint(1, max_steal)
         add_balance(victim.id, -stolen)
         add_balance(robber.id, stolen)
+        comment = random.choice(_rob_win_txt)
         await msg.reply(
             f"{brand.hdr()}\n\n"
             f"🦹 Ограбление удалось!\n\n"
             f"🎯 Жертва: <b>{victim.full_name}</b>\n"
-            f"💰 Украдено: <b>{fmt_lmn(stolen)} LMN</b>\n\n"
+            f"💰 Украдено: <b>{fmt_lmn(stolen)} LMN</b>\n"
+            f"💬 {comment}\n\n"
             f"{brand.div()}",
             parse_mode="HTML")
+        # Уведомляем жертву
+        try:
+            await bot.send_message(
+                msg.chat.id,
+                f"😱 <b>{victim.full_name}</b>, тебя только что обокрал(а) <b>{robber.full_name}</b>!\n"
+                f"Пропало: <b>{fmt_lmn(stolen)} LMN</b>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
     else:
         robber_bal = get_balance(robber.id)
         fine = random.randint(100, 500)
         actual_fine = min(fine, robber_bal)
         add_balance(robber.id, -actual_fine)
+        comment = random.choice(_rob_fail_txt)
         await msg.reply(
             f"{brand.hdr()}\n\n"
             f"👮 Попался!\n\n"
+            f"💬 {comment}\n"
             f"💸 Штраф: <b>{fmt_lmn(actual_fine)} LMN</b>\n\n"
             f"{brand.div()}",
             parse_mode="HTML")
@@ -1832,11 +1927,19 @@ async def cmd_rob(msg: Message):
 @dp.message(Command("richest"))
 async def cmd_richest(msg: Message):
     if not lmn_balances: return await msg.reply("💸 Пока у всех пустые кошельки 😅")
-    top = sorted(lmn_balances.items(), key=lambda x: x[1], reverse=True)[:10]
+    # Фильтруем только участников текущего чата
+    chat_uids = chat_members.get(msg.chat.id, set())
+    if chat_uids:
+        filtered = {uid: bal for uid, bal in lmn_balances.items() if uid in chat_uids}
+    else:
+        filtered = lmn_balances
+    if not filtered:
+        return await msg.reply("💸 Пока у всех пустые кошельки 😅")
+    top = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     lines = [
         f"{brand.hdr()}\n",
-        "💰 Топ богачей",
+        "💰 Топ богачей чата",
         f"{brand.div()}",
     ]
     for i, (uid, bal) in enumerate(top):
@@ -1846,7 +1949,7 @@ async def cmd_richest(msg: Message):
         except: name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {fmt_lmn(bal)} LMN")
     lines.append(f"\n{brand.div()}")
-    lines.append(f"<i>В обороте: {fmt_lmn(sum(lmn_balances.values()))} LMN</i>")
+    lines.append(f"<i>В чате в обороте: {fmt_lmn(sum(filtered.values()))} LMN</i>")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 @dp.message(Command("givetoadmins"))
@@ -2895,8 +2998,8 @@ async def cmd_version(msg: Message):
         f"🤖 Лумена Бот\n\n"
         f"📦 Версия: <b>v{BOT_VERSION}</b>\n"
         f"⚡ Функций: <b>100+</b>\n"
-        f"🧠 ИИ: <b>Groq · Llama 3.3 70B</b>\n"
-        f"🔄 Резерв: <b>Gemini 2.0 Flash</b>\n\n"
+        f"🧠 ИИ: <b>Lumena Engine v4</b>\n"
+        f"💬 Движок: <b>собственный, без внешних API</b>\n\n"
         f"{brand.div()}\n"
         f"💙 Сделано с душой",
         parse_mode="HTML",
@@ -2916,11 +3019,63 @@ async def cmd_uuid_gen(msg: Message):
     await msg.reply(f"🆔 `{uuid.uuid4()}`", parse_mode="Markdown")
 
 async def cmd_fact(msg: Message):
-    facts = ["🧠 Осьминоги имеют три сердца и голубую кровь","🧠 Мёд не портится — нашли 3000-летний и он был съедобен","🧠 Банан — ягода, клубника — нет","🧠 Молния бьёт в Землю ~100 раз в секунду","🧠 У улитки ~14 000 зубов","🧠 Человеческий мозг на 73% состоит из воды","🧠 Первый компьютерный баг был настоящим мотыльком (1947)","🧠 Кофе — вторая по популярности жидкость после воды","🧠 Солнце составляет 99,86% массы Солнечной системы","🧠 Египетские пирамиды строили не рабы — есть документы с зарплатами"]
+    facts = [
+        "🧠 Осьминоги имеют три сердца и голубую кровь",
+        "🧠 Мёд не портится — нашли 3000-летний египетский мёд и он был съедобен",
+        "🧠 Банан — ягода. А клубника — нет",
+        "🧠 Молния бьёт в Землю около 100 раз в секунду",
+        "🧠 У улитки около 14 000 зубов",
+        "🧠 Человеческий мозг на 73% состоит из воды",
+        "🧠 Первый компьютерный баг был настоящим мотыльком (1947, Гарвард)",
+        "🧠 Кофе — вторая по популярности жидкость в мире после воды",
+        "🧠 Солнце составляет 99,86% всей массы Солнечной системы",
+        "🧠 Египетские пирамиды строили не рабы — есть документы с их зарплатами",
+        "🧠 Буква 'е' — самая используемая в большинстве европейских языков",
+        "🧠 Акулы существуют дольше деревьев — им около 450 млн лет",
+        "🧠 Человек — единственное животное, которое краснеет от стыда",
+        "🧠 На Луне нет ветра, поэтому следы Аполлона-11 до сих пор там",
+        "🧠 Муравьи никогда не спят — у них есть только короткие фазы отдыха",
+        "🧠 Фламинго розовые из-за пигментов в водорослях, которые они едят",
+        "🧠 Кошки не чувствуют сладкое — у них нет рецепторов сладкого вкуса",
+        "🧠 Сердце кита бьётся всего 2 раза в минуту под водой",
+        "🧠 Первый iPhone вышел в 2007 году — ему сейчас почти 20 лет",
+        "🧠 Нейронов в мозге больше, чем звёзд в нашей галактике",
+        "🧠 Человек в среднем проводит 6 лет жизни во сне",
+        "🧠 Слон — единственное животное, которое не умеет прыгать",
+        "🧠 Скорость нервного импульса — около 120 м/с",
+        "🧠 Морская звезда может вывернуть желудок наружу чтобы переварить добычу",
+        "🧠 Дельфины дают друг другу имена и откликаются на них",
+        "🧠 Металл галлий тает от тепла руки — его температура плавления 29°C",
+        "🧠 Вода не имеет вкуса или запаха — всё что ты чувствуешь, это примеси",
+        "🧠 Молоко в холодильнике хранится дольше, если стоит на верхней полке",
+        "🧠 Паук может выжить под водой несколько часов внутри воздушного пузыря",
+        "🧠 В Монако нет фермеров — это самая маленькая аграрно-нейтральная страна мира",
+    ]
     await msg.reply(random.choice(facts))
 
 async def cmd_quote(msg: Message):
-    quotes = ["Сначала заставь работать, потом — сделай красиво. — Кент Бек","Любой дурак может написать код для компьютера. Хорошие программисты пишут код для людей. — Фаулер","Простота — высшая степень изысканности. — Леонардо да Винчи","Жизнь — это то, что с тобой происходит, пока ты строишь другие планы. — Джон Леннон","Будь собой — остальные роли уже заняты. — Оскар Уайлд","Не важно, как медленно ты идёшь, главное — не останавливаться. — Конфуций"]
+    quotes = [
+        "Сначала заставь работать, потом — сделай красиво. — Кент Бек",
+        "Любой дурак может написать код для компьютера. Хорошие программисты пишут код для людей. — Фаулер",
+        "Простота — высшая степень изысканности. — Леонардо да Винчи",
+        "Жизнь — это то, что с тобой происходит, пока ты строишь другие планы. — Джон Леннон",
+        "Будь собой — остальные роли уже заняты. — Оскар Уайлд",
+        "Не важно, как медленно ты идёшь, главное — не останавливаться. — Конфуций",
+        "Ты не можешь вернуться и изменить начало. Но ты можешь начать сейчас и изменить конец. — К. С. Льюис",
+        "Лучший способ предсказать будущее — создать его. — Питер Друкер",
+        "Не считай дни — сделай так, чтобы дни считались. — Мухаммед Али",
+        "Люди редко преуспевают, если не получают удовольствия от того, чем занимаются. — Дейл Карнеги",
+        "Всё, что ты делаешь, либо приближает тебя к мечте, либо отдаляет. — Стив Харви",
+        "Перфекционизм — враг готового. — Рид Хоффман",
+        "Единственный способ делать великую работу — любить то, что делаешь. — Стив Джобс",
+        "Сила не в том, чтобы никогда не падать. Сила — в том, чтобы подниматься каждый раз. — Нельсон Мандела",
+        "Мечты не работают, если не работаешь ты. — Джон Максвелл",
+        "Делай что должен — и будь что будет. — Лев Толстой",
+        "Жизнь — как вождение велосипеда. Чтобы не упасть, нужно двигаться. — Альберт Эйнштейн",
+        "Не бойся медленно двигаться. Бойся стоять на месте. — Китайская пословица",
+        "Успех — это идти от неудачи к неудаче, не теряя энтузиазма. — Уинстон Черчилль",
+        "Твоё время ограничено. Не трать его на чужую жизнь. — Стив Джобс",
+    ]
     await msg.reply(f"💬 {random.choice(quotes)}")
 
 async def cmd_numerology(msg: Message, command: CommandObject = None):
