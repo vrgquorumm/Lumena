@@ -4,6 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
 import Home from '@/pages/home';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
+import { useTelegramWebApp } from '@/hooks/useTelegramWebApp';
 
 const queryClient = new QueryClient();
 
@@ -17,6 +18,9 @@ function Router() {
 }
 
 function App() {
+  // Ініціалізуємо Telegram Mini App SDK (викликає ready() + expand())
+  useTelegramWebApp();
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
