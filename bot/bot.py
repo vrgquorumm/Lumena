@@ -3668,66 +3668,79 @@ async def _send_editor_menu(msg):
 # ── Reply-редактор: фаундер отвечает на сообщение бота словом «изменить» ──────
 # Регистрируется ПЕРВЫМ — более специфичный фильтр (reply + tracked msg)
 def _is_reply_edit(m) -> bool:
-    """True если: фаундер, слово «изменить»/«edit», ответ на трекнутое сообщение бота.
-    Работает в любом чате (группа или ЛС)."""
+    """True если: фаундер, слово «изменить»/«edit», ответ на сообщение бота.
+    Не требует трекинга — ловит ответ на ЛЮБОЕ сообщение от бота."""
     if not is_owner(m):
         return False
     tl = (m.text or "").strip().lower().lstrip("/")
     if tl not in ("изменить", "edit"):
         return False
     rm = m.reply_to_message
-    if not rm:
+    if not rm or not rm.from_user:
         return False
-    return (m.chat.id, rm.message_id) in _tracked_bot_msgs
+    # Сообщение должно быть от самого бота
+    return rm.from_user.id == _BOT_ID
 
 
 @dp.message(F.func(_is_reply_edit))
 async def cmd_reply_edit(msg: Message):
-    """Фаундер ответил на сообщение бота командой «изменить» → начать редактирование."""
-    rm  = msg.reply_to_message
-    key = _tracked_bot_msgs.get((msg.chat.id, rm.message_id))
-    if not key or key not in brand.TEXT_LABELS:
-        return await msg.reply("❓ Этот текст нельзя редактировать через ответ.")
+    """Фаундер ответил на сообщение бота словом «изменить» → начать редактирование."""
+    rm = msg.reply_to_message
 
-    _edit_sessions[msg.from_user.id] = key
-    label = brand.TEXT_LABELS[key]
-    ct    = brand.get_custom_text(key)
-    current_note = (
-        f"Текущий текст:\n<blockquote>{html.escape(ct[0])}</blockquote>"
-        if ct else "Сейчас: <i>встроенный дефолтный текст</i>"
-    )
+    # Пытаемся найти ключ по трекингу (работает только если бот не перезапускался)
+    key = _tracked_bot_msgs.get((msg.chat.id, rm.message_id))
+
+    # Если трекинг пуст — пробуем найти ключ по тексту сообщения
+    if not key and rm.text:
+        rm_text_stripped = rm.text.strip()
+        for k, custom in brand.all_custom_texts().items():
+            if k in brand.TEXT_LABELS and custom[0].strip() == rm_text_stripped:
+                key = k
+                break
 
     is_private = msg.chat.type == "private"
 
-    if is_private:
-        # В ЛС — сразу принимаем текст здесь
+    if key and key in brand.TEXT_LABELS:
+        # Ключ найден — открываем редактирование конкретного текста
+        _edit_sessions[msg.from_user.id] = key
+        label = brand.TEXT_LABELS[key]
+        ct    = brand.get_custom_text(key)
+        current_note = (
+            f"Текущий текст:\n<blockquote>{html.escape(ct[0])}</blockquote>"
+            if ct else "Сейчас: <i>встроенный дефолтный текст</i>"
+        )
         back_kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
         ]])
-        await msg.reply(
-            f"✏️ <b>{html.escape(label)}</b>\n\n"
-            f"{current_note}\n\n"
-            "Отправь новый текст — форматирование сохранится.\n"
-            "/отмена или кнопка ниже — выйти без сохранения.",
-            parse_mode="HTML",
-            reply_markup=back_kb,
-        )
+
+        if is_private:
+            await msg.reply(
+                f"✏️ <b>{html.escape(label)}</b>\n\n"
+                f"{current_note}\n\n"
+                "Отправь новый текст — форматирование сохранится.\n"
+                "/отмена или кнопка ниже — выйти без сохранения.",
+                parse_mode="HTML",
+                reply_markup=back_kb,
+            )
+        else:
+            # В группе — просим зайти в ЛС (сессия уже открыта)
+            dm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="✏️ Написать новый текст в ЛС",
+                    url=f"https://t.me/{_BOT_USERNAME}",
+                ),
+            ]])
+            await msg.reply(
+                f"✏️ <b>{html.escape(label)}</b>\n\n"
+                f"{current_note}\n\n"
+                "Напиши новый текст мне <b>в личку</b> — нажми кнопку.\n"
+                "Редактирование уже активировано.",
+                parse_mode="HTML",
+                reply_markup=dm_kb,
+            )
     else:
-        # В группе — просим написать новый текст в ЛС боту
-        bot_info = await bot.get_me()
-        bot_username = bot_info.username or ""
-        dm_url = f"https://t.me/{bot_username}"
-        dm_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✏️ Написать в ЛС боту", url=dm_url),
-        ]])
-        await msg.reply(
-            f"✏️ <b>{html.escape(label)}</b>\n\n"
-            f"{current_note}\n\n"
-            "Напиши новый текст мне <b>в личку</b> — нажми кнопку ниже.\n"
-            "Редактирование активировано, просто отправь текст в ЛС.",
-            parse_mode="HTML",
-            reply_markup=dm_kb,
-        )
+        # Ключ не определён — открываем общее меню редактора
+        await _send_editor_menu(msg)
 
 
 @dp.callback_query(F.data == "reply_edit_cancel")
@@ -4262,13 +4275,9 @@ async def universal_handler(msg: Message):
     if not msg.text:
         return
 
-    # ── Редактор: фаундер пишет «изменить»/«edit» в ЛС — страховой перехват
-    _tl_editor = msg.text.strip().lower().lstrip("/")
-    if (msg.chat.type == "private"
-            and _tl_editor in ("изменить", "edit")
-            and is_owner(msg)):
-        await _send_editor_menu(msg)
-        return
+    # «изменить»/«edit» — обрабатывается выше специализированными хэндлерами
+    # (cmd_reply_edit если это reply на бота, cmd_editor_ru если без reply)
+    # Здесь НЕ перехватываем, чтобы не глотать сообщения до нужных хэндлеров
 
     # Проверка на оскорбление верхушки (до остального)
     if await _check_admin_insult(msg):
