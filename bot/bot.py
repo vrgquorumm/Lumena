@@ -3119,11 +3119,18 @@ async def cmd_start_private(msg: Message):
     name     = html.escape(raw_name)
 
     if is_verified(uid):
+        kb = build_main_kb()
+        # Фаундеру добавляем кнопку редактора
+        if is_owner(msg):
+            kb = InlineKeyboardMarkup(inline_keyboard=
+                kb.inline_keyboard +
+                [[InlineKeyboardButton(text="🛠 Редактор", callback_data="editor:menu")]]
+            )
         await _answer_custom(
             msg, "start_text",
             _START_TEXT.format(name=name),
             name=raw_name,
-            reply_markup=build_main_kb(),
+            reply_markup=kb,
         )
         return
 
@@ -3646,20 +3653,19 @@ async def _send_editor_menu(msg):
     )
 
 
-# /edit — латиница (рабочая команда)
-@dp.message(Command("edit"))
+# /edit — латиница. is_owner вынесен В ФИЛЬТР: если не совпало — сообщение идёт дальше
+@dp.message(Command("edit"),
+            F.chat.type == "private",
+            F.func(lambda m: is_owner(m)))
 async def cmd_editor_latin(msg: Message):
-    if not is_owner(msg) or msg.chat.type != "private":
-        return
     await _send_editor_menu(msg)
 
 
-# «изменить» — кириллица, Telegram не распознаёт как команду, ловим текстом
+# «изменить» / «/изменить» — кириллица. is_owner тоже в фильтре.
 @dp.message(F.chat.type == "private",
-            F.func(lambda m: (m.text or "").strip().lower().lstrip("/") == "изменить"))
+            F.func(lambda m: is_owner(m)
+                   and (m.text or "").strip().lower().lstrip("/") in ("изменить", "edit")))
 async def cmd_editor_ru(msg: Message):
-    if not is_owner(msg):
-        return
     await _send_editor_menu(msg)
 
 
@@ -4170,10 +4176,11 @@ async def universal_handler(msg: Message):
     if not msg.text:
         return
 
-    # ── Редактор: фаундер пишет «изменить» или «/изменить» в ЛС — приоритет
+    # ── Редактор: фаундер пишет «изменить»/«edit» в ЛС — страховой перехват
+    _tl_editor = msg.text.strip().lower().lstrip("/")
     if (msg.chat.type == "private"
-            and is_owner(msg)
-            and msg.text.strip().lower().lstrip("/") == "изменить"):
+            and _tl_editor in ("изменить", "edit")
+            and is_owner(msg)):
         await _send_editor_menu(msg)
         return
 
