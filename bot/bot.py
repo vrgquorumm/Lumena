@@ -704,22 +704,44 @@ async def do_checkin(chat_id: int, user_id: int, reply_msg: Message = None):
     streaks.setdefault(cid, {})
     data = streaks[cid].get(user_id, {"count": 0, "last": None})
     if data["last"] == today:
-        if reply_msg: await reply_msg.reply("🔥 Ты уже отмечался сегодня!")
+        if reply_msg:
+            cnt = data["count"]
+            await reply_msg.reply(
+                f"{brand.hdr()}\n\n"
+                f"🔥 Уже отмечался сегодня!\n\n"
+                f"📅 Текущий стрик: <b>{cnt} дн.</b>\n"
+                f"💡 Возвращайся завтра — стрик ждёт\n\n"
+                f"{brand.div()}",
+                parse_mode="HTML",
+            )
         return False
     data["count"] += 1
     data["last"] = today
     streaks[cid][user_id] = data
+    cnt = data["count"]
+    # Milestone бонусы
+    _milestones = {7: 500, 14: 1500, 30: 5000, 60: 15000, 100: 50000}
+    bonus = _milestones.get(cnt, 0)
+    if bonus:
+        add_balance(user_id, bonus)
+        save_data()
     if reply_msg:
-        cnt = data["count"]
-        fire = "🔥🔥🔥 Легенда!" if cnt >= 30 else "🔥🔥 Горишь!" if cnt >= 14 else "🔥 Растёт!"
+        if cnt >= 100:   fire, level = "🔥🔥🔥🔥 АБСОЛЮТНАЯ ЛЕГЕНДА!", "👑"
+        elif cnt >= 30:  fire, level = "🔥🔥🔥 Легенда чата!",          "💎"
+        elif cnt >= 14:  fire, level = "🔥🔥 Горишь не по-детски!",     "🔥"
+        elif cnt >= 7:   fire, level = "🔥 Неплохо! Так держать",       "⚡"
+        elif cnt >= 3:   fire, level = "✨ Хорошее начало!",             "🌱"
+        else:            fire, level = "🆕 Первые шаги",                 "🌱"
         name = reply_msg.from_user.first_name
+        bonus_line = f"\n🎁 Milestone-бонус <b>+{fmt_lmn(bonus)} LMN</b>! 🎊" if bonus else ""
         text = (
-            f"🖤  L U M E N A  🖤\n\n"
-            f"◾ Чекин выполнен!\n\n"
-            f"👤 {name}\n"
+            f"{brand.hdr()}\n\n"
+            f"{level} Чекин выполнен!\n\n"
+            f"👤 <b>{html.escape(name)}</b>\n"
             f"📅 Дней подряд: <b>{cnt}</b>\n"
-            f"◆ {fire}\n\n"
-            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+            f"◆ {fire}"
+            f"{bonus_line}\n\n"
+            f"{brand.div()}"
         )
         await reply_msg.reply(text, parse_mode="HTML")
     return True
@@ -1772,8 +1794,17 @@ async def cmd_resetstreak(msg: Message, command: CommandObject):
     user = await get_user(msg, command) or msg.from_user
     if user.id != msg.from_user.id and not await is_admin(msg):
         return await msg.reply("⛔ Только свой стрик или админ")
-    streaks.get(msg.chat.id, {}).pop(user.id, None)
-    await msg.reply("Стрик сброшен")
+    cid = econ_cid(msg.chat.id)
+    streaks.get(cid, {}).pop(user.id, None)
+    save_data()
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🔄 Стрик сброшен\n\n"
+        f"👤 <b>{html.escape(user.full_name)}</b>\n"
+        f"📅 Дней подряд: <b>0</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 @dp.message_reaction()
 async def on_reaction(event: MessageReactionUpdated):
@@ -1883,20 +1914,65 @@ async def cmd_work(msg: Message):
     uid = msg.from_user.id
     now = now_kyiv()
     last = work_cooldown.get(uid)
-    if last and (now - last).seconds < 3600:
-        mins = 60 - (now - last).seconds // 60
+    if last and (now - last).total_seconds() < 3600:
+        mins = 60 - int((now - last).total_seconds()) // 60
         return await reply_t(msg, "work_cooldown", mins=mins)
-    earned = random.randint(100, 800)
+    # Профессии сгруппированы по уровню заработка
+    _jobs_tier = [
+        # (профессия, мин, макс, эмодзи, фраза результата)
+        ("программист",     400, 900,  "💻", "пофиксил баги — получил премию"),
+        ("дизайнер",        350, 800,  "🎨", "сдал проект клиенту вовремя"),
+        ("врач",            500, 950,  "🧑‍⚕️", "принял пациентов и выписал рецепты"),
+        ("юрист",           450, 900,  "⚖️", "выиграл дело в суде"),
+        ("архитектор",      400, 850,  "🏗️", "завершил чертежи нового здания"),
+        ("пилот",           600,1200,  "✈️", "выполнил рейс без единой задержки"),
+        ("астронавт",       700,1500,  "🚀", "провёл эксперименты на орбите"),
+        ("стример",         200, 700,  "🎮", "получил донат от зрителей"),
+        ("блогер",          150, 600,  "📱", "ролик завирусился — пришли деньги с рекламы"),
+        ("повар",           250, 550,  "🧑‍🍳", "шеф-повар оценил твоё блюдо"),
+        ("учитель",         200, 500,  "📚", "провёл уроки и получил зарплату"),
+        ("водитель",        180, 450,  "🚗", "развёз заказы без пробок"),
+        ("музыкант",        100, 800,  "🎵", "сыграл на концерте, зрители аплодировали"),
+        ("художник",        100, 600,  "🖼️", "продал картину на аукционе"),
+        ("фотограф",        200, 650,  "📸", "фотосессия прошла на ура"),
+        ("детектив",        300, 750,  "🕵️", "раскрыл дело и получил гонорар"),
+        ("геймдизайнер",    300, 700,  "🎲", "выпустил патч — игроки довольны"),
+        ("учёный",          350, 800,  "🔬", "опубликовал статью — гранты прилетели"),
+        ("строитель",       200, 500,  "🔨", "сдал объект в срок"),
+        ("менеджер",        250, 600,  "💼", "закрыл сделку с клиентом"),
+        ("шеф-пекарь",      180, 420,  "🥐", "торты разлетелись ещё до открытия"),
+        ("ветеринар",       250, 580,  "🐾", "спас котика — хозяйка щедро заплатила"),
+        ("фармацевт",       280, 620,  "💊", "смена прошла спокойно"),
+        ("психолог",        320, 700,  "🧠", "сеанс прошёл удачно — клиент вернётся"),
+        ("стилист",         220, 550,  "💇", "клиент был в восторге от результата"),
+        ("флорист",         150, 400,  "🌸", "огромный букет ушёл с витрины"),
+        ("спортсмен",       200, 600,  "⚽", "турнир выигран — призовые в кармане"),
+        ("барист",          120, 350,  "☕", "смена без ошибок — чаевые на столе"),
+        ("электрик",        250, 580,  "⚡", "ремонт завершён без замыканий"),
+        ("сантехник",       200, 500,  "🔧", "труба починена, клиент доволен"),
+        ("копирайтер",      180, 500,  "✍️", "текст одобрен с первого раза"),
+        ("переводчик",      200, 520,  "🌐", "перевёл документы вовремя"),
+        ("бухгалтер",       280, 620,  "🧾", "квартальный отчёт сдан без ошибок"),
+        ("иллюзионист",     150, 700,  "🎩", "публика была в восторге от шоу"),
+    ]
+    job_data = random.choice(_jobs_tier)
+    job, earn_min, earn_max, job_icon, job_phrase = job_data
+    earned = random.randint(earn_min, earn_max)
     add_balance(uid, earned)
     work_cooldown[uid] = now
-    jobs = ["программист","дизайнер","повар","водитель","учитель","врач",
-            "строитель","менеджер","стример","блогер","музыкант","художник"]
-    job = random.choice(jobs)
     new_bal = get_balance(uid)
+    _work_intros = [
+        "Вышел на смену и", "Поработал на славу —", "Отличная смена!",
+        "Трудовые будни:", "Отчёт за смену:",
+    ]
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        + brand.get_text("work", job=job, earned=fmt_lmn(earned), balance=fmt_lmn(new_bal)) +
-        f"\n\n{brand.div()}",
+        f"{job_icon} <b>Профессия: {job}</b>\n\n"
+        f"{brand.get_text('work', job=job, earned=fmt_lmn(earned), balance=fmt_lmn(new_bal)) or (f'💼 {random.choice(_work_intros)} {job_phrase}')}\n\n"
+        f"💰 Заработано: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💵 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n\n"
+        f"⏳ Следующая смена через <b>1 час</b>\n\n"
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -1905,30 +1981,45 @@ async def cmd_fish(msg: Message):
     uid = msg.from_user.id
     now = now_kyiv()
     last = fish_cooldown.get(uid)
-    if last and (now - last).seconds < 1800:
-        mins = 30 - (now - last).seconds // 60
+    if last and (now - last).total_seconds() < 1800:
+        mins = 30 - int((now - last).total_seconds()) // 60
         return await reply_t(msg, "fish_cooldown", mins=mins)
     fish_cooldown[uid] = now
     roll = random.random()
-    if roll < 0.1:
-        earned = random.randint(500, 2000)
-        item = "🐟 Огромная рыба!"
-    elif roll < 0.4:
-        earned = random.randint(100, 499)
-        item = "🐠 Хорошая рыба"
-    elif roll < 0.7:
-        earned = random.randint(10, 99)
-        item = "🐡 Маленькая рыбка"
-    else:
-        earned = 0
-        item = "👟 Старый ботинок..."
+    # (эмодзи, название, мин, макс, комментарий)
+    _catches = [
+        (0.03, "🏆", "ЛЕГЕНДАРНЫЙ УЛОВ",  3000, 8000, "Такое бывает раз в год! Чат будет говорить об этом неделями"),
+        (0.08, "🐋", "Кит на горизонте!", 1500, 3000, "Удача улыбнулась — продал в порту за огромные деньги"),
+        (0.15, "🦈", "Акула!",            800,  1500, "Рыбаки из соседней деревни завидуют"),
+        (0.30, "🐟", "Большая рыба",       300,  800,  "Отличный улов — рынок доволен"),
+        (0.50, "🐠", "Хорошая рыбка",      100,  300,  "Небольшой, но стабильный заработок"),
+        (0.68, "🐡", "Малёк",             20,   100,  "Маловато, но лучше, чем ничего"),
+        (0.80, "🦀", "Краб",              50,   150,  "Вёрткий попался — почти ушёл!"),
+        (0.88, "🐚", "Красивая ракушка",  10,   30,   "Продал туристам как сувенир"),
+        (0.94, "🥫", "Консервная банка",  0,    0,    "Кто-то засорил пруд..."),
+        (1.00, "👟", "Старый ботинок",    0,    0,    "Классика жанра. Рыбалка не задалась"),
+    ]
+    r = random.random()
+    chosen = _catches[-1]
+    for threshold, *rest in _catches:
+        if r < threshold:
+            chosen = (threshold, *rest)
+            break
+    _, icon, name, earn_min, earn_max, comment = chosen
+    earned = random.randint(earn_min, earn_max) if earn_max > 0 else 0
     add_balance(uid, earned)
     new_bal = get_balance(uid)
-    result_line = f"+{fmt_lmn(earned)} LMN" if earned else "Ничего не поймал 😔"
+    _intros = ["Закинул удочку...", "Рыбалка в разгаре...", "Ждал терпеливо и вот:"]
+    result_line = f"<b>+{fmt_lmn(earned)} LMN</b>" if earned else "<i>Ничего не заработал 😔</i>"
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        + brand.get_text("fish", item=item, result=result_line, balance=fmt_lmn(new_bal)) +
-        f"\n\n{brand.div()}",
+        f"🎣 {random.choice(_intros)}\n\n"
+        f"{icon} <b>{name}</b>\n"
+        f"<i>{comment}</i>\n\n"
+        f"💰 Улов: {result_line}\n"
+        f"💵 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n\n"
+        f"⏳ Следующая рыбалка через <b>30 мин</b>\n\n"
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -2057,8 +2148,15 @@ async def cmd_rob(msg: Message):
         return await msg.reply(brand.get_text("rob_target_poor"), parse_mode="HTML")
     now = now_kyiv()
     last = rob_cooldown.get(robber.id)
-    if last and (now - last).seconds < 7200:
-        return await msg.reply("⏳ Следующее ограбление через 2 часа")
+    if last and (now - last).total_seconds() < 7200:
+        mins_left = 120 - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"⏳ Полиция ещё ищет тебя!\n\n"
+            f"Следующее ограбление через <b>{mins_left} мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
     rob_cooldown[robber.id] = now
     _rob_win_txt = [
         "тихо, быстро, чисто 🦹", "как в кино 😄 ограбление века",
@@ -2505,7 +2603,14 @@ async def cmd_hug(msg: Message):
     await reply_t(msg, "hug", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_kiss(msg: Message):
-    if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
+    if not msg.reply_to_message:
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"💋 Поцелуй\n\n"
+            f"<i>Ответь на сообщение того, кого хочешь поцеловать</i>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
     await reply_t(msg, "kiss",
         from_name=msg.from_user.first_name,
         to_name=msg.reply_to_message.from_user.first_name)
@@ -2704,20 +2809,50 @@ EMOJIS_COMBOS = ["🔥💯✨","🎉🎊🎈","😎🤙💪","🌈🦄✨","🌊
 
 async def cmd_fortune(msg: Message):
     result = random.choice(FORTUNES)
-    await reply_t(msg, "fortune_result", result=result)
+    if not await reply_t(msg, "fortune_result", result=result):
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🔮 Предсказание дня\n\n"
+            f"<i>{result}</i>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
 
 async def cmd_8ball(msg: Message, command: CommandObject = None):
-    if not (command and command.args): return await msg.reply("Задай вопрос: 8ball [вопрос]")
-    await msg.reply(f"🎱 {random.choice(EIGHT_BALL)}")
+    if not (command and command.args):
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🎱 Шар ответов\n\n"
+            f"❓ Задай вопрос:\n"
+            f"<code>8ball твой вопрос</code>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    answer = random.choice(EIGHT_BALL)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎱 Магический шар говорит...\n\n"
+        f"❓ <i>{html.escape(command.args.strip())}</i>\n\n"
+        f"◆ <b>{answer}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_tarot(msg: Message):
     card, meaning = random.choice(TAROT)
-    await reply_t(msg, "tarot_result", card=card, meaning=meaning)
+    if not await reply_t(msg, "tarot_result", card=card, meaning=meaning):
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🃏 Карта Таро\n\n"
+            f"✨ <b>{card}</b>\n\n"
+            f"<i>{meaning}</i>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
 
 async def cmd_horoscope(msg: Message, command: CommandObject = None):
     signs = list(HOROSCOPES.keys())
     raw = (command.args or "").strip()
-    # Нечёткий поиск знака зодиака в аргументе
     sign = None
     if raw:
         raw_lower = raw.lower()
@@ -2728,44 +2863,213 @@ async def cmd_horoscope(msg: Message, command: CommandObject = None):
     if not sign:
         sign = random.choice(signs)
     text = random.choice(HOROSCOPES[sign])
-    await reply_t(msg, "horoscope_result", sign=sign, text=text)
+    if not await reply_t(msg, "horoscope_result", sign=sign, text=text):
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🌙 Гороскоп — <b>{sign}</b>\n\n"
+            f"<i>{text}</i>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
 async def cmd_predict(msg: Message, command: CommandObject = None):
-    if not (command and command.args): return await msg.reply("Напиши вопрос: предсказать [вопрос]")
-    await msg.reply(f"🔮 {random.choice(FORTUNES)}")
-async def cmd_destiny(msg: Message): await msg.reply(f"✨ Твоя судьба:\n{random.choice(FORTUNES)}")
-async def cmd_superpower(msg: Message): await msg.reply(f"🦸 Твоя суперсила: {random.choice(SUPERPOWERS)}")
-async def cmd_profession(msg: Message): await msg.reply(f"💼 Твоя профессия: {random.choice(PROFESSIONS)}")
-async def cmd_animal(msg: Message): await msg.reply(f"🐾 Случайное животное: {random.choice(ANIMALS)}")
-async def cmd_movie(msg: Message): await msg.reply(f"🎬 Рекомендую посмотреть:\n{random.choice(MOVIES)}")
-async def cmd_book(msg: Message): await msg.reply(f"📚 Рекомендую прочитать:\n{random.choice(BOOKS)}")
-async def cmd_advice(msg: Message): await msg.reply(random.choice(ADVICES))
-async def cmd_motivation(msg: Message): await msg.reply(random.choice(MOTIVATIONS))
-async def cmd_myth(msg: Message): await msg.reply(random.choice(MYTHS))
-async def cmd_country(msg: Message): await msg.reply(random.choice(COUNTRIES))
-async def cmd_color(msg: Message): await msg.reply(random.choice(COLORS))
-async def cmd_emoji_combo(msg: Message): await msg.reply(f"✨ Случайный эмодзи-набор: {random.choice(EMOJIS_COMBOS)}")
-async def cmd_joke(msg: Message): await msg.reply(random.choice(JOKES))
+    if not (command and command.args):
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🔮 Предсказатель\n\n"
+            f"❓ Напиши вопрос:\n<code>предсказать твой вопрос</code>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    result = random.choice(FORTUNES)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🔮 Вижу ответ...\n\n"
+        f"❓ <i>{html.escape(command.args.strip())}</i>\n\n"
+        f"◆ {result}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_destiny(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"✨ Твоя судьба\n\n"
+        f"<i>{random.choice(FORTUNES)}</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_superpower(msg: Message):
+    power = random.choice(SUPERPOWERS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🦸 Твоя суперсила\n\n"
+        f"<b>{power}</b>\n\n"
+        f"<i>Используй мудро — великая сила требует великой ответственности</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_profession(msg: Message):
+    prof = random.choice(PROFESSIONS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💼 Судьба выбрала для тебя\n\n"
+        f"<b>{prof}</b>\n\n"
+        f"<i>Карьера написана звёздами</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_animal(msg: Message):
+    animal = random.choice(ANIMALS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🐾 Животное дня\n\n"
+        f"<b>{animal}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_movie(msg: Message):
+    movie = random.choice(MOVIES)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎬 Рекомендация\n\n"
+        f"<b>{movie}</b>\n\n"
+        f"<i>Хороший фильм — лучший отдых 🍿</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_book(msg: Message):
+    book = random.choice(BOOKS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"📚 Книга дня\n\n"
+        f"<b>{book}</b>\n\n"
+        f"<i>Читающий человек живёт несколько жизней ✨</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_advice(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💡 Совет дня\n\n"
+        f"<i>{random.choice(ADVICES)}</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_motivation(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🚀 Мотивация\n\n"
+        f"<b>{random.choice(MOTIVATIONS)}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_myth(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🧐 Интересный факт vs Миф\n\n"
+        f"{random.choice(MYTHS)}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_country(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🌍 Страна дня\n\n"
+        f"{random.choice(COUNTRIES)}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_color(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎨 Цвет настроения\n\n"
+        f"{random.choice(COLORS)}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_emoji_combo(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"✨ Твой эмодзи-набор дня\n\n"
+        f"<b>{random.choice(EMOJIS_COMBOS)}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def cmd_joke(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"😄 Шутка дня\n\n"
+        f"{random.choice(JOKES)}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
 async def cmd_compliment(msg: Message):
     target = msg.reply_to_message.from_user.first_name if msg.reply_to_message else msg.from_user.first_name
-    await msg.reply(f"💖 {target}, {random.choice(COMPLIMENTS).lower()}")
+    compliment = random.choice(COMPLIMENTS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💖 Комплимент для {html.escape(target)}\n\n"
+        f"<i>{compliment}</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
 async def cmd_roast(msg: Message):
     target = msg.reply_to_message.from_user.first_name if msg.reply_to_message else msg.from_user.first_name
-    await msg.reply(f"🔥 {target}, {random.choice(ROASTS)}")
+    roast = random.choice(ROASTS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🔥 Роаст для {html.escape(target)}\n\n"
+        f"<i>{roast}</i>\n\n"
+        f"<i>Всё в шутку, не обижайся 😄</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 # ═══════════════════════════════════════════════════════
 # ИГРЫ
 # ═══════════════════════════════════════════════════════
 async def cmd_coin(msg: Message):
-    await msg.reply(random.choice([
-        brand.get_text("coin_heads"),
-        brand.get_text("coin_tails"),
-    ]))
+    side = random.choice(["heads", "tails"])
+    text = brand.get_text(f"coin_{side}") or ("🪙 Орёл!" if side == "heads" else "🪙 Решка!")
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🪙 Подбрасываю монету...\n\n"
+        f"<b>{text}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
 async def cmd_dice(msg: Message, command: CommandObject = None):
     n = 1
     try: n = min(max(int((command.args or "1").split()[0]), 1), 10)
     except: pass
-    results = [random.randint(1,6) for _ in range(n)]
-    await msg.reply("🎲 " + " | ".join(map(str, results)) + f" (сумма: {sum(results)})")
+    results = [random.randint(1, 6) for _ in range(n)]
+    faces = ["⚀","⚁","⚂","⚃","⚄","⚅"]
+    visual = " ".join(faces[r-1] for r in results)
+    total_line = f"  Сумма: <b>{sum(results)}</b>" if n > 1 else ""
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎲 {'Бросок' if n==1 else f'{n} кубика'}\n\n"
+        f"{visual}\n"
+        f"<b>{' | '.join(map(str, results))}</b>{total_line}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_roll(msg: Message, command: CommandObject = None):
     sides = 20
@@ -2773,11 +3077,18 @@ async def cmd_roll(msg: Message, command: CommandObject = None):
         sides = int((command.args or "20").split()[0])
     except Exception:
         pass
-    if sides <= 0:
-        sides = 20
-    if sides > 1_000_000:
-        sides = 1_000_000
-    await msg.reply(f"🎲 Бросок d{sides}: <b>{random.randint(1, sides)}</b>", parse_mode="HTML")
+    sides = max(2, min(sides, 1_000_000))
+    result = random.randint(1, sides)
+    is_max = result == sides
+    is_min = result == 1
+    suffix = " 🎊 МАКСИМУМ!" if is_max else (" 💀 МИНИМУМ!" if is_min else "")
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎲 Бросок d{sides}\n\n"
+        f"Результат: <b>{result}</b>{suffix}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_rps(msg: Message, command: CommandObject = None):
     choices = {"камень": "✊", "ножницы": "✌️", "бумага": "✋"}
@@ -2817,33 +3128,121 @@ async def cmd_rps(msg: Message, command: CommandObject = None):
 async def cmd_random_num(msg: Message, command: CommandObject = None):
     try:
         parts = list(map(int, ((command.args or "1 100") if command else "1 100").split()))
-        a, b = (parts[0], parts[1]) if len(parts)==2 else (1, parts[0])
-    except: a, b = 1, 100
-    await msg.reply(f"🎲 {random.randint(min(a,b), max(a,b))}")
+        a, b = (parts[0], parts[1]) if len(parts) == 2 else (1, parts[0])
+    except:
+        a, b = 1, 100
+    result = random.randint(min(a, b), max(a, b))
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎲 Случайное число\n\n"
+        f"Диапазон: <b>{min(a,b)} – {max(a,b)}</b>\n"
+        f"◆ Выпало: <b>{result}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_choose(msg: Message, command: CommandObject = None):
-    if not (command and command.args): return await msg.reply("Пример: выбрать пицца суши бургер")
+    if not (command and command.args):
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🎯 Выборщик\n\n"
+            f"Напиши варианты через пробел:\n"
+            f"<code>выбрать пицца суши бургер</code>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
     opts = command.args.split()
-    await msg.reply(f"🎯 Я выбираю: <b>{random.choice(opts)}</b>", parse_mode="HTML")
+    chosen = random.choice(opts)
+    eliminated = [o for o in opts if o != chosen]
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎯 Выбор сделан!\n\n"
+        f"◆ <b>{html.escape(chosen)}</b>\n\n"
+        f"<i>Остальные варианты не подошли: {', '.join(html.escape(e) for e in eliminated[:5])}</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_rate(msg: Message, command: CommandObject = None):
     thing = (command.args if command and command.args else None) or \
             (msg.reply_to_message.text if msg.reply_to_message else "это")
+    if len(str(thing)) > 50:
+        thing = str(thing)[:50] + "..."
     score = random.randint(0, 10)
-    bar = "█" * score + "░" * (10-score)
-    await msg.reply(f"⭐ Оценка «{thing}»: {score}/10\n[{bar}]")
+    filled = "█" * score
+    empty = "░" * (10 - score)
+    if score == 10:   verdict = "🏆 Шедевр!"
+    elif score >= 8:  verdict = "✨ Очень круто"
+    elif score >= 6:  verdict = "👍 Неплохо"
+    elif score >= 4:  verdict = "😐 Так себе"
+    elif score >= 2:  verdict = "😬 Слабовато"
+    else:             verdict = "💀 Ужас"
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"⭐ Оценка\n\n"
+        f"«{html.escape(str(thing))}»\n\n"
+        f"[{filled}{empty}] <b>{score}/10</b>\n"
+        f"◆ {verdict}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_truth(msg: Message):
-    questions = ["Какой твой самый стыдный поступок?","В кого ты сейчас втайне влюблён(а)?","Что никогда никому не рассказывал(а)?","Какую самую большую ложь говорил(а)?","О чём больше всего жалеешь?","Кто твой секретный кумир?","Что первое замечаешь в людях?"]
-    await msg.reply(f"🗣️ Правда:\n{random.choice(questions)}")
+    questions = [
+        "Какой твой самый стыдный поступок?",
+        "В кого ты сейчас втайне влюблён(а)?",
+        "Что никогда никому не рассказывал(а)?",
+        "Какую самую большую ложь говорил(а)?",
+        "О чём больше всего жалеешь?",
+        "Кто твой секретный кумир в чате?",
+        "Что первое замечаешь в людях?",
+        "Какой твой самый странный страх?",
+        "Что думаешь о себе, когда никто не видит?",
+        "Когда последний раз плакал(а) и почему?",
+    ]
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🗣️ Правда или действие — Правда\n\n"
+        f"<b>{random.choice(questions)}</b>\n\n"
+        f"<i>Отвечать честно! Все смотрят 👀</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_dare(msg: Message):
-    dares = ["Напиши бывшему/бывшей «привет»","Сделай 20 отжиманий прямо сейчас","Спой голосовым сообщением любую песню","Расскажи самый глупый факт о себе","Поменяйся аватаркой на 1 час","Сделай комплимент 3 людям в чате","Поставь лайк всем последним сториз в инстаграм"]
-    await msg.reply(f"🔥 Действие:\n{random.choice(dares)}")
+    dares = [
+        "Напиши бывшему/бывшей «привет» и покажи скрин 👀",
+        "Сделай 20 отжиманий прямо сейчас и пришли видео",
+        "Спой голосовым сообщением любую песню",
+        "Расскажи самый глупый факт о себе в чате",
+        "Сделай комплимент трём людям в чате прямо сейчас",
+        "Смени статус на «я люблю Lumena» на 30 минут",
+        "Напиши «мяу» в трёх разных чатах и пришли скрины",
+        "Угадай кто ответит следующим в этом чате",
+        "Напиши что-нибудь только заглавными буквами 5 минут",
+        "Отправь голосовое сообщение с петушиным криком",
+        "Поставь реакцию ❤️ на 5 последних сообщений в чате",
+        "Представься в чате как будто ты робот",
+    ]
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🔥 Правда или действие — Действие\n\n"
+        f"<b>{random.choice(dares)}</b>\n\n"
+        f"<i>Отказаться нельзя! Все следят 😈</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_riddle(msg: Message):
     q, a = random.choice(RIDDLES)
-    await msg.reply(f"🧩 Загадка:\n<b>{q}</b>\n\n<tg-spoiler>Ответ: {a}</tg-spoiler>", parse_mode="HTML")
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🧩 Загадка\n\n"
+        f"<b>{q}</b>\n\n"
+        f"<tg-spoiler>💡 Ответ: {a}</tg-spoiler>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_roulette(msg: Message):
     chat_id = msg.chat.id
