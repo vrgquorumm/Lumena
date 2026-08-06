@@ -760,14 +760,36 @@ def _fmt_role(role: str) -> str:
     return f"{icon} {name}"
 
 
-@dp.message(Command("роль", "setrole"))
-async def cmd_set_role(msg: Message, command: CommandObject):
-    """Назначить роль — только фаундер."""
+@dp.message(Command("setrole"))
+async def cmd_set_role_slash(msg: Message, command: CommandObject):
+    await cmd_set_role(msg, command)
+
+
+@dp.message(Command("removerole"))
+async def cmd_remove_role_slash(msg: Message, command: CommandObject):
+    await cmd_remove_role(msg, command)
+
+
+@dp.message(Command("roles"))
+async def cmd_roles_slash(msg: Message):
+    await cmd_roles(msg)
+
+
+async def cmd_set_role(msg: Message, command=None):
+    """Назначить роль — только фаундер.
+    Работает: роль @username lead_admin  ИЛИ ответ на сообщение + роль admin"""
     if not is_owner(msg):
         return await msg.reply("⛔ Только @hdrttttttt")
 
-    # Парсим аргументы: @username роль  ИЛИ (reply) роль
-    args = (command.args or "").strip().split()
+    # Получаем сырые аргументы — из CommandObject или из текста сообщения
+    if command is not None:
+        raw_args = (command.args or "").strip()
+    else:
+        # Текстовая команда: "роль @username admin"
+        parts = (msg.text or "").strip().split(maxsplit=1)
+        raw_args = parts[1] if len(parts) > 1 else ""
+
+    args = raw_args.split()
     target = None
     role_raw = ""
 
@@ -777,139 +799,145 @@ async def cmd_set_role(msg: Message, command: CommandObject):
     elif len(args) >= 2:
         username = args[0].lstrip("@")
         role_raw = args[1].lower()
-        # пробуем найти юзера по username в chat_members
+        # Ищем ID по username или имени в chat_members
         found_uid = next(
-            (uid for cid_members in chat_members.values()
-             for uid, name in cid_members.items()
-             if str(uid) == username or name.lower() == username.lower()),
+            (uid for cid_m in chat_members.values()
+             for uid in cid_m
+             if any(n.lower() == username.lower() for n in [str(uid),
+                    next((v for k, v in cid_m.items() if k == uid), "")])),
             None,
         )
-        if found_uid:
-            target = type("U", (), {"id": found_uid, "full_name": username,
-                                    "username": username, "mention_html": lambda s="": f"@{username}"})()
-        else:
-            # Создаём заглушку — запомним по username
-            target = type("U", (), {"id": None, "full_name": f"@{username}",
-                                    "username": username, "mention_html": lambda s="": f"@{username}"})()
+        # Упрощённый поиск: ищем по username в _ROLE_USERNAMES или просто сохраняем
+        target_id   = found_uid
+        target_name = f"@{username}"
+    elif len(args) == 1:
+        role_raw = args[0].lower()
+        if not msg.reply_to_message:
+            return await msg.reply(
+                "ℹ️ Чтобы назначить роль — ответь на сообщение нужного человека:\n"
+                "<code>роль lead_admin</code> (в ответ на его сообщение)\n\n"
+                "Или укажи username: <code>роль @username admin</code>",
+                parse_mode="HTML",
+            )
     else:
         return await msg.reply(
-            "Использование:\n"
-            "<code>/роль @username lead_admin</code>\n"
-            "<code>/роль @username co_admin</code>\n"
-            "<code>/роль @username admin</code>\n"
-            "<code>/роль @username moderator</code>\n\n"
-            "Или ответь на сообщение: <code>/роль admin</code>",
+            "👥 <b>Назначение роли</b>\n\n"
+            "Ответь на сообщение человека и напиши:\n"
+            "<code>роль lead_admin</code>\n"
+            "<code>роль co_admin</code>\n"
+            "<code>роль admin</code>\n"
+            "<code>роль moderator</code>\n\n"
+            "Или без reply:\n"
+            "<code>роль @username admin</code>",
             parse_mode="HTML",
         )
 
     role = _ROLE_ALIASES.get(role_raw)
     if not role:
-        valid = " | ".join(f"<code>{k}</code>" for k in ROLE_NAMES)
+        valid = "  ".join(f"<code>{k}</code>" for k in ROLE_NAMES)
         return await msg.reply(
-            f"❓ Неизвестная роль: <code>{html.escape(role_raw)}</code>\n\nДоступные: {valid}",
+            f"❓ Неизвестная роль: <code>{html.escape(role_raw)}</code>\n\n"
+            f"Доступные:\n{valid}",
             parse_mode="HTML",
         )
 
-    uname = (target.username or "").lower().lstrip("@") if target else ""
-
-    if target and target.id:
-        set_role(target.id, role, uname)
-        mention = f"@{uname}" if uname else target.full_name
-    else:
-        # Нет ID — сохраняем только по username, применится при следующем контакте
-        if uname:
+    if msg.reply_to_message:
+        u     = msg.reply_to_message.from_user
+        uname = (u.username or "").lower().lstrip("@")
+        set_role(u.id, role, uname)
+        mention = f"@{uname}" if uname else html.escape(u.full_name)
+    elif "target_id" in dir():
+        uname = username.lower().lstrip("@")
+        if target_id:
+            set_role(target_id, role, uname)
+        else:
             _ROLE_USERNAMES[uname] = role
         mention = f"@{uname}"
+    else:
+        return
 
     save_data()
     await msg.reply(
-        f"{_fmt_role(role)} назначена\n\n"
-        f"👤 {html.escape(mention)}\n"
+        f"{_fmt_role(role)} назначена!\n\n"
+        f"👤 {mention}\n"
         f"🏷 Роль: <b>{ROLE_NAMES[role]}</b>",
         parse_mode="HTML",
     )
 
 
-@dp.message(Command("убратьроль", "removerole"))
-async def cmd_remove_role(msg: Message, command: CommandObject):
+async def cmd_remove_role(msg: Message, command=None):
     """Снять роль — только фаундер."""
     if not is_owner(msg):
         return await msg.reply("⛔ Только @hdrttttttt")
 
-    target = None
-    if msg.reply_to_message:
-        target = msg.reply_to_message.from_user
+    if command is not None:
+        raw_args = (command.args or "").strip().lstrip("@")
     else:
-        args = (command.args or "").strip().lstrip("@")
-        if not args:
-            return await msg.reply("Ответь на сообщение или укажи: <code>/убратьроль @username</code>",
-                                   parse_mode="HTML")
-        # Ищем по username
-        uname = args.lower()
-        found_uid = next(
-            (uid for cid_members in chat_members.values()
-             for uid, name in cid_members.items()
-             if name.lower() == uname),
-            None,
-        )
-        if found_uid:
-            target = type("U", (), {"id": found_uid, "username": uname,
-                                    "full_name": f"@{uname}"})()
-        else:
-            _ROLE_USERNAMES.pop(uname, None)
-            save_data()
-            return await msg.reply(f"✅ Роль снята с @{html.escape(uname)}", parse_mode="HTML")
+        parts = (msg.text or "").strip().split(maxsplit=1)
+        raw_args = parts[1].lstrip("@") if len(parts) > 1 else ""
 
-    old_role = get_role(target.id) if target.id else None
-    uname    = (target.username or "").lower().lstrip("@")
-    removed  = remove_role(target.id, uname) if target.id else bool(_ROLE_USERNAMES.pop(uname, None))
-
-    if removed:
+    if msg.reply_to_message:
+        u     = msg.reply_to_message.from_user
+        uname = (u.username or "").lower().lstrip("@")
+        old   = get_role(u.id)
+        remove_role(u.id, uname)
         save_data()
-        mention = f"@{uname}" if uname else target.full_name
-        old_str = f" (была {_fmt_role(old_role)})" if old_role else ""
-        await msg.reply(
-            f"✅ Роль снята{old_str}\n\n👤 {html.escape(mention)}",
+        mention = f"@{uname}" if uname else html.escape(u.full_name)
+        old_str = f" (была {_fmt_role(old)})" if old else ""
+        return await msg.reply(f"✅ Роль снята{old_str}\n\n👤 {mention}", parse_mode="HTML")
+
+    if not raw_args:
+        return await msg.reply(
+            "Ответь на сообщение или укажи:\n<code>убратьроль @username</code>",
             parse_mode="HTML",
         )
-    else:
-        await msg.reply("У этого пользователя нет роли.")
+
+    uname = raw_args.lower()
+    # Ищем по username в ROLES
+    found_uid = next(
+        (uid for uid, r in ROLES.items()
+         if _ROLE_USERNAMES.get(uname) == r and uid in
+            {u for cm in chat_members.values() for u in cm}),
+        None,
+    )
+    old = _ROLE_USERNAMES.get(uname)
+    _ROLE_USERNAMES.pop(uname, None)
+    if found_uid:
+        ROLES.pop(found_uid, None)
+    save_data()
+    old_str = f" (была {_fmt_role(old)})" if old else ""
+    await msg.reply(f"✅ Роль снята{old_str}\n\n👤 @{html.escape(uname)}", parse_mode="HTML")
 
 
-@dp.message(Command("роли", "roles"))
-async def cmd_roles(msg: Message):
+async def cmd_roles(msg: Message, command=None):
     """Список всех назначенных ролей — только фаундер."""
     if not is_owner(msg):
         return await msg.reply("⛔ Только @hdrttttttt")
 
     lines = ["👥 <b>Назначенные роли</b>\n"]
-
-    # Сначала по ID (у кого есть точное совпадение)
     by_role: dict[str, list[str]] = {r: [] for r in ROLE_HIERARCHY}
+
+    seen_unames: set[str] = set()
     for uid, role in ROLES.items():
         if role not in by_role:
             by_role.setdefault(role, [])
-        name = f"ID {uid}"
-        # Пробуем найти имя в chat_members
-        for cid_members in chat_members.values():
-            if uid in cid_members:
-                name = cid_members[uid]
+        # Имя: ищем в chat_members
+        display = f"ID {uid}"
+        for cid_m in chat_members.values():
+            if uid in cid_m:
+                display = cid_m[uid]
                 break
-        # Пробуем найти username
-        for uname, r in _ROLE_USERNAMES.items():
-            if r == role and any(uid in cm for cm in chat_members.values()):
-                name = f"@{uname}" if uname else name
-                break
-        by_role[role].append(name)
-
-    # Добавляем username-only записи (без ID)
-    id_usernames = set()
-    for uid, role in ROLES.items():
+        # Ищем @username
         for uname, r in _ROLE_USERNAMES.items():
             if r == role:
-                id_usernames.add(uname)
+                display = f"@{uname}"
+                seen_unames.add(uname)
+                break
+        by_role[role].append(display)
+
+    # Username-only записи (без ID)
     for uname, role in _ROLE_USERNAMES.items():
-        if uname not in id_usernames and role in by_role:
+        if uname not in seen_unames and role in by_role:
             by_role[role].append(f"@{uname}")
 
     total = 0
@@ -923,11 +951,12 @@ async def cmd_roles(msg: Message):
             total += 1
 
     if total == 0:
-        lines.append("Нет назначенных ролей.\n\n<i>/роль @username lead_admin — назначить</i>")
-
-    lines.append(
-        f"\n<i>Фаундер: @{OWNER_USERNAME} (не отображается — всегда активен)</i>"
-    )
+        lines.append(
+            "Нет назначенных ролей.\n\n"
+            "<i>Чтобы назначить — ответь на сообщение и напиши:</i>\n"
+            "<code>роль lead_admin</code>"
+        )
+    lines.append(f"\n<i>Фаундер @{OWNER_USERNAME} — всегда активен</i>")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 
@@ -2947,6 +2976,10 @@ TEXT_COMMANDS.update({
     # Брак
     "брак": cmd_marry, "жениться": cmd_marry, "замуж": cmd_marry,
     "развод": cmd_divorce,
+    # Роли
+    "роль": cmd_set_role, "setrole": cmd_set_role,
+    "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
+    "роли": cmd_roles, "roles": cmd_roles,
     "списокбраков": cmd_marriages, "список браков": cmd_marriages, "браки": cmd_marriages,
     # Отношения
     "корабль": cmd_ship, "шип": cmd_ship,
