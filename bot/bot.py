@@ -4286,6 +4286,7 @@ async def handle_founder_edit_text(msg: Message):
 
     brand.set_custom_text(key, raw_text, ents_data)
     brand.save_custom_texts()
+    asyncio.create_task(brand.push_custom_texts_to_github())
 
     label = brand.TEXT_LABELS.get(key, key)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -4376,6 +4377,7 @@ async def cmd_resettext(msg: Message):
         return await msg.reply(f"❓ Ключ <code>{html.escape(key)}</code> не найден.", parse_mode="HTML")
     brand.del_custom_text(key)
     brand.save_custom_texts()
+    asyncio.create_task(brand.push_custom_texts_to_github())
     await msg.reply(
         f"🔄 <b>{html.escape(brand.TEXT_LABELS[key])}</b> — сброшен к дефолту.",
         parse_mode="HTML"

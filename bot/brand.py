@@ -542,6 +542,58 @@ def load_custom_texts(path: str = "data/custom_texts.json") -> None:
         print(f"⚠️ load_custom_texts: {ex}")
 
 
+async def push_custom_texts_to_github(path: str = "data/custom_texts.json") -> bool:
+    """Коммитит custom_texts.json в GitHub через API — тексты выживают после Railway-деплоя.
+    Требует переменных окружения: GITHUB_TOKEN и GITHUB_REPO (например vrgquorumm/Lumena).
+    Возвращает True при успехе, False при любой ошибке (тихий фейл).
+    """
+    import json, os, base64
+    try:
+        import aiohttp
+    except ImportError:
+        return False
+
+    token = os.getenv("GITHUB_TOKEN", "")
+    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
+    if not token:
+        return False
+
+    git_path = f"bot/{path}"          # путь в репозитории
+    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
+    headers  = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    try:
+        content_bytes = json.dumps(_custom_texts, ensure_ascii=False, indent=2).encode()
+        content_b64   = base64.b64encode(content_bytes).decode()
+
+        async with aiohttp.ClientSession() as session:
+            # Получаем текущий SHA файла (нужен для обновления)
+            async with session.get(api_url, headers=headers) as resp:
+                sha = (await resp.json()).get("sha") if resp.status == 200 else None
+
+            payload: dict = {
+                "message": "chore: auto-save custom texts",
+                "content": content_b64,
+            }
+            if sha:
+                payload["sha"] = sha
+
+            async with session.put(api_url, headers=headers, json=payload) as resp:
+                if resp.status in (200, 201):
+                    print("✅ custom_texts.json синхронизирован с GitHub")
+                    return True
+                err = await resp.text()
+                print(f"⚠️ GitHub push failed {resp.status}: {err[:200]}")
+                return False
+    except Exception as ex:
+        print(f"⚠️ push_custom_texts_to_github: {ex}")
+        return False
+
+
 # ── Кастомные кнопки ──────────────────────────────────────
 _custom_buttons: dict[str, dict] = {}
 
