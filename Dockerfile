@@ -5,15 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 
 WORKDIR /app
 
-# Зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Корневой bot.py (точка входа Railway) + весь bot/ (реальный код)
-COPY bot.py .
-COPY bot/ ./bot/
+COPY . .
 
-# Папка для данных внутри bot/ (все пути относительны bot/)
-RUN mkdir -p bot/data
+RUN mkdir -p data
 
 CMD ["python", "bot.py"]
