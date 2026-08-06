@@ -87,6 +87,7 @@ profiles = {}             # {user_id: {"bio": str, "title": str}}
 chat_members = {}         # {chat_id: {user_id: full_name}} — все кто писал в чате
 support_sessions = {}    # {user_id: True} — ожидают ввода обращения к администрации
 _active_rain: dict = {}  # {chat_id: int} — активный дождь монет LMN
+_last_rain_time: float = 0.0  # unix-timestamp последнего дождя
 _premium_users:  set = set()  # {user_id} — купили или получили VIP-анкету
 _verified_users: set = set()  # {user_id} — прошли верификацию в ЛС
 
@@ -155,6 +156,7 @@ def save_data():
         "aura":           {str(u): v for u, v in aura.items()},
         "roles":          {str(u): r for u, r in ROLES.items()},
         "role_usernames": dict(_ROLE_USERNAMES),
+        "last_rain_time": _last_rain_time,
     }
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -205,6 +207,8 @@ def load_data():
         _saved_pack = data.get("brand_emoji_pack", [])
         if _saved_pack:
             brand.set_pack(_saved_pack, data.get("brand_pack_name", ""))
+        global _last_rain_time
+        _last_rain_time = data.get("last_rain_time", 0)
         print(f"✅ Данные загружены: {DATA_FILE}")
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
@@ -217,9 +221,25 @@ async def auto_save_loop():
         print("💾 Автосохранение выполнено")
 
 async def coin_rain_loop():
-    """Дождь монет LMN каждые 6 часов во всех активных группах."""
-    await asyncio.sleep(60)   # небольшая задержка после старта бота
+    """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
+    global _last_rain_time
+    RAIN_INTERVAL = 6 * 3600  # 6 часов в секундах
+
+    await asyncio.sleep(30)   # небольшая задержка после старта бота
+
     while True:
+        import time
+        now = time.time()
+        elapsed = now - _last_rain_time
+        if elapsed < RAIN_INTERVAL:
+            # ещё не пришло время — ждём оставшееся
+            await asyncio.sleep(RAIN_INTERVAL - elapsed)
+            continue
+
+        # Время пришло — запускаем дождь
+        _last_rain_time = time.time()
+        save_data()
+
         active_chats = [cid for cid in chat_members.keys() if cid < 0]
         for chat_id in active_chats:
             amount = random.randint(150, 600)
@@ -238,7 +258,8 @@ async def coin_rain_loop():
                 )
             except Exception:
                 _active_rain.pop(chat_id, None)
-        await asyncio.sleep(6 * 3600)
+
+        await asyncio.sleep(RAIN_INTERVAL)
 
 # ═══════════════════════════════════════════════════════
 # АВТОМОДЕРАЦИЯ — ПРОПАГАНДА РОССИЙСКОЙ АРМИИ
