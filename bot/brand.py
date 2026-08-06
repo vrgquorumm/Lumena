@@ -971,6 +971,30 @@ async def push_bot_data_to_github(
         return False
 
 
+async def restore_brand_from_github() -> None:
+    """При старті відновлює custom_texts/style/buttons з GitHub якщо локальних файлів немає."""
+    import os
+    targets = [
+        ("data/custom_texts.json",   "custom_texts",   load_custom_texts),
+        ("data/custom_style.json",   "custom_style",   load_custom_style),
+        ("data/custom_buttons.json", "custom_buttons", load_custom_buttons),
+    ]
+    os.makedirs("data", exist_ok=True)
+    for gh_path, label, loader in targets:
+        local = gh_path  # шлях однаковий
+        if os.path.exists(local) and os.path.getsize(local) > 5:
+            continue
+        print(f"📥 {label} не знайдено — спроба відновити з GitHub...")
+        raw = await fetch_bot_data_from_github(gh_path)
+        if raw:
+            with open(local, "wb") as f:
+                f.write(raw)
+            loader()  # одразу завантажуємо в пам'ять
+            print(f"✅ {label} відновлено з GitHub")
+        else:
+            print(f"⚠️ GitHub не повернув {label}")
+
+
 async def fetch_bot_data_from_github(path: str = "data/bot_data.json") -> bytes | None:
     """Скачивает bot_data.json из GitHub при старте (когда локального файла нет).
     Возвращает raw bytes или None при ошибке.

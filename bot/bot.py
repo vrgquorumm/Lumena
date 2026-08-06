@@ -255,19 +255,40 @@ def load_data():
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
 
+async def _push_all_to_github() -> None:
+    """Пушить ВСІ дані-файли в GitHub атомарно (викликається з auto_save_loop і при shutdown)."""
+    _files = [
+        (DATA_FILE,               "data/bot_data.json"),
+        (_ank.ANKETA_USERS_FILE,  "data/anketa_users.json"),
+        (_ank.ANKETA_DATA_FILE,   "data/anketa_settings.json"),
+    ]
+    for local, gh_path in _files:
+        try:
+            if os.path.exists(local):
+                with open(local, "rb") as _f:
+                    _raw = _f.read()
+                await brand.push_bot_data_to_github(_raw, gh_path)
+        except Exception as _e:
+            print(f"⚠️ GitHub push {gh_path}: {_e}")
+    # Brand-файли (custom_texts, style, buttons)
+    for fn in (
+        brand.push_custom_texts_to_github,
+        brand.push_custom_style_to_github,
+        brand.push_custom_buttons_to_github,
+    ):
+        try:
+            await fn()
+        except Exception as _e:
+            print(f"⚠️ GitHub push brand: {_e}")
+
+
 async def auto_save_loop():
-    """Автосохранение каждые 60 секунд + надёжный пуш в GitHub."""
+    """Автосохранение кожні 60 сек + надійний пуш ВСІХ файлів в GitHub."""
     while True:
         await asyncio.sleep(60)
         save_data()
-        # Явно чекаємо пуш — create_task в save_data() ненадійний при частих збереженнях
-        try:
-            with open(DATA_FILE, "rb") as _f:
-                _raw = _f.read()
-            await brand.push_bot_data_to_github(_raw)
-            print("💾 Автосохранение + GitHub ✅")
-        except Exception as _e:
-            print(f"⚠️ auto_save GitHub push: {_e}")
+        await _push_all_to_github()
+        print("💾 Автосохранение всіх файлів → GitHub ✅")
 
 async def coin_rain_loop():
     """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
@@ -6583,6 +6604,7 @@ async def main():
     # потім завантажуємо дані в пам'ять
     await restore_bot_data_from_github()
     await _ank.restore_anketa_from_github()
+    await brand.restore_brand_from_github()
     load_data()
     _ank.load_anketa_settings()
     brand.load_custom_texts()
@@ -6659,16 +6681,10 @@ async def main():
                 polling_timeout=30,
             )
         except asyncio.CancelledError:
-            print("🛑 Бот остановлен вручную — финальное сохранение...")
+            print("🛑 Бот остановлен — фінальне збереження ВСІХ файлів...")
             save_data()
-            # Фінальний await-пуш перед закриттям (create_task вже не виконається)
-            try:
-                with open(DATA_FILE, "rb") as _f:
-                    _raw = _f.read()
-                await brand.push_bot_data_to_github(_raw)
-                print("✅ Данные сохранены в GitHub перед остановкой")
-            except Exception as _e:
-                print(f"⚠️ Финальный GitHub push: {_e}")
+            await _push_all_to_github()
+            print("✅ Всі дані збережено в GitHub перед зупинкою")
             break
         except Exception as e:
             logging.error(f"💥 Polling упал: {e}. Перезапуск через {retry_delay}с...")
