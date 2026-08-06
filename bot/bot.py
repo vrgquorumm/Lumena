@@ -88,6 +88,11 @@ chat_members = {}         # {chat_id: {user_id: full_name}} — все кто п
 support_sessions = {}    # {user_id: True} — ожидают ввода обращения к администрации
 _active_rain: dict = {}  # {chat_id: int} — активный дождь монет LMN
 _last_rain_time: float = 0.0  # unix-timestamp последнего дождя
+
+# ── Антилинк ──────────────────────────────────────────────────
+_link_guard:       dict[int, bool]        = {}   # chat_id → enabled
+_link_guard_warns: dict[int, dict]        = {}   # chat_id → {uid: count}
+_link_whitelist:   dict[int, list[str]]   = {}   # chat_id → [pattern, ...]
 _premium_users:  set = set()  # {user_id} — купили или получили VIP-анкету
 _verified_users: set = set()  # {user_id} — прошли верификацию в ЛС
 
@@ -157,6 +162,10 @@ def save_data():
         "roles":          {str(u): r for u, r in ROLES.items()},
         "role_usernames": dict(_ROLE_USERNAMES),
         "last_rain_time": _last_rain_time,
+        "link_guard":       {str(c): v for c, v in _link_guard.items()},
+        "link_guard_warns": {str(c): {str(u): v for u, v in w.items()}
+                             for c, w in _link_guard_warns.items()},
+        "link_whitelist":   {str(c): v for c, v in _link_whitelist.items()},
     }
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -209,6 +218,12 @@ def load_data():
             brand.set_pack(_saved_pack, data.get("brand_pack_name", ""))
         global _last_rain_time
         _last_rain_time = data.get("last_rain_time", 0)
+        for c, v in data.get("link_guard", {}).items():
+            _link_guard[int(c)] = bool(v)
+        for c, w in data.get("link_guard_warns", {}).items():
+            _link_guard_warns[int(c)] = {int(u): v for u, v in w.items()}
+        for c, wl in data.get("link_whitelist", {}).items():
+            _link_whitelist[int(c)] = list(wl)
         print(f"✅ Данные загружены: {DATA_FILE}")
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
@@ -3706,6 +3721,155 @@ for slash_name, func in [
 from aiogram import BaseMiddleware
 from typing import Callable, Any
 
+import re as _re
+
+# ── Антилинк: вспомогательные функции ─────────────────────────
+_URL_ENTITY_TYPES = {"url", "text_link"}
+_RAW_LINK_RE = _re.compile(
+    r"(?:https?://|t\.me/)[^\s<>\"']+",
+    _re.IGNORECASE,
+)
+
+
+def _msg_has_links(msg: Message) -> bool:
+    """True если в сообщении есть URL-entity или сырая ссылка в тексте."""
+    for ents in (msg.entities or [], msg.caption_entities or []):
+        for ent in ents:
+            if ent.type in _URL_ENTITY_TYPES:
+                return True
+    text = msg.text or msg.caption or ""
+    return bool(_RAW_LINK_RE.search(text))
+
+
+def _extract_links(msg: Message) -> list[str]:
+    """Список всех ссылок из сообщения."""
+    links: list[str] = []
+    text = msg.text or msg.caption or ""
+    for ents in (msg.entities or [], msg.caption_entities or []):
+        for ent in ents:
+            if ent.type == "url":
+                links.append(text[ent.offset: ent.offset + ent.length])
+            elif ent.type == "text_link" and ent.url:
+                links.append(ent.url)
+    if not links:
+        links = _RAW_LINK_RE.findall(text)
+    return links
+
+
+def _link_allowed(link: str, chat_id: int) -> bool:
+    """True если ссылка разрешена: собственные бренд-ссылки или белый список чата."""
+    link_l = link.lower()
+    # Все URL из BUTTON_DEFS (собственный бренд)
+    for _, df in brand.BUTTON_DEFS.items():
+        url = (df.get("url") or "").lower()
+        if url and url.rstrip("/") in link_l:
+            return True
+    # Белый список чата
+    for pat in _link_whitelist.get(chat_id, []):
+        if pat.lower() in link_l:
+            return True
+    return False
+
+
+async def _check_link_guard(msg: Message) -> bool:
+    """Автоудаление ссылок. Возвращает True если сообщение удалено."""
+    if not _link_guard.get(msg.chat.id, False):
+        return False
+    if msg.chat.type == "private":
+        return False
+    if not msg.from_user or msg.from_user.is_bot:
+        return False
+
+    # ── Чат администрации — ссылки всегда разрешены ────────────
+    mod_chat = _ank.get_mod_chat()
+    if mod_chat and msg.chat.id == mod_chat:
+        return False
+
+    # ── Администрация в любом чате — разрешены ─────────────────
+    uid = msg.from_user.id
+    if has_role(uid, "lead_admin", "co_admin", "admin", "moderator") or is_owner(msg):
+        return False
+    try:
+        member = await bot.get_chat_member(msg.chat.id, uid)
+        if member.status in ("administrator", "creator"):
+            return False
+    except Exception:
+        pass
+
+    # ── Проверяем наличие ссылок ────────────────────────────────
+    if not _msg_has_links(msg):
+        # Проверяем форварды из каналов
+        fwd_chat = getattr(msg, "forward_from_chat", None)
+        if not (fwd_chat and getattr(fwd_chat, "type", None) in ("channel", "supergroup")):
+            return False
+        # Форвард из канала — проверяем whitelist
+        fwd_username = getattr(fwd_chat, "username", None)
+        if fwd_username and _link_allowed(f"t.me/{fwd_username}", msg.chat.id):
+            return False
+
+    else:
+        links = _extract_links(msg)
+        # Все ссылки в белом списке — пропускаем
+        if links and all(_link_allowed(lnk, msg.chat.id) for lnk in links):
+            return False
+
+    # ── Удаляем сообщение ───────────────────────────────────────
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+    # ── Подсчёт предупреждений ──────────────────────────────────
+    _link_guard_warns.setdefault(msg.chat.id, {})
+    _link_guard_warns[msg.chat.id][uid] = _link_guard_warns[msg.chat.id].get(uid, 0) + 1
+    count = _link_guard_warns[msg.chat.id][uid]
+
+    name    = msg.from_user.full_name
+    mention = f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
+
+    warn_msg = await bot.send_message(
+        msg.chat.id,
+        f"🔗 {mention} — <b>ссылки запрещены!</b>\n"
+        f"⚠️ Предупреждение: <b>{count}/3</b>\n\n"
+        f"<i>Сообщение автоматически удалено.</i>",
+        parse_mode="HTML",
+    )
+
+    # ── 3 предупреждения → мут 5 минут ─────────────────────────
+    if count >= 3:
+        _link_guard_warns[msg.chat.id][uid] = 0
+        from datetime import datetime as _dt
+        until = int(_dt.now(tz=KYIV_TZ).timestamp()) + 300
+        try:
+            await bot.restrict_chat_member(
+                msg.chat.id, uid,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=until,
+            )
+            await bot.send_message(
+                msg.chat.id,
+                f"🔇 {mention} — мут <b>5 минут</b> за систематическую отправку ссылок.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+    # ── Автоудаление предупреждения через 30 с ──────────────────
+    async def _del_warn():
+        await asyncio.sleep(30)
+        try:
+            await warn_msg.delete()
+        except Exception:
+            pass
+    asyncio.create_task(_del_warn())
+
+    save_data()
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════
+# MIDDLEWARE АВТОМОДЕРАЦИИ
+# ═══════════════════════════════════════════════════════════════
 class PropagandaMiddleware(BaseMiddleware):
     async def __call__(
         self,
@@ -3720,10 +3884,15 @@ class PropagandaMiddleware(BaseMiddleware):
                 and event.chat.type != "private"):
             chat_members.setdefault(event.chat.id, {})[event.from_user.id] = event.from_user.full_name
 
-        if isinstance(event, Message) and event.text:
-            handled = await auto_moderate_propaganda(event)
-            if handled:
-                return   # Пропаганда — цепочку прерываем
+        if isinstance(event, Message):
+            # Антилинк — до пропаганды, чтобы оба не мешали друг другу
+            if await _check_link_guard(event):
+                return   # ссылка удалена — дальше не обрабатываем
+
+            if event.text:
+                if await auto_moderate_propaganda(event):
+                    return   # Пропаганда — прерываем
+
         return await handler(event, data)
 
 dp.message.middleware(PropagandaMiddleware())
@@ -5348,6 +5517,127 @@ async def cmd_setemojipack(msg: Message):
             "Проверь название пака (часть URL после /addemoji/).",
             parse_mode="HTML"
         )
+
+
+# ═══════════════════════════════════════════════════════
+# АНТИЛИНК — управление фильтром ссылок
+# ═══════════════════════════════════════════════════════
+@dp.message(Command("antilink", "антилинк"))
+async def cmd_antilink(msg: Message, command: CommandObject):
+    if not is_owner(msg) and not is_admin(msg):
+        return await msg.reply("⛔ Только администраторы")
+    args = (command.args or "").strip().lower()
+    cid  = msg.chat.id
+    mod_chat = _ank.get_mod_chat()
+
+    if args in ("on", "вкл", "включить", "enable"):
+        _link_guard[cid] = True
+        save_data()
+        mod_note = ""
+        if mod_chat:
+            mod_note = "\n🛡 В чате администрации ссылки всегда разрешены."
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "🔗 <b>Антилинк включён!</b>\n\n"
+            "Все ссылки от обычных участников будут удаляться.\n"
+            "Администрация освобождена от фильтра." + mod_note + "\n\n"
+            "3 нарушения → автомут на 5 минут.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    elif args in ("off", "выкл", "выключить", "disable"):
+        _link_guard[cid] = False
+        save_data()
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "🔓 <b>Антилинк выключен.</b>\n\n"
+            "Ссылки больше не удаляются автоматически.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    else:
+        enabled = _link_guard.get(cid, False)
+        status  = "✅ Включён" if enabled else "❌ Выключен"
+        wl      = _link_whitelist.get(cid, [])
+        wl_text = "\n".join(f"  • <code>{html.escape(p)}</code>" for p in wl) if wl else "  (пусто)"
+        mod_note = ""
+        if mod_chat:
+            mod_note = f"\n🛡 Чат администрации (<code>{mod_chat}</code>) — всегда разрешены.\n"
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🔗 <b>Антилинк</b> — {status}\n"
+            f"{mod_note}\n"
+            f"📋 Белый список ({len(wl)}):\n{wl_text}\n\n"
+            "Команды:\n"
+            "<code>антилинк вкл</code> — включить\n"
+            "<code>антилинк выкл</code> — выключить\n"
+            "<code>белый_список [ссылка]</code> — добавить в белый список\n"
+            "<code>белый_список удалить [ссылка]</code> — убрать\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+TEXT_COMMANDS.update({
+    "антилинк":  cmd_antilink,
+    "antilink":  cmd_antilink,
+})
+
+
+@dp.message(Command("whitelist", "белый_список", "allowlink"))
+async def cmd_whitelist(msg: Message, command: CommandObject):
+    if not is_owner(msg) and not is_admin(msg):
+        return await msg.reply("⛔ Только администраторы")
+    args = (command.args or "").strip()
+    cid  = msg.chat.id
+    _link_whitelist.setdefault(cid, [])
+
+    if not args:
+        wl = _link_whitelist[cid]
+        if not wl:
+            return await msg.reply(
+                "📋 Белый список пуст.\n\n"
+                "Добавить: <code>белый_список https://t.me/example</code>",
+                parse_mode="HTML",
+            )
+        lines = [f"  {i+1}. <code>{html.escape(p)}</code>" for i, p in enumerate(wl)]
+        return await msg.reply(
+            f"📋 <b>Белый список ссылок</b>\n\n" + "\n".join(lines),
+            parse_mode="HTML",
+        )
+
+    # Удаление
+    if args.startswith(("удалить ", "remove ", "del ")):
+        pattern = args.split(maxsplit=1)[1] if " " in args else ""
+        if pattern in _link_whitelist[cid]:
+            _link_whitelist[cid].remove(pattern)
+            save_data()
+            return await msg.reply(
+                f"✅ Убрано из белого списка:\n<code>{html.escape(pattern)}</code>",
+                parse_mode="HTML",
+            )
+        return await msg.reply(
+            f"❓ Не найдено:\n<code>{html.escape(pattern)}</code>",
+            parse_mode="HTML",
+        )
+
+    # Добавление
+    if args not in _link_whitelist[cid]:
+        _link_whitelist[cid].append(args)
+        save_data()
+        await msg.reply(
+            f"✅ Добавлено в белый список:\n<code>{html.escape(args)}</code>",
+            parse_mode="HTML",
+        )
+    else:
+        await msg.reply("⚠️ Уже в белом списке.", parse_mode="HTML")
+
+TEXT_COMMANDS.update({
+    "белый_список": cmd_whitelist,
+    "allowlink":    cmd_whitelist,
+    "whitelist":    cmd_whitelist,
+})
 
 
 @dp.message(Command("setchatlink"))
