@@ -4076,6 +4076,50 @@ async def _farm_soon(msg: Message):
 async def cmd_farm_slash(msg: Message):
     await _farm_soon(msg)
 
+
+# ── Магазин (coming soon) ───────────────────────────────
+async def _shop_soon(msg: Message):
+    await msg.reply(
+        brand.get_text("shop_coming_soon") or (
+            f"{brand.hdr()}\n\n"
+            f"🛒 <b>Магазин LMN</b>\n\n"
+            f"⚙️ <i>Скоро відкриється!</i>\n\n"
+            f"Тут можна буде витратити зароблені {brand.currency()} на:\n"
+            f"• 🎭 Ролі та статуси\n"
+            f"• 🛡 Захист від пограбування\n"
+            f"• ⚡ Буст заробітку на зміні\n"
+            f"• 🔥 Щит для стріку\n"
+            f"• 🎁 Унікальні предмети\n\n"
+            f"<i>Слідкуй за оновленнями!</i>\n\n"
+            f"{brand.div()}"
+        ),
+        parse_mode="HTML",
+    )
+
+
+async def _inventory_soon(msg: Message):
+    await msg.reply(
+        brand.get_text("inventory_coming_soon") or (
+            f"{brand.hdr()}\n\n"
+            f"🎒 <b>Інвентар</b>\n\n"
+            f"⚙️ <i>Скоро буде доступний!</i>\n\n"
+            f"Тут зберігатимуться всі твої предмети з магазину.\n\n"
+            f"<i>Поки що порожньо — зачекай відкриття магазину 🛒</i>\n\n"
+            f"{brand.div()}"
+        ),
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("shop", "магазин", "крамниця"))
+async def cmd_shop_slash(msg: Message):
+    await _shop_soon(msg)
+
+
+@dp.message(Command("inventory", "інвентар", "инвентарь", "inv"))
+async def cmd_inventory_slash(msg: Message):
+    await _inventory_soon(msg)
+
 # ═══════════════════════════════════════════════════════
 # ТЕКСТОВЫЕ КОМАНДЫ БЕЗ ПРЕФИКСА
 # ═══════════════════════════════════════════════════════
@@ -4180,6 +4224,8 @@ TEXT_COMMANDS.update({
     "помощь": cmd_support, "команды": cmd_help, "хелп": cmd_help,
     # Фарм (скоро)
     "ферма": _farm_soon, "фарм": _farm_soon, "farm": _farm_soon,
+    "магазин": _shop_soon, "крамниця": _shop_soon, "shop": _shop_soon,
+    "інвентар": _inventory_soon, "инвентарь": _inventory_soon, "inv": _inventory_soon,
 })
 
 # Slash-команды только для функций БЕЗ @dp.message(Command(...)) декоратора
@@ -5426,7 +5472,10 @@ _EDITOR_TEXT_CATEGORIES = [
                               "coin", "coin_heads", "coin_tails",
                               "hangman_start", "hangman_win", "hangman_lose",
                               "hangman_no_game", "hangman_letter_used",
-                              "hangman_wrong", "hangman_right"]),
+                              "hangman_wrong", "hangman_right",
+                              "game_dice", "game_roll", "game_choose",
+                              "game_rate", "game_truth", "game_dare",
+                              "game_riddle", "game_random"]),
     ("🤗 Социальные",        ["hug", "kiss", "gift", "slap", "pat",
                               "dance", "bite", "poke", "wave", "highfive",
                               "facepalm", "serenade"]),
@@ -5435,7 +5484,15 @@ _EDITOR_TEXT_CATEGORIES = [
                               "unwarn_no_warns",
                               "mute_self", "ban_self", "kick_self",
                               "admin_only", "reply_needed", "owner_only"]),
-    ("🔮 Предсказания",     ["fortune_result", "horoscope_result", "tarot_result"]),
+    ("🔮 Предсказания",     ["fortune_result", "horoscope_result", "tarot_result",
+                              "fortune_destiny", "fortune_superpower", "fortune_profession",
+                              "fortune_animal", "fortune_movie", "fortune_book",
+                              "fortune_advice", "fortune_motivation", "fortune_myth",
+                              "fortune_country", "fortune_color", "fortune_joke",
+                              "fortune_compliment", "fortune_roast",
+                              "fortune_8ball", "fortune_predict"]),
+    ("🛒 Магазин & Інвентар", ["shop_header", "shop_coming_soon",
+                                "inventory_header", "inventory_empty"]),
     ("👤 Профиль & Рейтинги", ["profile_no_bio", "profile_no_partner", "info_founder_badge",
                                 "profile_header", "profile_bio_label",
                                 "profile_balance_label", "profile_streak_label",
