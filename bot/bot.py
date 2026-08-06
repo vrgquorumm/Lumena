@@ -238,12 +238,18 @@ async def auto_save_loop():
 async def coin_rain_loop():
     """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
     global _last_rain_time
+    import time
     RAIN_INTERVAL = 6 * 3600  # 6 часов в секундах
 
     await asyncio.sleep(30)   # небольшая задержка после старта бота
 
+    # Если данные сброшены (редеплой на Railway) — не стреляем сразу,
+    # а планируем первый дождь через 6 часов от текущего момента.
+    if _last_rain_time == 0.0:
+        _last_rain_time = time.time()
+        save_data()
+
     while True:
-        import time
         now = time.time()
         elapsed = now - _last_rain_time
         if elapsed < RAIN_INTERVAL:
