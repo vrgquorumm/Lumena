@@ -5742,6 +5742,58 @@ TEXT_COMMANDS.update({
 })
 
 
+@dp.message(Command("sendlaunch"))
+async def cmd_sendlaunch(msg: Message):
+    """Відправляє алерт про запуск проекту в паб-чат (тільки фаундер)."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Тільки фаундер")
+
+    import bot_data as _bd  # noqa — reading pub_chat_id
+    pub_chat = bot_data.get("anketa_settings", {}).get("pub_chat_id")
+    if not pub_chat:
+        return await msg.reply("❌ pub_chat_id не встановлено в anketa_settings")
+
+    # Collect all admins/mods to mention (skip founder)
+    mentions: list[str] = []
+    for uid, role in bot_data.get("roles", {}).items():
+        if role in ("lead_admin", "co_admin", "admin", "moderator"):
+            uname = bot_data.get("role_usernames_rev", {}).get(str(uid))
+            if uname:
+                mentions.append(f"@{uname}")
+    # fallback: hardcoded known team usernames
+    for uname, role in _ROLE_USERNAMES.items():
+        mention = f"@{uname}"
+        if role in ("lead_admin", "co_admin", "admin", "moderator") and mention not in mentions:
+            mentions.append(mention)
+
+    mention_line = "  ".join(mentions) if mentions else ""
+    site_line = f"\n🌐 Офіційний сайт: {LUMENA_SITE_URL}" if LUMENA_SITE_URL else ""
+
+    text = (
+        "⚡️ <b>УВАГА КОМАНДІ LUMENA</b> ⚡️\n\n"
+        "Адміністратори та модератори — будьте на готові!\n\n"
+        "🚀 <b>Запуск проекту о 20:00 за Києвом</b>\n\n"
+        "📋 Що потрібно зробити:\n"
+        "• Уважно стежте за чатом\n"
+        "• Швидко реагуйте на порушення правил\n"
+        "• Привітно зустрічайте нових учасників\n"
+        "• Перевірте що всі інструменти бота працюють коректно\n"
+        "• Антилінк та верифікація — активні"
+        f"{site_line}\n"
+        "🤖 Бот: @LumenarAi_Bot\n\n"
+        "Слава Україні! 🇺🇦\n\n"
+        "— <i>Автоматичне повідомлення системи LUMENA</i>"
+    )
+    if mention_line:
+        text += f"\n\n{mention_line}"
+
+    try:
+        await bot.send_message(pub_chat, text, parse_mode="HTML")
+        await msg.reply("✅ Алерт відправлено в паб-чат!")
+    except Exception as e:
+        await msg.reply(f"❌ Помилка: {e}")
+
+
 @dp.message(Command("setsiteurl"))
 async def cmd_setsiteurl(msg: Message):
     """Встановлює URL офіційного сайту Лумени (відображається в меню та привітаннях)."""
