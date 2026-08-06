@@ -247,13 +247,13 @@ async def coin_rain_loop():
             try:
                 await bot.send_message(
                     chat_id,
-                    f"{_LMN_HDR}\n\n"
+                    f"{brand.hdr()}\n\n"
                     f"🌧 <b>ДОЖДЬ ИЗ МОНЕТ!</b>\n\n"
-                    f"{_LMN_DIV}\n"
+                    f"{brand.div()}\n"
                     f"💰 В чате упали монеты LMN!\n\n"
                     f"Напиши <b>подобрать</b> — первым забирает!\n\n"
                     f"🎁 Приз: <b>{fmt_lmn(amount)}</b>\n"
-                    f"{_LMN_DIV}",
+                    f"{brand.div()}",
                     parse_mode="HTML",
                 )
             except Exception:
@@ -1358,7 +1358,7 @@ async def cmd_ro(msg: Message, command: CommandObject):
     try:
         await bot.set_chat_permissions(msg.chat.id, perms)
         await msg.reply(
-            f"{_LMN_HDR}\n\n{icon} {action}\n\n{_LMN_DIV}",
+            f"{brand.hdr()}\n\n{icon} {action}\n\n{brand.div()}",
             parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1435,21 +1435,21 @@ async def marry_callback(cb: CallbackQuery):
         add_balance(target_id, 500)
         save_data()
         await cb.message.edit_text(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"💍 Совет да любовь!\n\n"
             f"💕 <b>{proposal['proposer_full']}</b>\n"
             f"❤️ <b>{cb.from_user.full_name}</b>\n\n"
             f"🎊 Поздравляем! +500 LMN каждому\n\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML"
         )
     else:
         await cb.message.edit_text(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"💔 Отказ\n\n"
             f"<b>{cb.from_user.full_name}</b> отказал(а)\n"
             f"<b>{proposal['proposer_full']}</b>...\n\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML"
         )
     await cb.answer()
@@ -1471,11 +1471,11 @@ async def cmd_divorce(msg: Message):
     marriages[cid].pop(partner_id, None)
     save_data()
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"💔 Развод\n\n"
         f"<b>{msg.from_user.full_name}</b>\n"
         f"и <b>{partner_name}</b> расстались\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML")
 
 @dp.message(Command("marriages"))
@@ -1493,9 +1493,9 @@ async def cmd_marriages(msg: Message):
     if not pairs:
         return await msg.reply("💍 В этом чате пока нет браков")
     lines = [
-        f"{_LMN_HDR}\n",
+        f"{brand.hdr()}\n",
         f"💍 Браки чата  ({len(pairs)} пар)",
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
     ]
     for i, (u1, u2) in enumerate(pairs, 1):
         n1, n2 = f"ID {u1}", f"ID {u2}"
@@ -1508,7 +1508,7 @@ async def cmd_marriages(msg: Message):
             n2 = m2.user.full_name
         except: pass
         lines.append(f"{i}. 💕 <b>{n1}</b> ❤️ <b>{n2}</b>")
-    lines.append(f"\n{_LMN_DIV}")
+    lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════
@@ -1529,11 +1529,11 @@ async def cmd_streak(msg: Message):
     else:             fire = "🆕 Старт"
     name = msg.from_user.first_name
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"🔥 Стрик · {name}\n\n"
         f"📅 Дней подряд: <b>{count}</b>\n"
         f"⚡ {fire}\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML"
     )
 
@@ -1544,9 +1544,9 @@ async def cmd_topstreak(msg: Message):
     top = sorted(chat_streaks.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     lines = [
-        f"{_LMN_HDR}\n",
+        f"{brand.hdr()}\n",
         "🔥 Топ стриков",
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
     ]
     for i, (uid, data) in enumerate(top):
         try:
@@ -1554,7 +1554,7 @@ async def cmd_topstreak(msg: Message):
             name = m.user.full_name
         except: name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {data['count']} дней 🔥")
-    lines.append(f"\n{_LMN_DIV}")
+    lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 @dp.message(Command("resetstreak"))
@@ -1610,9 +1610,9 @@ async def cmd_balance(msg: Message):
     elif bal >= 10_000:        tier, icon = "Середняк", "💵"
     else:                      tier, icon = "Новичок", "🪙"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         + brand.get_text("balance", name=name, icon=icon, balance=fmt_lmn(bal), tier=tier) +
-        f"\n\n{_LMN_DIV}",
+        f"\n\n{brand.div()}",
         parse_mode="HTML"
     )
 
@@ -1657,11 +1657,11 @@ async def cmd_give(msg: Message, command: CommandObject):
     add_balance(msg.from_user.id, -amount)
     add_balance(target.id, amount)
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         + brand.get_text("give",
             from_name=msg.from_user.full_name, to_name=target.full_name,
             amount=fmt_lmn(amount), balance=fmt_lmn(get_balance(msg.from_user.id))) +
-        f"\n\n{_LMN_DIV}",
+        f"\n\n{brand.div()}",
         parse_mode="HTML"
     )
 
@@ -1681,9 +1681,9 @@ async def cmd_work(msg: Message):
     job = random.choice(jobs)
     new_bal = get_balance(uid)
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         + brand.get_text("work", job=job, earned=fmt_lmn(earned), balance=fmt_lmn(new_bal)) +
-        f"\n\n{_LMN_DIV}",
+        f"\n\n{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -1713,9 +1713,9 @@ async def cmd_fish(msg: Message):
     new_bal = get_balance(uid)
     result_line = f"+{fmt_lmn(earned)} LMN" if earned else "Ничего не поймал 😔"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         + brand.get_text("fish", item=item, result=result_line, balance=fmt_lmn(new_bal)) +
-        f"\n\n{_LMN_DIV}",
+        f"\n\n{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -1743,13 +1743,13 @@ async def cmd_casino(msg: Message, command: CommandObject):
         result = f"🔴 ПРОИГРЫШ  -{fmt_lmn(bet)} LMN"
         outcome = "Не повезло. Попробуй снова 😔"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"🎰 Казино\n\n"
         f"💰 Ставка: <b>{fmt_lmn(bet)} LMN</b>\n"
         f"🎲 Результат: <b>{result}</b>\n\n"
         f"✨ {outcome}\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -1780,12 +1780,12 @@ async def cmd_slots(msg: Message, command: CommandObject):
         add_balance(uid, -bet)
         result = f"😔 Промах  -{fmt_lmn(bet)} LMN"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"🎰 Слоты\n\n"
         f"┃  {line}  ┃\n\n"
         f"🎲 {result}\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -1806,20 +1806,20 @@ async def cmd_rob(msg: Message):
         add_balance(victim.id, -stolen)
         add_balance(robber.id, stolen)
         await msg.reply(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"🦹 Ограбление удалось!\n\n"
             f"🎯 Жертва: <b>{victim.full_name}</b>\n"
             f"💰 Украдено: <b>{fmt_lmn(stolen)} LMN</b>\n\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML")
     else:
         fine = random.randint(100, 500)
         add_balance(robber.id, -min(fine, get_balance(robber.id)))
         await msg.reply(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"👮 Попался!\n\n"
             f"💸 Штраф: <b>{fmt_lmn(fine)} LMN</b>\n\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML")
 
 @dp.message(Command("richest"))
@@ -1828,9 +1828,9 @@ async def cmd_richest(msg: Message):
     top = sorted(lmn_balances.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     lines = [
-        f"{_LMN_HDR}\n",
+        f"{brand.hdr()}\n",
         "💰 Топ богачей",
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
     ]
     for i, (uid, bal) in enumerate(top):
         try:
@@ -1838,7 +1838,7 @@ async def cmd_richest(msg: Message):
             name = m.user.full_name
         except: name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {fmt_lmn(bal)} LMN")
-    lines.append(f"\n{_LMN_DIV}")
+    lines.append(f"\n{brand.div()}")
     lines.append(f"<i>В обороте: {fmt_lmn(sum(lmn_balances.values()))} LMN</i>")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
@@ -2078,15 +2078,15 @@ async def cmd_aura(msg: Message):
         "💀 Тёмная"
     )
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"✨ Аура\n\n"
         f"👤 <b>{target.full_name}</b>\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         f"<code>{bar}</code>\n"
         f"📊 <b>{pct:.2f}%</b>  —  {tier}\n\n"
         f"<i>+0.01% за каждый 👍 на твои сообщения\n"
         f"−1% за агрессию в чате</i>\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -2098,7 +2098,7 @@ async def cmd_topaura(msg: Message):
         return await msg.reply("Аура ещё никем не набрана 🌑")
     top = sorted(aura.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-    lines = [f"{_LMN_HDR}\n", "✨ Топ ауры", f"{_LMN_DIV}"]
+    lines = [f"{brand.hdr()}\n", "✨ Топ ауры", f"{brand.div()}"]
     for i, (uid, pct) in enumerate(top):
         try:
             m = await bot.get_chat_member(msg.chat.id, uid)
@@ -2106,7 +2106,7 @@ async def cmd_topaura(msg: Message):
         except Exception:
             name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {pct:.2f}%")
-    lines.append(f"\n{_LMN_DIV}")
+    lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 
@@ -2116,11 +2116,11 @@ async def cmd_rep(msg: Message):
     r = get_rep(msg.chat.id, target.id)
     emoji = "⭐" if r >= 0 else "💀"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"{emoji} Репутация\n\n"
         f"👤 <b>{target.full_name}</b>\n"
         f"📊 Рейтинг: <b>{r:+d}</b>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML")
 
 @dp.message(Command("upvote"))
@@ -2131,11 +2131,11 @@ async def cmd_upvote(msg: Message):
     add_rep(msg.chat.id, target.id, 1)
     total = get_rep(msg.chat.id, target.id)
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"⬆️ +1 репутация\n\n"
         f"👤 <b>{target.full_name}</b>\n"
         f"📊 Итого: <b>{total:+d}</b>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML")
 
 @dp.message(Command("downvote"))
@@ -2146,11 +2146,11 @@ async def cmd_downvote(msg: Message):
     add_rep(msg.chat.id, target.id, -1)
     total = get_rep(msg.chat.id, target.id)
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"⬇️ -1 репутация\n\n"
         f"👤 <b>{target.full_name}</b>\n"
         f"📊 Итого: <b>{total:+d}</b>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML")
 
 @dp.message(Command("toprep"))
@@ -2160,9 +2160,9 @@ async def cmd_toprep(msg: Message):
     top = sorted(chat_rep.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     lines = [
-        f"{_LMN_HDR}\n",
+        f"{brand.hdr()}\n",
         "⭐ Топ репутации",
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
     ]
     for i, (uid, r) in enumerate(top):
         try:
@@ -2170,7 +2170,7 @@ async def cmd_toprep(msg: Message):
             name = m.user.full_name
         except: name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {r:+d}")
-    lines.append(f"\n{_LMN_DIV}")
+    lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════
@@ -2598,13 +2598,13 @@ async def cmd_ship(msg: Message):
     elif pct >= 20: verdict = "Пока просто друзья 🤝"
     else:           verdict = "Совсем не судьба 💀"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"💘 Совместимость\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         f"💫 <b>{a}</b>  +  <b>{b}</b>\n\n"
         f"{bar}  <b>{pct}%</b>\n\n"
         f"✨ {verdict}\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML"
     )
 
@@ -2620,13 +2620,13 @@ async def cmd_love(msg: Message):
     elif pct >= 30: verdict = "Пока только дружба 🤍"
     else:           verdict = "Не судьба 🥀"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"❤️ Любовь\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         f"💫 <b>{a}</b>  →  <b>{b}</b>\n\n"
         f"{hearts}  <b>{pct}%</b>\n\n"
         f"✨ {verdict}\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML"
     )
 
@@ -2642,13 +2642,13 @@ async def cmd_friend(msg: Message):
     elif pct >= 20: verdict = "Просто знакомые 😐"
     else:           verdict = "Незнакомцы 👽"
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"🤝 Дружба\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         f"💫 <b>{a}</b>  &  <b>{b}</b>\n\n"
         f"{bar}  <b>{pct}%</b>\n\n"
         f"✨ {verdict}\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML"
     )
 
@@ -2659,13 +2659,13 @@ async def cmd_couple(msg: Message):
         if len(members) < 2: return await msg.reply("Недостаточно людей")
         u1, u2 = random.sample(members, 2)
         await msg.reply(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"💕 Пара дня\n\n"
-            f"{_LMN_DIV}\n"
+            f"{brand.div()}\n"
             f"💫 <b>{u1.full_name}</b>\n"
             f"❤️\n"
             f"<b>{u2.full_name}</b>\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML"
         )
     except: await msg.reply("Не удалось получить участников")
@@ -2754,9 +2754,9 @@ async def cmd_whois(msg: Message):
 
     # ── Собираем ответ ───────────────────────────────────
     lines = [
-        f"{_LMN_HDR}\n",
+        f"{brand.hdr()}\n",
         f"🔎 Досье · {full_name}",
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         f"👤 Имя: {first} {last}".strip(),
         f"🔗 Username: {username}",
         f"🆔 ID: <code>{uid}</code>",
@@ -2773,7 +2773,7 @@ async def cmd_whois(msg: Message):
         aura_val  = get_aura(uid)
         aura_line = f"{aura_bar(aura_val)} {aura_val:.2f}%"
         lines += [
-            f"\n{_LMN_DIV}",
+            f"\n{brand.div()}",
             f"📊 Статус: {chat_status}",
             f"⚠️ Варны: {warns}/3",
             f"🚫 Пропаганда РА: {ru_warns}/2",
@@ -2785,22 +2785,22 @@ async def cmd_whois(msg: Message):
         ]
 
     if is_founder:
-        lines += [f"\n{_LMN_DIV}", "✨ <b>Создатель проекта Lumena</b>"]
+        lines += [f"\n{brand.div()}", "✨ <b>Создатель проекта Lumena</b>"]
 
-    lines.append(f"\n{_LMN_DIV}")
+    lines.append(f"\n{brand.div()}")
     text = "\n".join(lines)
     await msg.reply(text, parse_mode="HTML")
 
 async def cmd_chatinfo(msg: Message):
     chat = msg.chat
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"ℹ️ Информация о чате\n\n"
         f"🏷 Название: <b>{chat.title or 'Личный чат'}</b>\n"
         f"🆔 ID: <code>{chat.id}</code>\n"
         f"📋 Тип: <b>{chat.type}</b>\n"
         f"🔗 Username: @{chat.username or '—'}\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML")
 
 async def cmd_profile(msg: Message):
@@ -2822,20 +2822,20 @@ async def cmd_profile(msg: Message):
     bio = html.escape(profile_data.get("bio", "не указано"))
     title_str = html.escape(profile_data.get("title", ""))
     lines = [
-        f"{_LMN_HDR}\n",
+        f"{brand.hdr()}\n",
         f"👤 Профиль · {html.escape(target.full_name)}",
     ]
     if title_str:
         lines.append(f"🏷 {title_str}")
     lines += [
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         f"📝 Bio: {bio}",
         f"💰 Баланс: <b>{fmt_lmn(bal)} LMN</b>",
         f"🔥 Стрик: <b>{streak_data['count']} дней</b>",
         f"⭐ Репутация: <b>{rep_val:+d}</b>",
         f"💍 Брак: {'❤️ ' + partner_name if married else '—'}",
         f"🆔 ID: <code>{uid}</code>",
-        f"\n{_LMN_DIV}",
+        f"\n{brand.div()}",
     ]
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
@@ -2856,14 +2856,14 @@ async def cmd_botstats(msg: Message):
     total_warns = sum(sum(v.values()) for v in warnings_db.values())
     total_users = len(lmn_balances)
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"📊 Статистика\n\n"
         f"👥 Пользователей: <b>{total_users}</b>\n"
         f"💍 Браков: <b>{total_marriages}</b>\n"
         f"🔥 Активных стриков: <b>{total_streaks}</b>\n"
         f"💰 LMN в обороте: <b>{fmt_lmn(total_balance)}</b>\n"
         f"⚠️ Предупреждений: <b>{total_warns}</b>\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         f"🤖 v{BOT_VERSION}",
         parse_mode="HTML",
     )
@@ -2874,23 +2874,23 @@ async def cmd_ping(msg: Message):
     delta = (now_kyiv() - start).microseconds // 1000
     quality = "🟢 Отличный" if delta < 100 else "🟡 Нормальный" if delta < 300 else "🔴 Высокий"
     await sent.edit_text(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"🏓 Понг!\n\n"
         f"⚡ Задержка: <b>{delta} мс</b>\n"
         f"📶 Качество: <b>{quality}</b>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
 async def cmd_version(msg: Message):
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"🤖 Лумена Бот\n\n"
         f"📦 Версия: <b>v{BOT_VERSION}</b>\n"
         f"⚡ Функций: <b>100+</b>\n"
         f"🧠 ИИ: <b>Groq · Llama 3.3 70B</b>\n"
         f"🔄 Резерв: <b>Gemini 2.0 Flash</b>\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         f"💙 Сделано с душой",
         parse_mode="HTML",
     )
@@ -3079,13 +3079,13 @@ _HELP_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
 
 async def cmd_help(msg: Message):
     await msg.reply(
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         f"✦ · · · Справочный центр · · · ✦\n\n"
         f"Выбери раздел — расскажу всё\n"
         f"о командах и возможностях 👇\n\n"
         f"<i>Команды работают без / —\n"
         f"просто напиши нужное слово в чат</i>\n\n"
-        f"{_LMN_DIV}",
+        f"{brand.div()}",
         parse_mode="HTML",
         reply_markup=_HELP_MAIN_KB,
     )
@@ -3101,9 +3101,9 @@ _HELP_BACK_KB = InlineKeyboardMarkup(inline_keyboard=[
 
 _HELP_SECTIONS = {
     "mod": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "🔨 Модерация чата\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "🚫 <b>Ограничения:</b>\n"
         "<code>!мут [время] [причина]</code> — заглушить (5м, 1ч, 7д)\n"
         "<code>!бан [причина]</code> / <code>!разбан</code>\n"
@@ -3115,13 +3115,13 @@ _HELP_SECTIONS = {
         "<code>/ро on/off</code> — режим только для чтения\n"
         "<code>/закрепить</code> / <code>/открепить</code>\n"
         "<code>/название [текст]</code> — звание участнику\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "<i>Команды с ! работают у администраторов</i>"
     ),
     "eco": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "💰 Экономика — валюта LMN\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "📊 <b>Доход:</b>\n"
         "<code>баланс</code> — кошелёк\n"
         "<code>работа</code> — заработать (кд 1 ч)\n"
@@ -3133,12 +3133,12 @@ _HELP_SECTIONS = {
         "<code>ограбить</code> — ограбить (ответом)\n"
         "<code>дать [сумма]</code> — перевод LMN\n"
         "<code>топ богачей</code> — рейтинг\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
     "social": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "💑 Отношения\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "💍 <b>Браки:</b>\n"
         "<code>брак</code> — предложение (ответом)\n"
         "<code>развод</code> — расстаться\n"
@@ -3150,12 +3150,12 @@ _HELP_SECTIONS = {
         "<code>погладить</code> · <code>ударить</code> · <code>подарить</code>\n"
         "<code>потыкать</code> · <code>помахать</code> · <code>станцевать</code>\n"
         "<code>фейспалм</code> · <code>серенада</code> · <code>пятёрку</code>\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
     "games": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "🎮 Игры\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "🎲 <b>Случайность:</b>\n"
         "<code>монетка</code> · <code>кубик</code> · <code>ролл</code>\n"
         "<code>рандом [от] [до]</code>\n\n"
@@ -3165,12 +3165,12 @@ _HELP_SECTIONS = {
         "<code>оценить</code> · <code>загадка</code> · <code>виселица</code>\n\n"
         "⚡ <b>Риск:</b>\n"
         "<code>рулетка</code> · <code>правда</code> · <code>действие</code>\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
     "fortune": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "🔮 Предсказания и магия\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "🌟 <b>Предсказания:</b>\n"
         "<code>предсказание</code> · <code>судьба</code>\n"
         "<code>8ball [вопрос]</code> — шар ответов\n\n"
@@ -3180,12 +3180,12 @@ _HELP_SECTIONS = {
         "✨ <b>Личность:</b>\n"
         "<code>суперсила</code> · <code>профессия</code>\n"
         "<code>животное</code> · <code>страна</code> · <code>цвет</code>\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
     "fun": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "🎉 Развлечения\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "😄 <b>Контент:</b>\n"
         "<code>шутка</code> · <code>факт</code> · <code>цитата</code>\n"
         "<code>котик</code> · <code>пёс</code>\n"
@@ -3197,12 +3197,12 @@ _HELP_SECTIONS = {
         "<code>репутация</code> · <code>топ репутации</code>\n\n"
         "🔥 <b>Стрики:</b>\n"
         "<code>чекин</code> · <code>стрик</code> · <code>топ стриков</code>\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
     "profile": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "👤 Профиль и статистика\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "📋 <b>Профиль:</b>\n"
         "<code>профиль</code> — карточка участника\n"
         "<code>досье</code> — полное досье (ответом)\n"
@@ -3216,12 +3216,12 @@ _HELP_SECTIONS = {
         "<code>/анкета</code> — заполнить в личке с ботом\n\n"
         "📩 <b>Поддержка:</b>\n"
         "<code>помощь</code> — обращение администрации\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
     "ai": (
-        f"{_LMN_HDR}\n\n"
+        f"{brand.hdr()}\n\n"
         "🤖 ИИ Лумена\n\n"
-        f"{_LMN_DIV}\n"
+        f"{brand.div()}\n"
         "💬 <b>Как обратиться в группе:</b>\n"
         "• <code>Лумена, вопрос</code>\n"
         "• <code>лумка</code> / <code>лум</code> — коротко\n"
@@ -3235,7 +3235,7 @@ _HELP_SECTIONS = {
         "🔢 Математика, анализ, код\n"
         "🤝 Помню весь разговор сессии\n\n"
         "⚡ ИИ: <b>Groq Llama 3.3 70B</b> + резерв Gemini\n\n"
-        f"{_LMN_DIV}"
+        f"{brand.div()}"
     ),
 }
 
@@ -3245,13 +3245,13 @@ async def cb_help_nav(cb: CallbackQuery):
     section = cb.data.split(":", 1)[1]
     if section == "menu":
         await cb.message.edit_text(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"✦ · · · Справочный центр · · · ✦\n\n"
             f"Выбери раздел — расскажу всё\n"
             f"о командах и возможностях 👇\n\n"
             f"<i>Команды работают без / —\n"
             f"просто напиши нужное слово в чат</i>\n\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML",
             reply_markup=_HELP_MAIN_KB,
         )
@@ -4952,6 +4952,7 @@ async def cb_editor_style_reset(cb: CallbackQuery):
         return await cb.answer("Неизвестный параметр", show_alert=True)
     brand.reset_style(key)
     brand.save_custom_style()
+    asyncio.create_task(brand.push_custom_style_to_github())
     df = brand.STYLE_DEFS[key]
     await cb.answer(f"🔄 «{df['desc']}» сброшено к дефолту", show_alert=False)
     # обновить экран детали
@@ -4986,6 +4987,7 @@ async def handle_style_edit_input(msg: Message):
         return await msg.reply(f"❌ Слишком длинно (максимум {df['max']} символов).")
     brand.set_style(key, text)
     brand.save_custom_style()
+    asyncio.create_task(brand.push_custom_style_to_github())
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎨 К оформлению", callback_data="editor:style")],
         [InlineKeyboardButton(text="🛠 Главное меню", callback_data="editor:menu")],
@@ -5475,11 +5477,11 @@ async def universal_handler(msg: Message):
         save_data()
         name = msg.from_user.first_name
         await msg.reply(
-            f"{_LMN_HDR}\n\n"
+            f"{brand.hdr()}\n\n"
             f"🎉 <b>{name}</b> подобрал монеты!\n\n"
-            f"{_LMN_DIV}\n"
+            f"{brand.div()}\n"
             f"💰 <b>+{fmt_lmn(amount)}</b> зачислено на баланс\n"
-            f"{_LMN_DIV}",
+            f"{brand.div()}",
             parse_mode="HTML",
         )
         return

@@ -79,6 +79,51 @@ def load_custom_style(path: str = "data/custom_style.json") -> None:
         print(f"⚠️ load_custom_style: {ex}")
 
 
+async def push_custom_style_to_github(path: str = "data/custom_style.json") -> bool:
+    """Коммитит custom_style.json в GitHub — оформление выживает после Railway-деплоя."""
+    import json, os, base64
+    try:
+        import aiohttp
+    except ImportError:
+        return False
+
+    token = os.getenv("GITHUB_TOKEN", "")
+    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
+    if not token:
+        return False
+
+    git_path = f"bot/{path}"
+    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
+    headers  = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    try:
+        content_bytes = json.dumps(_custom_style, ensure_ascii=False, indent=2).encode()
+        content_b64   = base64.b64encode(content_bytes).decode()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, headers=headers) as resp:
+                sha = (await resp.json()).get("sha") if resp.status == 200 else None
+
+            payload: dict = {"message": "chore: auto-save custom style", "content": content_b64}
+            if sha:
+                payload["sha"] = sha
+
+            async with session.put(api_url, headers=headers, json=payload) as resp:
+                if resp.status in (200, 201):
+                    print("✅ custom_style.json синхронизирован с GitHub")
+                    return True
+                err = await resp.text()
+                print(f"⚠️ GitHub style push failed {resp.status}: {err[:200]}")
+                return False
+    except Exception as ex:
+        print(f"⚠️ push_custom_style_to_github: {ex}")
+        return False
+
+
 # Текстовые fallback для каждой роли
 _FALLBACK: dict[str, str] = {
     "header":  "🖤",
