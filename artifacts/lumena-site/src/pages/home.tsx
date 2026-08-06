@@ -134,7 +134,7 @@ const CHAT_RULES = [
 
 const fadeUp = {
   hidden: { opacity: 0, y: 40 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.8, ease: "easeOut" } }
+  visible: { opacity: 1, y: 0, transition: { duration: 0.8, ease: [0.25, 0.46, 0.45, 0.94] as const } }
 };
 
 const staggerContainer = {
@@ -605,7 +605,7 @@ function CommandTabs() {
           className="p-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-3"
         >
           {cat.commands.map((item, i) => (
-            <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group">
+            <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-white/[0.03] hover:bg-white/5 transition-colors group">
               <ChevronRight className={`w-4 h-4 mt-0.5 shrink-0 ${cat.color} opacity-60 group-hover:opacity-100 transition-opacity`} />
               <div>
                 <code className="text-xs font-mono text-white/80 block mb-1">{item.cmd}</code>
