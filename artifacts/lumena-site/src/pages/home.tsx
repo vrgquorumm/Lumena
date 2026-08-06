@@ -420,42 +420,201 @@ export default function Home() {
         </div>
       </section>
 
+      {/* Community Links Section */}
+      <section id="community" className="relative z-10 py-32 px-6 bg-black/40">
+        <div className="max-w-7xl mx-auto">
+          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={fadeUp} className="text-center mb-20">
+            <h2 className="text-4xl md:text-5xl font-heading font-bold shimmer-text-primary mb-6">Наша Спільнота</h2>
+            <p className="text-white/50 max-w-xl mx-auto">Приєднуйся до активного українського ком'юніті — чат для спілкування, канал для новин.</p>
+          </motion.div>
+          <motion.div variants={staggerContainer} initial="hidden" whileInView="visible" viewport={{ once: true }} className="grid md:grid-cols-3 gap-6">
+            <motion.a variants={fadeUp} href={CHAT_URL} target="_blank" rel="noopener noreferrer"
+              className="glass-panel glass-panel-hover rounded-2xl p-8 flex flex-col items-center text-center gap-5 group transition-all duration-500 no-underline"
+            >
+              <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-500">
+                <Users className="w-8 h-8 text-blue-400" />
+              </div>
+              <div>
+                <div className="font-heading font-bold text-xl mb-2 text-white">💬 Чат проекту</div>
+                <div className="text-white/50 text-sm leading-relaxed">Головне місце спілкування спільноти LUMENA. Знайомства, розмови, активність.</div>
+              </div>
+              <span className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400 text-sm font-medium group-hover:bg-blue-500/20 transition-colors">
+                Приєднатися <ExternalLink className="w-4 h-4" />
+              </span>
+            </motion.a>
+
+            <motion.a variants={fadeUp} href={CHANNEL_URL} target="_blank" rel="noopener noreferrer"
+              className="glass-panel glass-panel-hover rounded-2xl p-8 flex flex-col items-center text-center gap-5 group transition-all duration-500 no-underline"
+            >
+              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-500">
+                <Radio className="w-8 h-8 text-primary" />
+              </div>
+              <div>
+                <div className="font-heading font-bold text-xl mb-2 text-white">📢 Канал</div>
+                <div className="text-white/50 text-sm leading-relaxed">Новини проекту, оновлення бота, анонси. Підпишись щоб нічого не пропустити.</div>
+              </div>
+              <span className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-primary/10 border border-primary/30 text-primary text-sm font-medium group-hover:bg-primary/20 transition-colors">
+                Підписатися <ExternalLink className="w-4 h-4" />
+              </span>
+            </motion.a>
+
+            <motion.a variants={fadeUp} href={BOT_URL} target="_blank" rel="noopener noreferrer"
+              className="glass-panel glass-panel-hover rounded-2xl p-8 flex flex-col items-center text-center gap-5 group transition-all duration-500 no-underline"
+            >
+              <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-500">
+                <Send className="w-8 h-8 text-emerald-400" />
+              </div>
+              <div>
+                <div className="font-heading font-bold text-xl mb-2 text-white">🤖 Бот</div>
+                <div className="text-white/50 text-sm leading-relaxed">Напиши боту в особисті — пройди верифікацію, заповни анкету, дізнайся можливості.</div>
+              </div>
+              <span className="mt-auto inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm font-medium group-hover:bg-emerald-500/20 transition-colors">
+                Відкрити бота <ExternalLink className="w-4 h-4" />
+              </span>
+            </motion.a>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* Commands Section */}
+      <section id="commands" className="relative z-10 py-32 px-6">
+        <div className="max-w-7xl mx-auto">
+          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={fadeUp} className="text-center mb-20">
+            <div className="inline-flex items-center gap-3 px-4 py-2 rounded-full border border-primary/30 bg-primary/10 text-primary mb-8">
+              <Hash className="w-5 h-5" />
+              <span className="font-medium tracking-wide">Команди бота</span>
+            </div>
+            <h2 className="text-4xl md:text-5xl font-heading font-bold text-white mb-6">Повний список команд</h2>
+            <p className="text-white/50 max-w-xl mx-auto">Всі команди доступні в чаті. Деякі тільки для адміністрації.</p>
+          </motion.div>
+          <CommandTabs />
+        </div>
+      </section>
+
+      {/* Rules Section */}
+      <section id="rules" className="relative z-10 py-32 px-6 bg-black/40">
+        <div className="max-w-5xl mx-auto">
+          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true }} variants={fadeUp} className="text-center mb-20">
+            <div className="inline-flex items-center gap-3 px-4 py-2 rounded-full border border-red-500/30 bg-red-500/10 text-red-400 mb-8">
+              <ScrollText className="w-5 h-5" />
+              <span className="font-medium tracking-wide">Правила спільноти</span>
+            </div>
+            <h2 className="text-4xl md:text-5xl font-heading font-bold text-white mb-6">Правила чату</h2>
+            <p className="text-white/50 max-w-xl mx-auto">Дотримання правил — умова комфортного спілкування для всіх учасників.</p>
+          </motion.div>
+          <motion.div variants={staggerContainer} initial="hidden" whileInView="visible" viewport={{ once: true }} className="grid md:grid-cols-2 gap-4">
+            {CHAT_RULES.map((rule, i) => (
+              <motion.div key={i} variants={fadeUp} className="glass-panel rounded-2xl p-6 flex gap-5 items-start group hover:border-white/10 transition-colors">
+                <span className="text-3xl font-heading font-black text-white/10 group-hover:text-white/20 transition-colors shrink-0 leading-none">{rule.n}</span>
+                <div>
+                  <div className="font-heading font-semibold text-white/90 mb-2">{rule.title}</div>
+                  <div className="text-sm text-white/50 leading-relaxed">{rule.text}</div>
+                </div>
+              </motion.div>
+            ))}
+          </motion.div>
+          <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }} transition={{ delay: 0.5 }}
+            className="mt-10 text-center text-sm text-white/30">
+            Повні правила доступні в боті командою <code className="px-2 py-0.5 rounded bg-white/5 text-white/50">/rules</code>
+          </motion.div>
+        </div>
+      </section>
+
       {/* Footer / Final CTA */}
       <footer className="relative z-10 py-32 px-6 border-t border-white/5 bg-gradient-to-b from-transparent to-black/80">
-        <div className="max-w-4xl mx-auto text-center space-y-12">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            whileInView={{ opacity: 1, scale: 1 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.8 }}
-          >
-            <h2 className="text-5xl md:text-7xl font-heading font-bold shimmer-text mb-8">
-              Готові увімкнути світло?
-            </h2>
+        <div className="max-w-5xl mx-auto space-y-20">
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true }} transition={{ duration: 0.8 }} className="text-center">
+            <h2 className="text-5xl md:text-7xl font-heading font-bold shimmer-text mb-8">Готові увімкнути світло?</h2>
             <p className="text-xl text-white/50 font-light mb-12 max-w-2xl mx-auto">
-              Додайте LUMENA до своєї групи і перетворіть звичайний чат на повноцінну екосистему.
+              Приєднуйся до спільноти LUMENA — де кожен учасник важливий.
             </p>
-            <a 
-              href="https://t.me/LumenarAi_Bot" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-3 px-8 py-5 rounded-full bg-white text-black font-semibold text-lg transition-transform hover:scale-105 active:scale-95 shadow-[0_0_40px_rgba(255,255,255,0.2)]"
-            >
+            <a href={BOT_URL} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-3 px-8 py-5 rounded-full bg-white text-black font-semibold text-lg transition-transform hover:scale-105 active:scale-95 shadow-[0_0_40px_rgba(255,255,255,0.2)]">
               <MessageSquareText className="w-6 h-6" />
-              Додати в Telegram
+              Відкрити бота
             </a>
           </motion.div>
-          
-          <div className="pt-20 text-sm text-white/30 flex flex-col md:flex-row items-center justify-between">
-            <p>© {new Date().getFullYear()} LUMENA. All rights reserved.</p>
-            <div className="flex gap-6 mt-4 md:mt-0">
-              <span className="hover:text-white/60 cursor-pointer transition-colors">Правила</span>
-              <span className="hover:text-white/60 cursor-pointer transition-colors">Команди</span>
-              <span className="hover:text-white/60 cursor-pointer transition-colors">Підтримка</span>
+
+          {/* Footer Links */}
+          <div className="border-t border-white/5 pt-12">
+            <div className="grid md:grid-cols-3 gap-8 mb-12">
+              <div>
+                <div className="font-heading font-bold text-white/90 mb-4 text-lg shimmer-text">LUMENA</div>
+                <p className="text-white/40 text-sm leading-relaxed">Telegram-бот нового покоління для українських спільнот. Економіка, соціум, модерація — все в одному.</p>
+              </div>
+              <div>
+                <div className="font-medium text-white/60 mb-4 uppercase tracking-widest text-xs">Спільнота</div>
+                <ul className="space-y-3">
+                  <li><a href={CHAT_URL} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-white/40 hover:text-white/80 transition-colors text-sm"><Users className="w-4 h-4" />Чат проекту</a></li>
+                  <li><a href={CHANNEL_URL} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-white/40 hover:text-white/80 transition-colors text-sm"><Radio className="w-4 h-4" />Канал</a></li>
+                  <li><a href={BOT_URL} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-white/40 hover:text-white/80 transition-colors text-sm"><Send className="w-4 h-4" />Бот @LumenarAi_Bot</a></li>
+                </ul>
+              </div>
+              <div>
+                <div className="font-medium text-white/60 mb-4 uppercase tracking-widest text-xs">Навігація</div>
+                <ul className="space-y-3">
+                  <li><a href="#community" className="flex items-center gap-2 text-white/40 hover:text-white/80 transition-colors text-sm"><Globe className="w-4 h-4" />Спільнота</a></li>
+                  <li><a href="#commands" className="flex items-center gap-2 text-white/40 hover:text-white/80 transition-colors text-sm"><ListChecks className="w-4 h-4" />Команди</a></li>
+                  <li><a href="#rules" className="flex items-center gap-2 text-white/40 hover:text-white/80 transition-colors text-sm"><ScrollText className="w-4 h-4" />Правила</a></li>
+                </ul>
+              </div>
+            </div>
+            <div className="border-t border-white/5 pt-8 text-sm text-white/25 flex flex-col md:flex-row items-center justify-between gap-4">
+              <p>© {new Date().getFullYear()} LUMENA. Всі права захищені.</p>
+              <div className="flex items-center gap-6">
+                <a href={CHANNEL_URL} target="_blank" rel="noopener noreferrer" className="hover:text-white/60 transition-colors flex items-center gap-1.5"><Radio className="w-3.5 h-3.5" />Канал</a>
+                <a href={BOT_URL} target="_blank" rel="noopener noreferrer" className="hover:text-white/60 transition-colors flex items-center gap-1.5"><Send className="w-3.5 h-3.5" />Бот</a>
+                <span className="flex items-center gap-1.5"><Globe className="w-3.5 h-3.5" />Сайт</span>
+              </div>
             </div>
           </div>
         </div>
       </footer>
+    </div>
+  );
+}
+
+function CommandTabs() {
+  const [active, setActive] = useState(0);
+  const cat = COMMAND_CATEGORIES[active];
+  return (
+    <div className="glass-panel rounded-2xl overflow-hidden">
+      {/* Tab bar */}
+      <div className="flex overflow-x-auto scrollbar-none border-b border-white/5 bg-black/20">
+        {COMMAND_CATEGORIES.map((c, i) => (
+          <button
+            key={i}
+            onClick={() => setActive(i)}
+            className={`shrink-0 px-5 py-4 text-sm font-medium transition-colors whitespace-nowrap
+              ${active === i
+                ? 'text-white border-b-2 border-primary bg-primary/5'
+                : 'text-white/40 hover:text-white/70 border-b-2 border-transparent'}`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      {/* Commands grid */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={active}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.2 }}
+          className="p-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-3"
+        >
+          {cat.commands.map((item, i) => (
+            <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-white/3 hover:bg-white/5 transition-colors group">
+              <ChevronRight className={`w-4 h-4 mt-0.5 shrink-0 ${cat.color} opacity-60 group-hover:opacity-100 transition-opacity`} />
+              <div>
+                <code className="text-xs font-mono text-white/80 block mb-1">{item.cmd}</code>
+                <span className="text-xs text-white/40 leading-relaxed">{item.desc}</span>
+              </div>
+            </div>
+          ))}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }
