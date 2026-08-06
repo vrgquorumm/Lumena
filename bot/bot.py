@@ -65,7 +65,8 @@ DATA_FILE = "data/bot_data.json"
 
 # ── Сайт Лумены ───────────────────────────────────────────────
 # Обновить после деплоя: /setsiteurl <url>
-LUMENA_SITE_URL = "https://lumena-site.replit.app/lumena-site/"
+# URL сайту: Railway env-var → /setsiteurl → порожньо (кнопка прихована)
+LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
