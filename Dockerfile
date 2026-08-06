@@ -1,23 +1,19 @@
 FROM python:3.11-slim
 
-# Системные зависимости
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Устанавливаем зависимости
+# Зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем код бота
+# Корневой bot.py (точка входа Railway) + весь bot/ (реальный код)
+COPY bot.py .
 COPY bot/ ./bot/
 
-# Рабочая директория — папка бота (все пути data/ относительны)
-WORKDIR /app/bot
-
-# Создаём папку для данных
-RUN mkdir -p data
+# Папка для данных внутри bot/ (все пути относительны bot/)
+RUN mkdir -p bot/data
 
 CMD ["python", "bot.py"]

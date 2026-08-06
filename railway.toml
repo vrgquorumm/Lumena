@@ -1,6 +1,6 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "bot/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 restartPolicyType = "on_failure"
