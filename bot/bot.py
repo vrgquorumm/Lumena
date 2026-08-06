@@ -1589,10 +1589,8 @@ async def cmd_balance(msg: Message):
     else:                      tier, icon = "Новичок", "🪙"
     await msg.reply(
         f"{_LMN_HDR}\n\n"
-        f"{icon} Кошелёк · {name}\n\n"
-        f"💰 Баланс: <b>{fmt_lmn(bal)} LMN</b>\n"
-        f"🏷 Статус: <b>{tier}</b>\n\n"
-        f"{_LMN_DIV}",
+        + brand.get_text("balance", name=name, icon=icon, balance=fmt_lmn(bal), tier=tier) +
+        f"\n\n{_LMN_DIV}",
         parse_mode="HTML"
     )
 
@@ -1638,12 +1636,10 @@ async def cmd_give(msg: Message, command: CommandObject):
     add_balance(target.id, amount)
     await msg.reply(
         f"{_LMN_HDR}\n\n"
-        f"💸 Перевод выполнен!\n\n"
-        f"📤 От: <b>{msg.from_user.full_name}</b>\n"
-        f"📥 Кому: <b>{target.full_name}</b>\n"
-        f"💰 Сумма: <b>{fmt_lmn(amount)} LMN</b>\n\n"
-        f"💵 Остаток: <b>{fmt_lmn(get_balance(msg.from_user.id))} LMN</b>\n\n"
-        f"{_LMN_DIV}",
+        + brand.get_text("give",
+            from_name=msg.from_user.full_name, to_name=target.full_name,
+            amount=fmt_lmn(amount), balance=fmt_lmn(get_balance(msg.from_user.id))) +
+        f"\n\n{_LMN_DIV}",
         parse_mode="HTML"
     )
 
@@ -1654,7 +1650,7 @@ async def cmd_work(msg: Message):
     last = work_cooldown.get(uid)
     if last and (now - last).seconds < 3600:
         mins = 60 - (now - last).seconds // 60
-        return await msg.reply(f"⏳ Следующая работа через {mins} мин")
+        return await reply_t(msg, "work_cooldown", mins=mins)
     earned = random.randint(100, 800)
     add_balance(uid, earned)
     work_cooldown[uid] = now
@@ -1664,12 +1660,8 @@ async def cmd_work(msg: Message):
     new_bal = get_balance(uid)
     await msg.reply(
         f"{_LMN_HDR}\n\n"
-        f"💼 Рабочая смена\n\n"
-        f"👷 Должность: <b>{job}</b>\n"
-        f"💵 Зарплата: <b>+{fmt_lmn(earned)} LMN</b>\n\n"
-        f"💰 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n"
-        f"⏳ Следующая смена: <b>через 1 ч</b>\n\n"
-        f"{_LMN_DIV}",
+        + brand.get_text("work", job=job, earned=fmt_lmn(earned), balance=fmt_lmn(new_bal)) +
+        f"\n\n{_LMN_DIV}",
         parse_mode="HTML",
     )
 
@@ -1680,7 +1672,7 @@ async def cmd_fish(msg: Message):
     last = fish_cooldown.get(uid)
     if last and (now - last).seconds < 1800:
         mins = 30 - (now - last).seconds // 60
-        return await msg.reply(f"⏳ Рыбалка через {mins} мин")
+        return await reply_t(msg, "fish_cooldown", mins=mins)
     fish_cooldown[uid] = now
     roll = random.random()
     if roll < 0.1:
@@ -1700,12 +1692,8 @@ async def cmd_fish(msg: Message):
     result_line = f"+{fmt_lmn(earned)} LMN" if earned else "Ничего не поймал 😔"
     await msg.reply(
         f"{_LMN_HDR}\n\n"
-        f"🎣 Рыбалка\n\n"
-        f"🐟 Улов: <b>{item}</b>\n"
-        f"💵 Выручка: <b>{result_line}</b>\n\n"
-        f"💰 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n"
-        f"⏳ Следующая рыбалка: <b>через 30 мин</b>\n\n"
-        f"{_LMN_DIV}",
+        + brand.get_text("fish", item=item, result=result_line, balance=fmt_lmn(new_bal)) +
+        f"\n\n{_LMN_DIV}",
         parse_mode="HTML",
     )
 
@@ -2192,48 +2180,53 @@ _ACTIONS = {
 
 async def cmd_hug(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "всех"
-    await msg.reply(f"🤗 {msg.from_user.first_name} {random.choice(['обнял(а)','крепко обнял(а)'])} {t}!")
+    await reply_t(msg, "hug", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_kiss(msg: Message):
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
-    await msg.reply(f"😘 {msg.from_user.first_name} поцеловал(а) {msg.reply_to_message.from_user.first_name}!")
+    await reply_t(msg, "kiss",
+        from_name=msg.from_user.first_name,
+        to_name=msg.reply_to_message.from_user.first_name)
 
 async def cmd_bite(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "кого-то"
-    await msg.reply(f"😬 {msg.from_user.first_name} укусил(а) {t}!")
+    await reply_t(msg, "bite", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_pat(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "кого-то"
-    await msg.reply(f"👋 {msg.from_user.first_name} погладил(а) {t}!")
+    await reply_t(msg, "pat", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_slap(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "кого-то"
-    await msg.reply(f"👋 {msg.from_user.first_name} дал(а) пощёчину {t}!")
+    await reply_t(msg, "slap", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_gift(msg: Message):
     gifts = ["🌹 розу","🍫 шоколад","💎 кольцо","🎮 игру","📚 книгу","🎵 плейлист"]
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "кому-то"
-    await msg.reply(f"🎁 {msg.from_user.first_name} подарил(а) {random.choice(gifts)} для {t}!")
+    await reply_t(msg, "gift",
+        from_name=msg.from_user.first_name,
+        to_name=t,
+        item=random.choice(gifts))
 
 async def cmd_dance(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "один(одна)"
-    await msg.reply(f"💃 {msg.from_user.first_name} танцует с {t}! 🎵")
+    await reply_t(msg, "dance", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_poke(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "кого-то"
-    await msg.reply(f"👉 {msg.from_user.first_name} ткнул(а) {t}!")
+    await reply_t(msg, "poke", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_highfive(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "всех"
-    await msg.reply(f"🙌 {msg.from_user.first_name} дал(а) пять {t}!")
+    await reply_t(msg, "highfive", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_wave(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "всем"
-    await msg.reply(f"👋 {msg.from_user.first_name} помахал(а) рукой {t}!")
+    await reply_t(msg, "wave", from_name=msg.from_user.first_name, to_name=t)
 
 async def cmd_facepalm(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "из-за всего"
-    await msg.reply(f"🤦 {msg.from_user.first_name} сделал(а) фейспалм из-за {t}")
+    await reply_t(msg, "facepalm", from_name=msg.from_user.first_name, to_name=t)
 
 # ═══════════════════════════════════════════════════════
 # ПРЕДСКАЗАНИЯ / РАЗВЛЕЧЕНИЯ
@@ -2257,17 +2250,23 @@ COUNTRIES = ["🇯🇵 Япония — в Токио более 37 млн жи�
 COLORS = ["🔴 Красный — страсть, энергия, сила","🔵 Синий — доверие, спокойствие, интеллект","🟢 Зелёный — природа, рост, гармония","🟡 Жёлтый — радость, оптимизм, творчество","🟣 Фиолетовый — роскошь, мудрость, тайна","🟠 Оранжевый — энтузиазм, тепло, общение","⚫ Чёрный — элегантность, сила, загадочность","⚪ Белый — чистота, простота, новое начало"]
 EMOJIS_COMBOS = ["🔥💯✨","🎉🎊🎈","😎🤙💪","🌈🦄✨","🌊🏄🌅","🎵🎶🎸","🍕🍔🌮","🚀🌌⭐","🦁👑🌟","💖💫🌸"]
 
-async def cmd_fortune(msg: Message): await msg.reply(f"🔮 {random.choice(FORTUNES)}")
+async def cmd_fortune(msg: Message):
+    result = random.choice(FORTUNES)
+    await reply_t(msg, "fortune_result", result=result)
+
 async def cmd_8ball(msg: Message, command: CommandObject = None):
     if not (command and command.args): return await msg.reply("Задай вопрос: 8ball [вопрос]")
     await msg.reply(f"🎱 {random.choice(EIGHT_BALL)}")
+
 async def cmd_tarot(msg: Message):
     card, meaning = random.choice(TAROT)
-    await msg.reply(f"🃏 Твоя карта: <b>{card}</b>\n{meaning}", parse_mode="HTML")
+    await reply_t(msg, "tarot_result", card=card, meaning=meaning)
+
 async def cmd_horoscope(msg: Message, command: CommandObject = None):
     signs = ["Овен","Телец","Близнецы","Рак","Лев","Дева","Весы","Скорпион","Стрелец","Козерог","Водолей","Рыбы"]
     sign = (command.args if command and command.args else None) or random.choice(signs)
-    await msg.reply(f"♈ Гороскоп для {sign}:\n{random.choice(FORTUNES)}")
+    text = random.choice(FORTUNES)
+    await reply_t(msg, "horoscope_result", sign=sign, text=text)
 async def cmd_predict(msg: Message, command: CommandObject = None):
     if not (command and command.args): return await msg.reply("Напиши вопрос: предсказать [вопрос]")
     await msg.reply(f"🔮 {random.choice(FORTUNES)}")

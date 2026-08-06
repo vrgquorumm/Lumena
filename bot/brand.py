@@ -326,9 +326,9 @@ DEFAULT_TEXTS: dict[str, str] = {
     "owner_only":          "⛔ Только @hdrttttttt",
 
     # ── Предсказания ─────────────────────────────────────
-    "fortune_result":      "🔮 <b>Предсказание</b>\n\n{text}",
-    "horoscope_result":    "♈ <b>Гороскоп</b>\n\n{text}",
-    "tarot_result":        "🃏 <b>Таро</b>\n\n{text}",
+    "fortune_result":      "🔮 <b>Предсказание</b>\n\n{result}",
+    "horoscope_result":    "♈ <b>Гороскоп для {sign}</b>\n\n{text}",
+    "tarot_result":        "🃏 Твоя карта: <b>{card}</b>\n{meaning}",
 }
 
 TEXT_LABELS: dict[str, str] = {
@@ -423,18 +423,18 @@ TEXT_LABELS: dict[str, str] = {
     "hangman_lose":        "Виселица: проигрыш",
 
     # ── Социальные ─────────────────────────────────────────
-    "hug":                 "Обнять 🤗",
-    "kiss":                "Поцеловать 😘",
-    "gift":                "Подарить 🎁",
-    "slap":                "Пощёчина 💢",
-    "pat":                 "Погладить ✋",
-    "dance":               "Танцевать 💃",
-    "bite":                "Укусить 😈",
-    "poke":                "Потыкать 👉",
-    "wave":                "Помахать 👋",
-    "highfive":            "Дать пять 🙌",
-    "facepalm":            "Фейспалм 🤦",
-    "serenade":            "Серенада 🎵",
+    "hug":                 "🤗 {from_name} обнял(а) {to_name}!",
+    "kiss":                "😘 {from_name} поцеловал(а) {to_name}!",
+    "gift":                "🎁 {from_name} подарил(а) {item} для {to_name}!",
+    "slap":                "👋 {from_name} дал(а) пощёчину {to_name}!",
+    "pat":                 "🤚 {from_name} погладил(а) {to_name}!",
+    "dance":               "💃 {from_name} танцует с {to_name}! 🎵",
+    "bite":                "😬 {from_name} укусил(а) {to_name}!",
+    "poke":                "👉 {from_name} ткнул(а) {to_name}!",
+    "wave":                "👋 {from_name} помахал(а) рукой {to_name}!",
+    "highfive":            "🙌 {from_name} дал(а) пять {to_name}!",
+    "facepalm":            "🤦 {from_name} сделал(а) фейспалм из-за {to_name}",
+    "serenade":            "🎵 {from_name} поёт серенаду для {to_name}! ♪",
 
     # ── Профиль ────────────────────────────────────────────
     "profile_no_bio":      "Профиль: нет bio (заглушка)",
