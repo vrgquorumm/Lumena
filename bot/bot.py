@@ -63,6 +63,10 @@ SUPER_IDS      = {OWNER_ID}   # могут банить/мутить даже а
 BOT_VERSION = "5.0"
 DATA_FILE = "data/bot_data.json"
 
+# ── Сайт Лумены ───────────────────────────────────────────────
+# Обновить после деплоя: /setsiteurl <url>
+LUMENA_SITE_URL = "https://lumena-site.replit.app/lumena-site/"
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -4427,6 +4431,9 @@ def build_main_kb() -> InlineKeyboardMarkup:
     if row1:
         rows.append(row1)
     rows.append([InlineKeyboardButton(text=help_label, callback_data="help:menu")])
+    # Ссылка на сайт
+    if LUMENA_SITE_URL:
+        rows.append([InlineKeyboardButton(text="🌐 Сайт Лумены", url=LUMENA_SITE_URL)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -4541,10 +4548,13 @@ async def cb_captcha_ans(cb: CallbackQuery):
     name     = html.escape(raw_name)
     _verified_users.add(uid)
     save_data()
+
+    site_line = (f"\n\n🌐 <a href=\"{LUMENA_SITE_URL}\">Офіційний сайт Лумени</a> — всі функції та правила"
+                 if LUMENA_SITE_URL else "")
     await _edit_custom(
         cb.message, "verify_done",
         f"✅ <b>Верификация пройдена!</b>\n\n"
-        f"Добро пожаловать, {name}! Все функции Лумены теперь доступны.",
+        f"Добро пожаловать, {name}! Все функции Лумены теперь доступны.{site_line}",
         name=raw_name,
     )
     await _answer_custom(
@@ -5732,6 +5742,28 @@ TEXT_COMMANDS.update({
 })
 
 
+@dp.message(Command("setsiteurl"))
+async def cmd_setsiteurl(msg: Message):
+    """Встановлює URL офіційного сайту Лумени (відображається в меню та привітаннях)."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Тільки фаундер")
+    parts = (msg.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().startswith("http"):
+        current = LUMENA_SITE_URL or "не встановлено"
+        return await msg.reply(
+            f"ℹ️ Поточний URL сайту:\n<code>{current}</code>\n\n"
+            "Оновити:\n<code>/setsiteurl https://...</code>",
+            parse_mode="HTML"
+        )
+    global LUMENA_SITE_URL
+    LUMENA_SITE_URL = parts[1].strip()
+    await msg.reply(
+        f"✅ <b>URL сайту оновлено!</b>\n🌐 <a href=\"{LUMENA_SITE_URL}\">{LUMENA_SITE_URL}</a>\n\n"
+        "Кнопка «🌐 Сайт Лумены» тепер веде на нову адресу.",
+        parse_mode="HTML"
+    )
+
+
 @dp.message(Command("setchatlink"))
 async def cmd_setchatlink(msg: Message):
     """Встановлює посилання на головний чат (для кнопки НАШ ЧАТ в анкетах)."""
@@ -6233,12 +6265,17 @@ async def on_new_chat_member(msg: Message):
         # ── Текст кнопки (кастомный или дефолтный) ───────
         btn_ct   = brand.get_custom_text("welcome_btn")
         btn_text = btn_ct[0].strip() if btn_ct else "📝 Создать анкету"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
+        welcome_rows = [[
             InlineKeyboardButton(
                 text=btn_text,
                 url="https://t.me/LumenarAi_Bot?start=anketa",
             ),
-        ]])
+        ]]
+        if LUMENA_SITE_URL:
+            welcome_rows.append([
+                InlineKeyboardButton(text="🌐 Сайт Лумены", url=LUMENA_SITE_URL),
+            ])
+        kb = InlineKeyboardMarkup(inline_keyboard=welcome_rows)
 
         # ── Текст приветствия ─────────────────────────────
         ct = brand.get_custom_text("welcome_msg")
