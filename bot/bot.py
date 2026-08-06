@@ -89,6 +89,16 @@ _active_rain: dict = {}  # {chat_id: int} — активный дождь мон
 _premium_users:  set = set()  # {user_id} — купили или получили VIP-анкету
 _verified_users: set = set()  # {user_id} — прошли верификацию в ЛС
 
+# ── Аура ──────────────────────────────────────────────
+aura:              dict[int, float] = {}  # {user_id: float}  0.0–100.0 %
+_aura_credited:    set              = set()  # {(chat_id, msg_id)} — плюс уже засчитан
+_msg_authors:      dict             = {}     # {(chat_id, msg_id): user_id} — для аура-реакций
+
+# ── Синхронизация чатов ───────────────────────────────
+# Оба чата (основной + админ) используют общую экономику.
+# Canonical ID = pub_chat; любые обращения к mod_chat → переадресуются на pub_chat.
+_ECON_CANONICAL: dict[int, int] = {}   # secondary_cid → primary_cid  (заполняется в main)
+
 ANKETA_PREMIUM_STARS = 300  # стоимость VIP-анкеты в Stars
 # Username-ы которые всегда имеют VIP (вечный бесплатный премиум)
 _PREMIUM_ALWAYS = {"hdrttttttt", "veroniksssxa"}
@@ -126,6 +136,7 @@ def save_data():
         "verified_users": list(_verified_users),
         "brand_emoji_pack": brand.get_pack(),
         "brand_pack_name":  brand.get_pack_name(),
+        "aura":           {str(u): v for u, v in aura.items()},
     }
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -167,6 +178,8 @@ def load_data():
             _premium_users.add(int(u))
         for u in data.get("verified_users", []):
             _verified_users.add(int(u))
+        for u, v in data.get("aura", {}).items():
+            aura[int(u)] = float(v)
         _saved_pack = data.get("brand_emoji_pack", [])
         if _saved_pack:
             brand.set_pack(_saved_pack, data.get("brand_pack_name", ""))
@@ -203,7 +216,7 @@ async def coin_rain_loop():
                 )
             except Exception:
                 _active_rain.pop(chat_id, None)
-        await asyncio.sleep(8 * 3600)
+        await asyncio.sleep(4 * 3600)
 
 # ═══════════════════════════════════════════════════════
 # АВТОМОДЕРАЦИЯ — ПРОПАГАНДА РОССИЙСКОЙ АРМИИ
@@ -421,32 +434,50 @@ def add_balance(uid: int, amount: int):
 def fmt_lmn(n: int) -> str:
     return f"{n:,}".replace(",", " ")
 
+def econ_cid(cid: int) -> int:
+    """Возвращает канонический chat_id для экономики — объединяет связанные чаты."""
+    return _ECON_CANONICAL.get(cid, cid)
+
 def get_rep(chat_id: int, uid: int) -> int:
-    return reputation.get(chat_id, {}).get(uid, 0)
+    return reputation.get(econ_cid(chat_id), {}).get(uid, 0)
 
 def add_rep(chat_id: int, uid: int, n: int):
-    reputation.setdefault(chat_id, {})
-    reputation[chat_id][uid] = reputation[chat_id].get(uid, 0) + n
+    cid = econ_cid(chat_id)
+    reputation.setdefault(cid, {})
+    reputation[cid][uid] = reputation[cid].get(uid, 0) + n
 
 def is_married(chat_id: int, uid: int) -> bool:
-    return uid in marriages.get(chat_id, {})
+    return uid in marriages.get(econ_cid(chat_id), {})
 
 def get_partner(chat_id: int, uid: int):
-    return marriages.get(chat_id, {}).get(uid)
+    return marriages.get(econ_cid(chat_id), {}).get(uid)
+
+# ── Аура ─────────────────────────────────────────────────────
+def get_aura(uid: int) -> float:
+    return aura.get(uid, 0.0)
+
+def add_aura(uid: int, delta: float):
+    """Добавляет delta к ауре пользователя, зажимая в [0, 100]."""
+    aura[uid] = max(0.0, min(100.0, aura.get(uid, 0.0) + delta))
+
+def aura_bar(pct: float) -> str:
+    filled = round(pct / 5)   # 20 делений
+    return "█" * filled + "░" * (20 - filled)
 
 # ═══════════════════════════════════════════════════════
 # СТРИКИ
 # ═══════════════════════════════════════════════════════
 async def do_checkin(chat_id: int, user_id: int, reply_msg: Message = None):
     today = today_kyiv()
-    streaks.setdefault(chat_id, {})
-    data = streaks[chat_id].get(user_id, {"count": 0, "last": None})
+    cid = econ_cid(chat_id)
+    streaks.setdefault(cid, {})
+    data = streaks[cid].get(user_id, {"count": 0, "last": None})
     if data["last"] == today:
         if reply_msg: await reply_msg.reply("🔥 Ты уже отмечался сегодня!")
         return False
     data["count"] += 1
     data["last"] = today
-    streaks[chat_id][user_id] = data
+    streaks[cid][user_id] = data
     if reply_msg:
         cnt = data["count"]
         fire = "🔥🔥🔥 Легенда!" if cnt >= 30 else "🔥🔥 Горишь!" if cnt >= 14 else "🔥 Растёт!"
@@ -816,8 +847,10 @@ async def marry_callback(cb: CallbackQuery):
     del marriage_proposals[(chat_id, target_id)]
     if action == "y":
         marriages.setdefault(chat_id, {})
-        marriages[chat_id][proposer_id] = target_id
-        marriages[chat_id][target_id] = proposer_id
+        cid = econ_cid(chat_id)
+        marriages.setdefault(cid, {})
+        marriages[cid][proposer_id] = target_id
+        marriages[cid][target_id] = proposer_id
         add_balance(proposer_id, 500)
         add_balance(target_id, 500)
         await cb.message.edit_text(
@@ -851,8 +884,10 @@ async def cmd_divorce(msg: Message):
         pm = await bot.get_chat_member(chat_id, partner_id)
         partner_name = pm.user.full_name
     except: pass
-    marriages[chat_id].pop(uid, None)
-    marriages[chat_id].pop(partner_id, None)
+    cid = econ_cid(chat_id)
+    marriages.setdefault(cid, {})
+    marriages[cid].pop(uid, None)
+    marriages[cid].pop(partner_id, None)
     await msg.reply(
         f"{_LMN_HDR}\n\n"
         f"💔 Развод\n\n"
@@ -949,18 +984,36 @@ async def cmd_resetstreak(msg: Message, command: CommandObject):
     await msg.reply("Стрик сброшен")
 
 @dp.message_reaction()
-async def on_fire_reaction(event: MessageReactionUpdated):
-    if not event.new_reaction: return
-    if not any(getattr(r,"emoji",None)=="🔥" for r in event.new_reaction): return
+async def on_reaction(event: MessageReactionUpdated):
+    """Обрабатывает реакции: 🔥 — стрик, 👍 — аура автора сообщения."""
+    if not event.new_reaction:
+        return
     user = event.user
-    if not user or user.is_bot: return
-    success = await do_checkin(event.chat.id, user.id)
-    if success:
-        try:
-            await bot.send_message(event.chat.id,
-                f"🔥 {user.first_name} отметился! Стрик растёт.",
-                disable_notification=True)
-        except: pass
+    if not user or user.is_bot:
+        return
+
+    # ── 🔥 Стрик ────────────────────────────────────────
+    if any(getattr(r, "emoji", None) == "🔥" for r in event.new_reaction):
+        success = await do_checkin(event.chat.id, user.id)
+        if success:
+            try:
+                await bot.send_message(
+                    event.chat.id,
+                    f"🔥 {user.first_name} отметился! Стрик растёт.",
+                    disable_notification=True,
+                )
+            except Exception:
+                pass
+
+    # ── 👍 Аура ─────────────────────────────────────────
+    # Один плюс на сообщение = +0.01% ауры автору, независимо от числа реакций
+    if any(getattr(r, "emoji", None) == "👍" for r in event.new_reaction):
+        msg_key = (event.chat.id, event.message_id)
+        if msg_key not in _aura_credited:
+            author_id = _msg_authors.get(msg_key)
+            if author_id and author_id != user.id:
+                _aura_credited.add(msg_key)
+                add_aura(author_id, 0.01)
 
 # ═══════════════════════════════════════════════════════
 # LMN ВАЛЮТА
@@ -1441,6 +1494,52 @@ async def cmd_razdach(msg: Message, command: CommandObject = None):
 # ═══════════════════════════════════════════════════════
 # РЕПУТАЦИЯ
 # ═══════════════════════════════════════════════════════
+@dp.message(Command("aura"))
+async def cmd_aura(msg: Message):
+    """Показывает ауру пользователя (0–100%)."""
+    target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
+    pct = get_aura(target.id)
+    bar = aura_bar(pct)
+    tier = (
+        "💫 Светлая" if pct >= 80 else
+        "🌟 Высокая"  if pct >= 60 else
+        "⭐ Средняя"  if pct >= 40 else
+        "🌑 Низкая"   if pct >= 10 else
+        "💀 Тёмная"
+    )
+    await msg.reply(
+        f"{_LMN_HDR}\n\n"
+        f"✨ Аура\n\n"
+        f"👤 <b>{target.full_name}</b>\n"
+        f"{_LMN_DIV}\n"
+        f"<code>{bar}</code>\n"
+        f"📊 <b>{pct:.2f}%</b>  —  {tier}\n\n"
+        f"<i>+0.01% за каждый 👍 на твои сообщения\n"
+        f"−1% за агрессию в чате</i>\n"
+        f"{_LMN_DIV}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("topaura"))
+async def cmd_topaura(msg: Message):
+    """Топ-10 пользователей по ауре."""
+    if not aura:
+        return await msg.reply("Аура ещё никем не набрана 🌑")
+    top = sorted(aura.items(), key=lambda x: x[1], reverse=True)[:10]
+    medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    lines = [f"{_LMN_HDR}\n", "✨ Топ ауры", f"{_LMN_DIV}"]
+    for i, (uid, pct) in enumerate(top):
+        try:
+            m = await bot.get_chat_member(msg.chat.id, uid)
+            name = m.user.full_name
+        except Exception:
+            name = f"ID {uid}"
+        lines.append(f"{medals[i]} <b>{name}</b>  —  {pct:.2f}%")
+    lines.append(f"\n{_LMN_DIV}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+
 @dp.message(Command("rep"))
 async def cmd_rep(msg: Message):
     target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
@@ -1650,18 +1749,39 @@ async def cmd_roll(msg: Message, command: CommandObject = None):
     await msg.reply(f"🎲 Бросок d{sides}: **{random.randint(1, sides)}**")
 
 async def cmd_rps(msg: Message, command: CommandObject = None):
-    choices = {"камень": "✊","ножницы": "✌️","бумага": "✋"}
-    user_choice = ((command.args or "").lower() if command else "")
+    choices = {"камень": "✊", "ножницы": "✌️", "бумага": "✋"}
+    # Получаем выбор: из command.args (если /rps) или из текста сообщения (если «кнб камень»)
+    if command and command.args:
+        user_choice = command.args.strip().lower().split()[0]
+    else:
+        # Текстовая форма: «кнб камень»
+        parts = (msg.text or "").strip().lower().split()
+        user_choice = parts[1] if len(parts) >= 2 else ""
     if user_choice not in choices:
-        return await msg.reply("Выбери: камень | ножницы | бумага")
+        return await msg.reply(
+            "✊✌️✋ Выбери: <b>камень</b> | <b>ножницы</b> | <b>бумага</b>\n"
+            "Пример: <code>кнб камень</code>",
+            parse_mode="HTML",
+        )
     bot_choice = random.choice(list(choices.keys()))
-    if user_choice == bot_choice: result = "Ничья! 🤝"
-    elif (user_choice=="камень" and bot_choice=="ножницы") or \
-         (user_choice=="ножницы" and bot_choice=="бумага") or \
-         (user_choice=="бумага" and bot_choice=="камень"):
+    wins = {("камень","ножницы"), ("ножницы","бумага"), ("бумага","камень")}
+    if user_choice == bot_choice:
+        result = "Ничья! 🤝"
+        award = 0
+    elif (user_choice, bot_choice) in wins:
         result = "Ты победил! 🎉"
-    else: result = "Я победил! 😈"
-    await msg.reply(f"Ты: {choices[user_choice]} | Я: {choices[bot_choice]}\n{result}")
+        award = 50
+        add_balance(msg.from_user.id, award)
+    else:
+        result = "Я победил! 😈"
+        award = -20
+        add_balance(msg.from_user.id, max(award, -get_balance(msg.from_user.id)))
+    reward_line = f"💰 {'+' if award > 0 else ''}{award} LMN" if award else ""
+    await msg.reply(
+        f"Ты: {choices[user_choice]} | Я: {choices[bot_choice]}\n"
+        f"{result}" + (f"\n{reward_line}" if reward_line else ""),
+        parse_mode="HTML",
+    )
 
 async def cmd_random_num(msg: Message, command: CommandObject = None):
     try:
@@ -1929,6 +2049,8 @@ async def cmd_whois(msg: Message):
         lines.append(f"📝 Bio: {bio}")
 
     if msg.chat.type != "private":
+        aura_val  = get_aura(uid)
+        aura_line = f"{aura_bar(aura_val)} {aura_val:.2f}%"
         lines += [
             f"\n{_LMN_DIV}",
             f"📊 Статус: {chat_status}",
@@ -1938,6 +2060,7 @@ async def cmd_whois(msg: Message):
             f"💰 Баланс: <b>{fmt_lmn(bal)} LMN</b>",
             f"⭐ Репутация: <b>{rep_val:+d}</b>",
             f"💍 Партнёр: {partner_name}",
+            f"✨ Аура: <b>{aura_line}</b>",
         ]
 
     if is_founder:
@@ -2496,6 +2619,8 @@ TEXT_COMMANDS.update({
     "+1": cmd_upvote, "плюс": cmd_upvote,
     "-1": cmd_downvote, "минус": cmd_downvote,
     "топрепутации": cmd_toprep, "топ репутации": cmd_toprep,
+    "аура": cmd_aura, "ауру": cmd_aura, "моя аура": cmd_aura,
+    "топауры": cmd_topaura, "топ ауры": cmd_topaura,
     # Брак
     "брак": cmd_marry, "жениться": cmd_marry, "замуж": cmd_marry,
     "развод": cmd_divorce,
@@ -4113,8 +4238,11 @@ async def _check_admin_insult(msg: Message) -> bool:
             until_date=until,
         )
         name_u = msg.from_user.full_name
+        # Штраф ауры за агрессию
+        add_aura(uid, -1.0)
         await msg.reply(
-            f"🔇 <b>{name_u}</b> — мут на 10 минут за оскорбление администрации.",
+            f"🔇 <b>{name_u}</b> — мут на 10 минут за оскорбление администрации.\n"
+            f"🌑 Аура: <b>-1%</b>",
             parse_mode="HTML",
         )
         return True
@@ -4274,6 +4402,14 @@ async def cmd_revoke_anketa(msg: Message):
 async def universal_handler(msg: Message):
     if not msg.text:
         return
+
+    # ── Трекинг авторов для аура-реакций ────────────────
+    if msg.from_user and not msg.from_user.is_bot and msg.chat.type != "private":
+        _msg_authors[(msg.chat.id, msg.message_id)] = msg.from_user.id
+        if len(_msg_authors) > 20_000:
+            # удаляем 1000 старых записей
+            for k in list(_msg_authors)[:1000]:
+                del _msg_authors[k]
 
     # «изменить»/«edit» — обрабатывается выше специализированными хэндлерами
     # (cmd_reply_edit если это reply на бота, cmd_editor_ru если без reply)
@@ -4604,6 +4740,17 @@ async def main():
 
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
+
+    # ── Синхронизация экономики связанных чатов ──────────
+    # pub_chat и mod_chat используют единую базу (canonical = pub_chat)
+    try:
+        _pub  = _ank.get_pub_chat()
+        _mod  = _ank.get_mod_chat()
+        if _pub and _mod and _pub != _mod:
+            _ECON_CANONICAL[_mod] = _pub   # mod → pub (canonical)
+            print(f"🔗 Связанные чаты: mod={_mod} → pub={_pub}")
+    except Exception as _ex:
+        print(f"⚠️ linked chats setup: {_ex}")
 
     # ── Очищаем меню команд Telegram (команды работают без /)
     global _BOT_ID, _BOT_USERNAME
