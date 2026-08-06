@@ -554,7 +554,8 @@ async def _send_custom(chat_id: int, key: str, fallback_html: str,
 async def _answer_custom(msg, key: str, fallback_html: str,
                          name: str | None = None, **kwargs):
     """Как _send_custom, но через msg.answer() — не нужен chat_id.
-    Автоматически трекает отправленное сообщение для reply-редактора фаундера."""
+    Автоматически трекает отправленное сообщение для reply-редактора фаундера.
+    Приоритет: кастомный текст → DEFAULT_TEXTS → fallback_html."""
     ct = brand.get_custom_text(key)
     if ct:
         text, ents_data = ct
@@ -563,15 +564,52 @@ async def _answer_custom(msg, key: str, fallback_html: str,
         ents = _build_entities(ents_data)
         sent = await msg.answer(text, entities=ents or None, **kwargs)
     else:
-        sent = await msg.answer(fallback_html, parse_mode="HTML", **kwargs)
-    # Трекаем только если ключ известен редактору
+        # Используем DEFAULT_TEXTS если есть, иначе fallback_html
+        default_text = brand.DEFAULT_TEXTS.get(key)
+        if default_text:
+            if name is not None:
+                default_text = default_text.replace("{name}", name)
+            kwargs.setdefault("parse_mode", "HTML")
+            sent = await msg.answer(default_text, **kwargs)
+        else:
+            sent = await msg.answer(fallback_html, parse_mode="HTML", **kwargs)
+    # Трекаем для reply-редактора фаундера
     if key in brand.TEXT_LABELS and sent is not None:
         _tracked_bot_msgs[(sent.chat.id, sent.message_id)] = key
-        # Ограничиваем размер кэша — удаляем старые записи
         if len(_tracked_bot_msgs) > 2000:
             oldest = next(iter(_tracked_bot_msgs))
             del _tracked_bot_msgs[oldest]
     return sent
+
+
+async def reply_t(msg: Message, key: str, parse_mode: str = "HTML", **fmt) -> None:
+    """Отправляет ответ по ключу текста (кастомный → DEFAULT_TEXTS).
+    Поддерживает format-переменные: reply_t(msg, 'work', job='Повар', earned='500').
+    """
+    ct = brand.get_custom_text(key)
+    if ct:
+        text, ents_data = ct[0], ct[1]
+        if fmt:
+            try:
+                text = text.format(**fmt)
+            except (KeyError, ValueError):
+                pass
+        ents = _build_entities(ents_data)
+        sent = await msg.reply(text, entities=ents or None)
+    else:
+        text = brand.DEFAULT_TEXTS.get(key, "")
+        if fmt and text:
+            try:
+                text = text.format(**fmt)
+            except (KeyError, ValueError):
+                pass
+        if text:
+            sent = await msg.reply(text, parse_mode=parse_mode)
+        else:
+            return
+    # Трекаем для reply-редактора
+    if key in brand.TEXT_LABELS and sent is not None:
+        _tracked_bot_msgs[(sent.chat.id, sent.message_id)] = key
 
 
 async def _edit_custom(message, key: str, fallback_html: str,
@@ -3602,47 +3640,21 @@ async def cmd_edittext(msg: Message):
     if not is_owner(msg) or msg.chat.type != "private":
         return
 
-    labels = brand.TEXT_LABELS
     custom = brand.all_custom_texts()
+    total  = sum(len(keys) for _, keys in _EDITOR_TEXT_CATEGORIES)
+    done   = sum(1 for _, keys in _EDITOR_TEXT_CATEGORIES for k in keys if k in custom)
 
-    CATEGORIES = [
-        ("🏠 Главный экран",   ["start_text", "start_unverified"]),
-        ("✅ Верификация",      ["verify_btn", "verify_prompt", "verify_confirm_btn", "verify_done"]),
-        ("👋 Приветствие",      ["welcome_msg", "welcome_btn"]),
-        ("📝 Анкета — флоу",   ["anketa_start", "anketa_cancel", "anketa_confirm",
-                                 "anketa_duplicate", "anketa_cancel_none",
-                                 "anketa_private_only", "anketa_no_verify", "step_accepted"]),
-        ("🛡 Модерация",        ["anketa_approve", "anketa_reject", "anketa_delete",
-                                 "mod_comment", "revoke_notify"]),
-        ("👑 VIP & Поддержка", ["vip_activated", "support_prompt", "support_sent"]),
-    ]
-
-    lines = ["✏️ <b>Редактор текстов Лумены</b>",
-             "Тапни кнопку → отправь новый текст с Premium emoji\n",
-             "✅ — сохранён кастомный текст   ⬜ — дефолт\n"]
-
-    btns_all: list[InlineKeyboardButton] = []
-
-    for cat_name, cat_keys in CATEGORIES:
-        cat_btns = []
-        cat_lines = [f"\n<b>{html.escape(cat_name)}</b>"]
-        for k in cat_keys:
-            if k not in labels:
-                continue
-            status = "✅" if k in custom else "⬜"
-            short  = labels[k][:22]
-            cat_lines.append(f"  {status} {html.escape(labels[k])}")
-            cat_btns.append(InlineKeyboardButton(
-                text=f"{status} {short}",
-                callback_data=f"edittext:{k}",
-            ))
-        if cat_btns:
-            lines.extend(cat_lines)
-            btns_all.extend(cat_btns)
-
-    # Кнопки по 2 в ряд
-    kb = InlineKeyboardMarkup(inline_keyboard=[btns_all[i:i+2] for i in range(0, len(btns_all), 2)])
-    await msg.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    await msg.answer(
+        f"✏️ <b>Редактор текстов Лумены</b>\n\n"
+        f"📊 Изменено: <b>{done}</b> из <b>{total}</b> строк\n"
+        f"📂 Категорий: <b>{len(_EDITOR_TEXT_CATEGORIES)}</b>\n\n"
+        "Выбери категорию — внутри каждой постраничный список.\n"
+        "Тапни строку → отправь новый текст с Premium emoji.\n\n"
+        "✅ — кастомный   ⬜ — дефолт\n"
+        "<code>/resettext ключ</code> — сбросить одну строку к дефолту",
+        parse_mode="HTML",
+        reply_markup=_editor_texts_kb(),
+    )
 
 
 @dp.callback_query(F.data.startswith("edittext:"))
@@ -3654,18 +3666,29 @@ async def cb_edittext(cb: CallbackQuery):
         return await cb.answer("Неизвестный ключ", show_alert=True)
 
     _edit_sessions[cb.from_user.id] = key
-    label = brand.TEXT_LABELS[key]
-    ct    = brand.get_custom_text(key)
-    current_note = (
-        f"Текущий текст:\n<blockquote>{html.escape(ct[0])}</blockquote>"
-        if ct else "Сейчас: <i>встроенный дефолтный текст</i>"
-    )
+    label    = brand.TEXT_LABELS[key]
+    ct       = brand.get_custom_text(key)
+    cur_text = brand.get_current_text(key)   # кастомный ИЛИ дефолт
+
+    if ct:
+        status_line = "📝 <b>Сейчас (кастомный):</b>"
+    elif cur_text:
+        status_line = "⬜ <b>Сейчас (дефолт):</b>"
+    else:
+        status_line = "⬜ <i>Текст не задан</i>"
+
+    preview = html.escape(cur_text[:300]) if cur_text else ""
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
+    ]])
     await cb.message.answer(
         f"✏️ <b>{html.escape(label)}</b>\n\n"
-        f"{current_note}\n\n"
-        "Отправь новый текст — вставь Premium emoji как обычно.\n"
-        "/отмена — выйти без сохранения.",
-        parse_mode="HTML"
+        f"{status_line}\n"
+        + (f"<blockquote>{preview}</blockquote>\n\n" if preview else "\n")
+        + "Отправь новый текст — форматирование и Premium emoji сохранятся.\n"
+        "<code>/отмена</code> — выйти без сохранения.",
+        parse_mode="HTML",
+        reply_markup=back_kb,
     )
     await cb.answer()
 
@@ -3699,16 +3722,42 @@ async def cmd_resettext(msg: Message):
 # ═══════════════════════════════════════════════════════
 
 _EDITOR_TEXT_CATEGORIES = [
-    ("🏠 Главный экран",   ["start_text", "start_unverified"]),
-    ("✅ Верификация",      ["verify_btn", "verify_prompt", "verify_confirm_btn", "verify_done"]),
-    ("👋 Приветствие",      ["welcome_msg", "welcome_btn"]),
-    ("📝 Анкета — флоу",   ["anketa_start", "anketa_cancel", "anketa_confirm",
-                             "anketa_duplicate", "anketa_cancel_none",
-                             "anketa_private_only", "anketa_no_verify", "step_accepted"]),
-    ("🛡 Модерация",        ["anketa_approve", "anketa_reject", "anketa_delete",
-                             "mod_comment", "revoke_notify"]),
-    ("👑 VIP & Поддержка", ["vip_activated", "support_prompt", "support_sent"]),
+    ("🏠 Главный экран",    ["start_text", "start_unverified"]),
+    ("✅ Верификация",       ["verify_btn", "verify_prompt", "verify_confirm_btn", "verify_done"]),
+    ("👋 Приветствие",       ["welcome_msg", "welcome_btn"]),
+    ("📝 Анкета — флоу",    ["anketa_start", "anketa_cancel", "anketa_confirm",
+                              "anketa_duplicate", "anketa_cancel_none",
+                              "anketa_private_only", "anketa_no_verify", "step_accepted",
+                              "anketa_no_mod", "anketa_media_prompt",
+                              "anketa_media_added", "anketa_media_done"]),
+    ("🛡 Модерация анкет",  ["anketa_approve", "anketa_reject", "anketa_delete",
+                              "mod_comment", "revoke_notify"]),
+    ("👑 VIP & Поддержка",  ["vip_activated", "support_prompt", "support_sent"]),
+    ("💰 Экономика",         ["balance", "work", "work_cooldown",
+                              "fish", "fish_cooldown",
+                              "give", "give_no_reply", "give_no_funds",
+                              "casino_win", "casino_jackpot", "casino_lose",
+                              "rob_success", "rob_fail", "rob_cooldown",
+                              "coin_rain", "coin_rain_collected"]),
+    ("💍 Брак",              ["marry_proposal", "marry_accept", "marry_reject",
+                              "marry_self", "marry_already", "marry_already_other",
+                              "marry_no_reply", "divorce", "divorce_not_married"]),
+    ("🔥 Стрики & Аура",    ["checkin", "checkin_already", "upvote", "downvote",
+                              "rep", "aura_show"]),
+    ("🎮 Игры",              ["rps_win", "rps_lose", "rps_tie",
+                              "roulette_join", "roulette_winner", "coin",
+                              "hangman_start", "hangman_win", "hangman_lose"]),
+    ("🤗 Социальные",        ["hug", "kiss", "gift", "slap", "pat",
+                              "dance", "bite", "poke", "wave", "highfive",
+                              "facepalm", "serenade"]),
+    ("🛡 Модерация чата",   ["mute_done", "ban_done", "unban_done", "unmute_done",
+                              "kick_done", "warn_done", "warn_ban", "unwarn_done",
+                              "admin_only", "reply_needed", "owner_only"]),
+    ("🔮 Предсказания",     ["fortune_result", "horoscope_result", "tarot_result"]),
+    ("👤 Профиль",          ["profile_no_bio", "profile_no_partner", "info_founder_badge"]),
 ]
+
+_PAGE_SIZE = 8  # строк на страницу в категории
 
 
 def _editor_main_menu_kb() -> InlineKeyboardMarkup:
@@ -3721,29 +3770,49 @@ def _editor_main_menu_kb() -> InlineKeyboardMarkup:
 
 
 def _editor_texts_kb() -> InlineKeyboardMarkup:
-    """Кнопки категорий текстов."""
+    """Кнопки категорий текстов — 2 в ряд."""
+    custom = brand.all_custom_texts()
     rows = []
-    for i, (cat_name, _) in enumerate(_EDITOR_TEXT_CATEGORIES):
-        rows.append([InlineKeyboardButton(text=cat_name, callback_data=f"editor:cat:{i}")])
+    for i, (cat_name, cat_keys) in enumerate(_EDITOR_TEXT_CATEGORIES):
+        done  = sum(1 for k in cat_keys if k in custom)
+        total = len(cat_keys)
+        label = f"{cat_name} ({done}/{total})" if done else cat_name
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"editor:cat:{i}:0")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _editor_cat_kb(cat_idx: int) -> InlineKeyboardMarkup:
-    """Кнопки конкретных текстов в категории."""
+def _editor_cat_kb(cat_idx: int, page: int = 0) -> InlineKeyboardMarkup:
+    """Кнопки текстов в категории с пагинацией."""
     _, keys = _EDITOR_TEXT_CATEGORIES[cat_idx]
+    valid_keys = [k for k in keys if k in brand.TEXT_LABELS]
     custom = brand.all_custom_texts()
+
+    start  = page * _PAGE_SIZE
+    end    = start + _PAGE_SIZE
+    page_keys = valid_keys[start:end]
+    total_pages = max(1, (len(valid_keys) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+
     btns = []
-    for k in keys:
-        if k not in brand.TEXT_LABELS:
-            continue
+    for k in page_keys:
         status = "✅" if k in custom else "⬜"
-        short  = brand.TEXT_LABELS[k][:24]
+        short  = brand.TEXT_LABELS[k][:26]
         btns.append(InlineKeyboardButton(
             text=f"{status} {short}",
             callback_data=f"edittext:{k}",
         ))
     rows = [btns[i:i+2] for i in range(0, len(btns), 2)]
+
+    # Навигация
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"editor:cat:{cat_idx}:{page-1}"))
+    if total_pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"editor:cat:{cat_idx}:{page+1}"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text="◀️ Категории", callback_data="editor:texts")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -3913,17 +3982,21 @@ async def cb_editor_texts(cb: CallbackQuery):
     if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     custom = brand.all_custom_texts()
-    total  = sum(len(keys) for _, keys in _EDITOR_TEXT_CATEGORIES
-                 if any(k in brand.TEXT_LABELS for k in keys))
+    total  = sum(len(keys) for _, keys in _EDITOR_TEXT_CATEGORIES)
     done   = sum(1 for _, keys in _EDITOR_TEXT_CATEGORIES
-                 for k in keys if k in custom and k in brand.TEXT_LABELS)
+                 for k in keys if k in custom)
     await cb.message.edit_text(
         f"✏️ <b>Тексты бота</b>\n\n"
-        f"Изменено: <b>{done}</b> из <b>{total}</b>\n"
-        "Выбери категорию для редактирования:",
+        f"Изменено: <b>{done}</b> из <b>{total}</b> строк\n\n"
+        "Выбери категорию:",
         parse_mode="HTML",
         reply_markup=_editor_texts_kb(),
     )
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "noop")
+async def cb_noop(cb: CallbackQuery):
     await cb.answer()
 
 
@@ -3932,24 +4005,40 @@ async def cb_editor_cat(cb: CallbackQuery):
     if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
     try:
-        cat_idx = int(cb.data.split(":")[-1])
+        parts   = cb.data.split(":")
+        cat_idx = int(parts[2])
+        page    = int(parts[3]) if len(parts) > 3 else 0
     except (ValueError, IndexError):
         return await cb.answer("Ошибка", show_alert=True)
     if cat_idx >= len(_EDITOR_TEXT_CATEGORIES):
         return await cb.answer("Ошибка", show_alert=True)
+
     cat_name, keys = _EDITOR_TEXT_CATEGORIES[cat_idx]
-    custom = brand.all_custom_texts()
-    lines  = [f"✏️ <b>{html.escape(cat_name)}</b>\n",
-              "✅ — кастомный текст   ⬜ — дефолт\n"]
-    for k in keys:
-        if k not in brand.TEXT_LABELS:
-            continue
-        status = "✅" if k in custom else "⬜"
-        lines.append(f"  {status} {html.escape(brand.TEXT_LABELS[k])}")
+    valid_keys  = [k for k in keys if k in brand.TEXT_LABELS]
+    custom      = brand.all_custom_texts()
+    total_pages = max(1, (len(valid_keys) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page        = max(0, min(page, total_pages - 1))
+    start       = page * _PAGE_SIZE
+    page_keys   = valid_keys[start:start + _PAGE_SIZE]
+
+    lines = [
+        f"✏️ <b>{html.escape(cat_name)}</b>",
+        f"<i>Стр. {page+1}/{total_pages} · {len(valid_keys)} строк</i>",
+        "✅ кастомный   ⬜ дефолт\n",
+    ]
+    for k in page_keys:
+        status   = "✅" if k in custom else "⬜"
+        label    = html.escape(brand.TEXT_LABELS[k])
+        cur_text = brand.get_current_text(k)
+        preview  = html.escape(cur_text[:60].replace("\n", " ")) + ("…" if len(cur_text) > 60 else "")
+        lines.append(f"  {status} <b>{label}</b>")
+        if preview:
+            lines.append(f"      <i>{preview}</i>")
+
     await cb.message.edit_text(
         "\n".join(lines),
         parse_mode="HTML",
-        reply_markup=_editor_cat_kb(cat_idx),
+        reply_markup=_editor_cat_kb(cat_idx, page),
     )
     await cb.answer()
 
