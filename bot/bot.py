@@ -3668,10 +3668,9 @@ async def _send_editor_menu(msg):
 # ── Reply-редактор: фаундер отвечает на сообщение бота словом «изменить» ──────
 # Регистрируется ПЕРВЫМ — более специфичный фильтр (reply + tracked msg)
 def _is_reply_edit(m) -> bool:
-    """True если: фаундер, ЛС, слово «изменить»/«edit», ответ на трекнутое сообщение."""
+    """True если: фаундер, слово «изменить»/«edit», ответ на трекнутое сообщение бота.
+    Работает в любом чате (группа или ЛС)."""
     if not is_owner(m):
-        return False
-    if m.chat.type != "private":
         return False
     tl = (m.text or "").strip().lower().lstrip("/")
     if tl not in ("изменить", "edit"):
@@ -3697,17 +3696,38 @@ async def cmd_reply_edit(msg: Message):
         f"Текущий текст:\n<blockquote>{html.escape(ct[0])}</blockquote>"
         if ct else "Сейчас: <i>встроенный дефолтный текст</i>"
     )
-    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
-    ]])
-    await msg.reply(
-        f"✏️ <b>{html.escape(label)}</b>\n\n"
-        f"{current_note}\n\n"
-        "Отправь новый текст — форматирование сохранится.\n"
-        "/отмена или кнопка ниже — выйти без сохранения.",
-        parse_mode="HTML",
-        reply_markup=back_kb,
-    )
+
+    is_private = msg.chat.type == "private"
+
+    if is_private:
+        # В ЛС — сразу принимаем текст здесь
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
+        ]])
+        await msg.reply(
+            f"✏️ <b>{html.escape(label)}</b>\n\n"
+            f"{current_note}\n\n"
+            "Отправь новый текст — форматирование сохранится.\n"
+            "/отмена или кнопка ниже — выйти без сохранения.",
+            parse_mode="HTML",
+            reply_markup=back_kb,
+        )
+    else:
+        # В группе — просим написать новый текст в ЛС боту
+        bot_info = await bot.get_me()
+        bot_username = bot_info.username or ""
+        dm_url = f"https://t.me/{bot_username}"
+        dm_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✏️ Написать в ЛС боту", url=dm_url),
+        ]])
+        await msg.reply(
+            f"✏️ <b>{html.escape(label)}</b>\n\n"
+            f"{current_note}\n\n"
+            "Напиши новый текст мне <b>в личку</b> — нажми кнопку ниже.\n"
+            "Редактирование активировано, просто отправь текст в ЛС.",
+            parse_mode="HTML",
+            reply_markup=dm_kb,
+        )
 
 
 @dp.callback_query(F.data == "reply_edit_cancel")
