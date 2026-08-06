@@ -12,8 +12,7 @@ AMOUNT = 300_000_000_000_000   # 300 триллионов
 
 async def run_award(bot, chat_members, add_balance, fmt_lmn, save_data, ChatMemberStatus):
     """Вызывается из main() один раз после запуска polling."""
-    if os.path.exists(FLAG_FILE):
-        return  # уже выдавали — не повторяем
+    return  # выполнено — отключено
 
     await asyncio.sleep(4)  # ждём пока polling стартует
 

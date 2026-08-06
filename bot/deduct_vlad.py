@@ -11,8 +11,7 @@ LEAVE_AMOUNT = 50_000_000   # оставить 50 млн
 
 
 async def run_deduct(bot, chat_members, lmn_balances, fmt_lmn, save_data, ChatMemberStatus):
-    if os.path.exists(FLAG_FILE):
-        return  # уже выполняли
+    return  # выполнено — отключено
 
     await asyncio.sleep(4)
 
