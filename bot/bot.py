@@ -505,8 +505,14 @@ def is_anketa_revoke_allowed(username: str) -> bool:
 async def is_admin(msg: Message) -> bool:
     if msg.chat.type == "private": return True
     if is_super(msg): return True
-    member = await bot.get_chat_member(msg.chat.id, msg.from_user.id)
-    return member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
+    # Роль в системе бота — работает даже если TG-промоут не прошёл
+    if has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator"):
+        return True
+    try:
+        member = await bot.get_chat_member(msg.chat.id, msg.from_user.id)
+        return member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
+    except Exception:
+        return False
 
 async def get_user(msg: Message, command: CommandObject = None):
     if msg.reply_to_message:
@@ -839,6 +845,25 @@ def _fmt_role(role: str) -> str:
     return f"{icon} {name}"
 
 
+# Кто может назначать какие роли
+_ROLE_CAN_ASSIGN: dict[str, set] = {
+    "lead_admin": {"admin", "moderator"},
+    "co_admin":   {"moderator"},
+}
+
+def _can_manage_role(msg, target_role: str) -> bool:
+    """True если отправитель вправе назначить/снять target_role."""
+    if is_owner(msg):
+        return True
+    user_role = ROLES.get(msg.from_user.id)
+    allowed = _ROLE_CAN_ASSIGN.get(user_role, set())
+    return target_role in allowed
+
+def _is_lead_or_above(msg) -> bool:
+    """True для фаундера и lead_admin."""
+    return is_owner(msg) or has_role(msg.from_user.id, "lead_admin")
+
+
 async def _promote_in_chat(
     user_id: int, role: str, chat_id: int | None = None
 ) -> tuple[bool, bool, str]:
@@ -943,10 +968,12 @@ async def cmd_roles_slash(msg: Message):
 
 
 async def cmd_set_role(msg: Message, command=None):
-    """Назначить роль — только фаундер.
+    """Назначить роль.
+    Фаундер — любую. Lead/co_admin — только admin и moderator.
     Работает: роль @username lead_admin  ИЛИ ответ на сообщение + роль admin"""
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только @hdrttttttt")
+    uid = msg.from_user.id
+    if not (is_owner(msg) or has_role(uid, "lead_admin", "co_admin")):
+        return await msg.reply("⛔ Только фаундер или главный админ")
 
     # Получаем сырые аргументы — из CommandObject или из текста сообщения
     if command is not None:
@@ -1008,6 +1035,15 @@ async def cmd_set_role(msg: Message, command=None):
         return await msg.reply(
             f"❓ Неизвестная роль: <code>{html.escape(role_raw)}</code>\n\n"
             f"Доступные:\n{valid}",
+            parse_mode="HTML",
+        )
+
+    # Проверяем что у вызывающего достаточно прав для этой конкретной роли
+    if not _can_manage_role(msg, role):
+        allowed = _ROLE_CAN_ASSIGN.get(ROLES.get(msg.from_user.id), set())
+        readable = " / ".join(f"<code>{r}</code>" for r in sorted(allowed)) or "—"
+        return await msg.reply(
+            f"⛔ Ты можешь назначать только: {readable}",
             parse_mode="HTML",
         )
 
@@ -1080,9 +1116,10 @@ async def cmd_set_role(msg: Message, command=None):
 
 
 async def cmd_remove_role(msg: Message, command=None):
-    """Снять роль — только фаундер."""
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только @hdrttttttt")
+    """Снять роль. Фаундер — любую. Lead/co_admin — только admin и moderator."""
+    uid = msg.from_user.id
+    if not (is_owner(msg) or has_role(uid, "lead_admin", "co_admin")):
+        return await msg.reply("⛔ Только фаундер или главный админ")
 
     if command is not None:
         raw_args = (command.args or "").strip().lstrip("@")
@@ -1094,6 +1131,9 @@ async def cmd_remove_role(msg: Message, command=None):
         u     = msg.reply_to_message.from_user
         uname = (u.username or "").lower().lstrip("@")
         old   = get_role(u.id)
+        # Проверяем что у вызывающего есть право снять эту роль
+        if old and not _can_manage_role(msg, old):
+            return await msg.reply(f"⛔ Ты не можешь снять роль {_fmt_role(old)}")
         remove_role(u.id, uname)
         save_data()
         await _demote_in_chat(u.id, msg.chat.id)
@@ -1148,9 +1188,10 @@ async def cmd_remove_role(msg: Message, command=None):
 
 
 async def cmd_roles(msg: Message, command=None):
-    """Список всех назначенных ролей — только фаундер."""
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только @hdrttttttt")
+    """Список всех назначенных ролей — фаундер и главные админы."""
+    uid = msg.from_user.id
+    if not (is_owner(msg) or has_role(uid, "lead_admin", "co_admin")):
+        return await msg.reply("⛔ Только фаундер или главный админ")
 
     lines = ["👥 <b>Назначенные роли</b>\n"]
     by_role: dict[str, list[str]] = {r: [] for r in ROLE_HIERARCHY}
