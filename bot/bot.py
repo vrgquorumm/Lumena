@@ -1794,15 +1794,20 @@ async def cmd_rob(msg: Message):
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение жертвы")
     robber = msg.from_user
     victim = msg.reply_to_message.from_user
+    if victim.id == robber.id: return await msg.reply("❌ Нельзя грабить самого себя")
+    if victim.is_bot: return await msg.reply("❌ Нельзя грабить бота")
+    # Проверяем баланс жертвы ДО кулдауна — не тратим попытку зря
+    vic_bal = get_balance(victim.id)
+    if vic_bal < 100: return await msg.reply("💸 У жертвы нет денег 😅")
     now = now_kyiv()
     last = rob_cooldown.get(robber.id)
     if last and (now - last).seconds < 7200:
         return await msg.reply("⏳ Следующее ограбление через 2 часа")
     rob_cooldown[robber.id] = now
-    vic_bal = get_balance(victim.id)
-    if vic_bal < 100: return await msg.reply("У жертвы нет денег 😅")
     if random.random() < 0.4:
-        stolen = random.randint(50, min(vic_bal // 3, 5000))
+        # Гарантируем корректный диапазон: минимум 50, но не больше трети баланса
+        max_steal = max(50, min(vic_bal // 3, 5000))
+        stolen = random.randint(1, max_steal)
         add_balance(victim.id, -stolen)
         add_balance(robber.id, stolen)
         await msg.reply(
@@ -1813,12 +1818,14 @@ async def cmd_rob(msg: Message):
             f"{brand.div()}",
             parse_mode="HTML")
     else:
+        robber_bal = get_balance(robber.id)
         fine = random.randint(100, 500)
-        add_balance(robber.id, -min(fine, get_balance(robber.id)))
+        actual_fine = min(fine, robber_bal)
+        add_balance(robber.id, -actual_fine)
         await msg.reply(
             f"{brand.hdr()}\n\n"
             f"👮 Попался!\n\n"
-            f"💸 Штраф: <b>{fmt_lmn(fine)} LMN</b>\n\n"
+            f"💸 Штраф: <b>{fmt_lmn(actual_fine)} LMN</b>\n\n"
             f"{brand.div()}",
             parse_mode="HTML")
 

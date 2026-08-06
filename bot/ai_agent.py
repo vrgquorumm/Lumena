@@ -1,10 +1,11 @@
 """
-ai_agent.py — Лумена AI (локальный, без внешних API)
+ai_agent.py — Лумена AI
 ══════════════════════════════════════════════════════
-Использует только встроенный NLP-движок (lumena.py + nlu.py).
-Никаких Groq, Gemini, OpenAI — всё работает автономно.
+Использует OpenAI API (OPENAI_API_KEY) если доступен.
+Если ключа нет — fallback на локальный NLP (lumena.py).
 """
 import asyncio
+import os
 import random
 import re
 import time
@@ -12,84 +13,76 @@ from typing import Optional
 
 # ── Антиповтор ──────────────────────────────────────────────────────────────
 _last_replies: dict[int, list[str]] = {}   # {chat_id: [последние 5 ответов]}
-_history:      dict[int, list] = {}        # {chat_id: [(role, text)]}
+_history:      dict[int, list[dict]] = {}  # {chat_id: [{"role": ..., "content": ...}]}
 
-MAX_RECENT = 6    # сколько последних ответов запоминаем для антиповтора
-MAX_HISTORY = 20  # сколько реплик в памяти диалога
+MAX_RECENT  = 6
+MAX_HISTORY = 20   # пар user/assistant
 
-# ── Пул «живых» вставок чтобы разнообразить ответ ──────────────────────────
-_OPENER_POOL = [
-    "", "", "", "",   # чаще без вставки
-    "Слушай, ",
-    "Кстати, ",
-    "Знаешь что? ",
-    "Интересно — ",
-    "Честно говоря, ",
-    "Если подумать, ",
-    "Ну вот, ",
-    "Ладно, ",
-]
+# ── System prompt ────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """
+Ты — Lumena.
 
-_CLOSER_POOL = [
-    "", "", "", "",   # чаще без
-    " Что думаешь?",
-    " Согласен?",
-    " Интересно, правда?",
-    " А у тебя как?",
-    " Вот так вот 😊",
-    " Надеюсь, помогло 💙",
-    " Если что — спрашивай!",
-]
+Общайся как обычный человек из Telegram.
 
-# ── Фразы когда локальный NLP тоже ничего не нашёл ─────────────────────────
+Правила:
+- Естественная разговорная речь.
+- Используй сленг когда это уместно.
+- Если пользователь матерится — можешь ответить с умеренным матом.
+- Не говори шаблонными фразами.
+- Не упоминай, что ты ИИ, если тебя не спрашивают напрямую.
+- Отвечай эмоционально и разнообразно.
+- Иногда шути.
+- Иногда отвечай очень коротко.
+- Иногда подробно.
+- Не повторяй одинаковые конструкции.
+- Если не знаешь ответа — честно скажи, что не знаешь.
+"""
+
+# ── Fallback-фразы когда нет ключа или ошибка API ───────────────────────────
 _FALLBACKS = [
-    "Хм, интересный вопрос — дай подумаю 🤔 Напиши чуть подробнее?",
+    "Хм, интересный вопрос — напиши чуть подробнее? 🤔",
     "Не совсем поняла — уточни, пожалуйста 😊",
-    "Сложно сказать с ходу. Расскажи подробнее — постараюсь помочь 💙",
+    "Сложно сказать с ходу. Расскажи подробнее 💙",
     "Пока не нашла точного ответа. Попробуй переформулировать!",
-    "М-м, надо подумать. Напиши иначе — разберёмся вместе 🙂",
-    "Честно — не знаю. Но если уточнишь детали, попробую найти 🔍",
-    "Хороший вопрос, но ответа нет прямо сейчас. Может, переформулируешь?",
-    "Не уверена насчёт этого. Спроси иначе — помогу чем смогу 💙",
+    "Честно — не знаю. Но если уточнишь детали, попробую помочь 🔍",
+    "Хороший вопрос, но ответа нет прямо сейчас.",
+    "Не уверена насчёт этого. Спроси иначе 💙",
 ]
 
-# ── Детектор мата/грубости (для фильтра ответа) ────────────────────────────
-_RUDE_RE = re.compile(
-    r"(?i)\b(х[уy]й|х[уy]я|пизд|ёба|еба|нахуй|бляд|мудак|пиздец|"
-    r"шлюх|ублюдк|fuck(?:ing|ed|er)?|shit|bitch|asshole|cunt\b|motherfucker)\b",
-    re.UNICODE,
-)
+# ── OpenAI клиент (ленивая инициализация) ───────────────────────────────────
+_oai_client = None
 
-_SAFE_REPLIES = [
-    "Давай без этого — найдём тему получше 🙂",
-    "Ок, сменим тему 😊",
-    "Лучше поговорим о чём-то другом 💙",
-]
-
-
-def _is_rude(text: str) -> bool:
-    return bool(_RUDE_RE.search(text))
+def _get_openai_client():
+    global _oai_client
+    if _oai_client is not None:
+        return _oai_client
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        from openai import AsyncOpenAI
+        _oai_client = AsyncOpenAI(api_key=api_key)
+        return _oai_client
+    except ImportError:
+        return None
 
 
 # ── История ──────────────────────────────────────────────────────────────────
-def _get_hist(chat_id: int) -> list:
+def _get_hist(chat_id: int) -> list[dict]:
     if chat_id not in _history:
         _history[chat_id] = []
     return _history[chat_id]
 
 
-def _push_hist(chat_id: int, role: str, text: str):
+def _push_hist(chat_id: int, role: str, content: str):
     h = _get_hist(chat_id)
-    h.append((role, text[:500]))
+    h.append({"role": role, "content": content[:1000]})
+    # Обрезаем до MAX_HISTORY пар
     if len(h) > MAX_HISTORY * 2:
         h[:] = h[-(MAX_HISTORY * 2):]
 
 
 # ── Антиповтор ───────────────────────────────────────────────────────────────
-def _get_recent(chat_id: int) -> list[str]:
-    return _last_replies.get(chat_id, [])
-
-
 def _push_recent(chat_id: int, reply: str):
     lst = _last_replies.setdefault(chat_id, [])
     lst.append(reply[:80])
@@ -97,78 +90,80 @@ def _push_recent(chat_id: int, reply: str):
         lst.pop(0)
 
 
-def _dedupe(reply: str, chat_id: int) -> str:
-    """Если ответ — точная копия одного из последних → берём fallback."""
-    recent = _get_recent(chat_id)
-    if reply.strip() in [r.strip() for r in recent]:
-        return random.choice(_FALLBACKS)
-    return reply
+def _is_recent(chat_id: int, reply: str) -> bool:
+    recent = _last_replies.get(chat_id, [])
+    return reply.strip() in [r.strip() for r in recent]
 
 
-# ── Лёгкая постобработка: добавляем живую «интонацию» ───────────────────────
-def _humanize(text: str, chat_id: int) -> str:
-    """Изредка добавляет живой opener/closer чтобы не звучало как робот."""
-    recent = _get_recent(chat_id)
-    t = text.strip()
-    if not t:
-        return t
+# ── OpenAI запрос ────────────────────────────────────────────────────────────
+async def _ask_openai(chat_id: int, text: str) -> Optional[str]:
+    client = _get_openai_client()
+    if not client:
+        return None
 
-    # Не добавляем вставки к коротким ответам и к ответам с уже явной эмоцией
-    if len(t) < 30 or t[-1] in "?!":
-        return t
+    history = _get_hist(chat_id)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT.strip()}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": text})
 
-    # Если подобный opener уже был в последних — пропускаем
-    opener = random.choice(_OPENER_POOL)
-    closer = random.choice(_CLOSER_POOL)
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o",
+            temperature=1.15,
+            top_p=0.95,
+            presence_penalty=0.8,
+            frequency_penalty=0.4,
+            max_tokens=600,
+            messages=messages,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        import logging
+        logging.warning(f"[AI/OpenAI] error: {e}")
+        return None
 
-    # Не добавляем одинаковые закрывалки подряд
-    if closer and any(closer.strip() in r for r in recent[-2:]):
-        closer = ""
 
-    if opener:
-        t = opener + t[0].lower() + t[1:]
-    t = t + closer
-    return t
+# ── Локальный NLP fallback ────────────────────────────────────────────────────
+async def _ask_local(chat_id: int, text: str, user_name: str) -> Optional[str]:
+    try:
+        from lumena import get_lumena_response
+        return await get_lumena_response(chat_id, text, user_name)
+    except Exception as e:
+        import logging
+        logging.warning(f"[AI/local] lumena error: {e}")
+        return None
 
 
 # ── Публичный интерфейс ──────────────────────────────────────────────────────
 async def lumena_reply(chat_id: int, user_name: str, text: str) -> str:
     """
-    Возвращает ответ Лумены на основе встроенного NLP.
-    Никогда не возвращает None — всегда есть запасная фраза.
+    Возвращает ответ Лумены.
+    Порядок: OpenAI API → локальный NLP → случайный fallback.
     """
-    from lumena import get_lumena_response   # импорт здесь, чтобы избежать циклов
-
-    # Сохраняем сообщение пользователя в историю
     _push_hist(chat_id, "user", text)
 
     reply: Optional[str] = None
 
-    try:
-        # Основной ответ от локального NLP-движка
-        reply = await get_lumena_response(chat_id, text, user_name)
-    except Exception as e:
-        import logging
-        logging.warning(f"[AI] lumena error: {e}")
-        reply = None
+    # 1. Пробуем OpenAI
+    reply = await _ask_openai(chat_id, text)
 
-    # Если NLP вернул пустоту — берём случайный fallback
+    # 2. Fallback: локальный NLP
+    if not reply or not reply.strip():
+        reply = await _ask_local(chat_id, text, user_name)
+
+    # 3. Крайний fallback
     if not reply or not reply.strip():
         reply = random.choice(_FALLBACKS)
 
-    # Фильтр грубости (на случай если NLP что-то грубое сгенерировал)
-    if _is_rude(reply):
-        reply = random.choice(_SAFE_REPLIES)
-
     # Антиповтор
-    reply = _dedupe(reply, chat_id)
+    if _is_recent(chat_id, reply):
+        alt = await _ask_openai(chat_id, text)
+        if alt and alt.strip() and not _is_recent(chat_id, alt):
+            reply = alt
+        else:
+            reply = random.choice(_FALLBACKS)
 
-    # Лёгкая «живость» интонации (не слишком часто)
-    if random.random() < 0.25:
-        reply = _humanize(reply, chat_id)
-
-    # Запоминаем что сказали
-    _push_hist(chat_id, "bot", reply)
+    _push_hist(chat_id, "assistant", reply)
     _push_recent(chat_id, reply)
 
     return reply
@@ -181,5 +176,5 @@ def clear_history(chat_id: int):
 
 
 def is_available() -> bool:
-    """Локальный AI всегда доступен — не зависит от внешних сервисов."""
+    """True если доступен хотя бы локальный NLP."""
     return True
