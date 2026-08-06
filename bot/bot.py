@@ -858,9 +858,11 @@ async def cmd_set_role(msg: Message, command=None):
 
     save_data()
     await msg.reply(
-        f"{_fmt_role(role)} назначена!\n\n"
+        f"{brand.hdr()}\n\n"
+        f"{_fmt_role(role)} <b>назначена</b>\n\n"
         f"👤 {mention}\n"
-        f"🏷 Роль: <b>{ROLE_NAMES[role]}</b>",
+        f"🏷 Роль: <b>{ROLE_NAMES[role]}</b>\n\n"
+        f"{brand.div()}",
         parse_mode="HTML",
     )
 
@@ -884,7 +886,13 @@ async def cmd_remove_role(msg: Message, command=None):
         save_data()
         mention = f"@{uname}" if uname else html.escape(u.full_name)
         old_str = f" (была {_fmt_role(old)})" if old else ""
-        return await msg.reply(f"✅ Роль снята{old_str}\n\n👤 {mention}", parse_mode="HTML")
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"✅ Роль снята{old_str}\n\n"
+            f"👤 {mention}\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
 
     if not raw_args:
         return await msg.reply(
@@ -906,7 +914,13 @@ async def cmd_remove_role(msg: Message, command=None):
         ROLES.pop(found_uid, None)
     save_data()
     old_str = f" (была {_fmt_role(old)})" if old else ""
-    await msg.reply(f"✅ Роль снята{old_str}\n\n👤 @{html.escape(uname)}", parse_mode="HTML")
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"✅ Роль снята{old_str}\n\n"
+        f"👤 @{html.escape(uname)}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 
 async def cmd_roles(msg: Message, command=None):
