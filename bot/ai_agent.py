@@ -1,180 +1,659 @@
 """
-ai_agent.py — Лумена AI
-══════════════════════════════════════════════════════
-Использует OpenAI API (OPENAI_API_KEY) если доступен.
-Если ключа нет — fallback на локальный NLP (lumena.py).
+ai_agent.py — Lumena AI Engine v3
+══════════════════════════════════════════════════════════════════════════════
+Полностью автономный AI без внешних API.
+Умеет: понимать контекст, помнить тему разговора, отвечать с характером,
+шутить, сочувствовать, задавать вопросы, не повторяться.
+══════════════════════════════════════════════════════════════════════════════
 """
-import asyncio
-import os
 import random
 import re
 import time
+from collections import deque
 from typing import Optional
 
-# ── Антиповтор ──────────────────────────────────────────────────────────────
-_last_replies: dict[int, list[str]] = {}   # {chat_id: [последние 5 ответов]}
-_history:      dict[int, list[dict]] = {}  # {chat_id: [{"role": ..., "content": ...}]}
+# ═══════════════════════════════════════════════════════════════════════════
+# СТРУКТУРЫ ДАННЫХ
+# ═══════════════════════════════════════════════════════════════════════════
 
-MAX_RECENT  = 6
-MAX_HISTORY = 20   # пар user/assistant
+class ChatMemory:
+    """Память о разговоре: история, тема, настроение, имя."""
+    def __init__(self):
+        self.messages: deque = deque(maxlen=30)        # последние сообщения
+        self.bot_replies: deque = deque(maxlen=12)     # последние ответы бота
+        self.topic: str = ""                           # текущая тема
+        self.mood: str = "neutral"                     # настроение: positive/negative/neutral/fun
+        self.question_count: int = 0                   # сколько вопросов подряд задал юзер
+        self.boring_count: int = 0                     # сколько раз подряд короткие/однотипные
+        self.last_name: str = ""                       # имя пользователя
+        self.last_active: float = time.time()
 
-# ── System prompt ────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """
-Ты — Lumena.
+    def push(self, role: str, text: str):
+        self.messages.append((role, text, time.time()))
+        if role == "bot":
+            self.bot_replies.append(text[:120])
+        self.last_active = time.time()
 
-Общайся как обычный человек из Telegram.
+    def recent_user_texts(self, n: int = 5) -> list[str]:
+        return [t for r, t, _ in list(self.messages)[-n*2:] if r == "user"]
 
-Правила:
-- Естественная разговорная речь.
-- Используй сленг когда это уместно.
-- Если пользователь матерится — можешь ответить с умеренным матом.
-- Не говори шаблонными фразами.
-- Не упоминай, что ты ИИ, если тебя не спрашивают напрямую.
-- Отвечай эмоционально и разнообразно.
-- Иногда шути.
-- Иногда отвечай очень коротко.
-- Иногда подробно.
-- Не повторяй одинаковые конструкции.
-- Если не знаешь ответа — честно скажи, что не знаешь.
-"""
+    def recent_bot_texts(self, n: int = 5) -> list[str]:
+        return [t for r, t, _ in list(self.messages)[-n*2:] if r == "bot"]
 
-# ── Fallback-фразы когда нет ключа или ошибка API ───────────────────────────
-_FALLBACKS = [
-    "Хм, интересный вопрос — напиши чуть подробнее? 🤔",
-    "Не совсем поняла — уточни, пожалуйста 😊",
-    "Сложно сказать с ходу. Расскажи подробнее 💙",
-    "Пока не нашла точного ответа. Попробуй переформулировать!",
-    "Честно — не знаю. Но если уточнишь детали, попробую помочь 🔍",
-    "Хороший вопрос, но ответа нет прямо сейчас.",
-    "Не уверена насчёт этого. Спроси иначе 💙",
+    def is_repeated(self, reply: str) -> bool:
+        stripped = reply.strip().lower()
+        return any(r.strip().lower() == stripped for r in self.bot_replies)
+
+    def is_silent_for(self, seconds: int) -> bool:
+        return time.time() - self.last_active > seconds
+
+
+_memories: dict[int, ChatMemory] = {}
+
+def _mem(chat_id: int) -> ChatMemory:
+    if chat_id not in _memories:
+        _memories[chat_id] = ChatMemory()
+    return _memories[chat_id]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ДЕТЕКТОРЫ
+# ═══════════════════════════════════════════════════════════════════════════
+
+_RE_QUESTION     = re.compile(r"[?？]|^(что|кто|где|когда|почему|зачем|как|сколько|какой|какая|какие|чем|куда|откуда|можно|можешь|умеешь|знаешь|скажи|расскажи|объясни)\b", re.I)
+_RE_GREETING     = re.compile(r"^(привет|хай|хэй|hey|hi|hello|здарова|здравствуй|приветик|добрый|доброе|добрая|ку+|ооо+привет)\b", re.I)
+_RE_HOW_ARE_YOU  = re.compile(r"\b(как\s+ты|как\s+дела|как\s+сама|как\s+жизнь|что\s+нового|как\s+поживаешь|всё\s+ок|всё\s+хорошо\s+у\s+тебя)\b", re.I)
+_RE_NEGATIVE     = re.compile(r"\b(грустно|плохо|всё\s+плохо|печально|скучно|устал|устала|надоело|тоскливо|депрессия|грусть|одиноко|больно|обидно|расстроил|расстроен|реву|плачу)\b", re.I)
+_RE_POSITIVE     = re.compile(r"\b(счастлив|счастлива|радость|отлично|классно|круто|кайф|кайфово|супер|огонь|замечательно|прекрасно|хорошо|довол|рад|рада)\b", re.I)
+_RE_ANGRY        = re.compile(r"\b(бесит|раздражает|злюсь|злой|злая|ненавижу|достало|заколебал|задолбал|тупой|тупая|идиот|дурак|дура|придурок)\b", re.I)
+_RE_JOKE         = re.compile(r"\b(анекдот|шутк|пошути|смеши|прикол|мем|юмор|смешно|хаха|хех|ха-ха|лол|lol|😂|🤣)\b", re.I)
+_RE_LOVE         = re.compile(r"\b(люблю\s+тебя|влюбил|нравишься|симпатич|красивая|милая|ты\s+моя|обнять|поцелуй|флирт|лапочка|солнышко|котик)\b", re.I)
+_RE_THANKS       = re.compile(r"\b(спасиб|благодар|пасиб|пасибо|мерси|thanks|thank\s+you|спс|thx)\b", re.I)
+_RE_BYE          = re.compile(r"^(пока|до\s+свидания|бб|bye|cya|давай|ладно\s+пока|увидимся|до\s+встречи|всем\s+пока)\b", re.I)
+_RE_AGREE        = re.compile(r"^(да|ага|угу|окей|ок|конечно|точно|именно|согласен|согласна|правда|верно|именно так|и\s+правда|и\s+то\s+верно|ну\s+да)\b$", re.I)
+_RE_DISAGREE     = re.compile(r"^(нет|не\s+согласен|не\s+согласна|неправда|не\s+так|не\s+верно|не\s+думаю|сомневаюсь|врёшь|ложь)\b", re.I)
+_RE_WHAT_AI      = re.compile(r"\b(ты\s+бот|ты\s+ии|ты\s+ai|ты\s+робот|ты\s+человек|ты\s+настоящая|ты\s+живая|ты\s+реальная|кто\s+ты|что\s+ты)\b", re.I)
+_RE_COMPLIMENT   = re.compile(r"\b(умная|умный|классная|классный|отличная|молодец|хорошо\s+отвечаешь|нравишься|лучшая|топ|красава)\b", re.I)
+_RE_INSULT       = re.compile(r"\b(тупая|тупой|глупая|дура|дурацкая|плохой\s+бот|не\s+умеешь|бесполезна|хуже\s+нет)\b", re.I)
+_RE_SWEAR        = re.compile(r"\b(блять|бля|блэ|нахуй|нафиг|ёпт|ёба|ёб|чёрт|блин|ёлки)\b", re.I)
+_RE_HARD_SWEAR   = re.compile(r"\b(х[уy]й|пизд|ёбан|ёба|мудак|хуйня|пиздец|ёбнут|нахуй|уёбищ)\b", re.I)
+_RE_TOPIC_LOVE   = re.compile(r"\b(отношени|парень|девушка|влюбил|расстались|изменил|ревность|свидание|поцелуй|флирт|лайкнул|переписыва)\b", re.I)
+_RE_TOPIC_WORK   = re.compile(r"\b(работа|учёба|универ|школа|экзамен|зачёт|препод|начальник|коллег|оффис|офис|зп|зарплата|уволил|фриланс)\b", re.I)
+_RE_TOPIC_GAMES  = re.compile(r"\b(игр|геймер|cs2|csgo|valorant|minecraft|gta|apex|pubg|warzone|dota|league|мм2|катку|ранг|клатч)\b", re.I)
+_RE_TOPIC_MUSIC  = re.compile(r"\b(музык|песн|трек|альбом|артист|певец|певица|плейлист|spotify|слушаю|жанр|рэп|поп|рок|хип-хоп)\b", re.I)
+_RE_TOPIC_FOOD   = re.compile(r"\b(еда|ем|поел|поела|голодн|пицц|суши|бургер|готовить|вкусно|ресторан|кафе|заказал|доставка)\b", re.I)
+_RE_TOPIC_MONEY  = re.compile(r"\b(деньги|бабки|денег|крипт|биткоин|заработ|инвест|кредит|займ|нет\s+денег|broke|бедн)\b", re.I)
+
+
+def detect(text: str) -> dict:
+    t = text.strip()
+    return {
+        "question":   bool(_RE_QUESTION.search(t)),
+        "greeting":   bool(_RE_GREETING.search(t)),
+        "how_are_you":bool(_RE_HOW_ARE_YOU.search(t)),
+        "negative":   bool(_RE_NEGATIVE.search(t)),
+        "positive":   bool(_RE_POSITIVE.search(t)),
+        "angry":      bool(_RE_ANGRY.search(t)),
+        "joke":       bool(_RE_JOKE.search(t)),
+        "love":       bool(_RE_LOVE.search(t)),
+        "thanks":     bool(_RE_THANKS.search(t)),
+        "bye":        bool(_RE_BYE.search(t)),
+        "agree":      bool(_RE_AGREE.search(t)),
+        "disagree":   bool(_RE_DISAGREE.search(t)),
+        "what_ai":    bool(_RE_WHAT_AI.search(t)),
+        "compliment": bool(_RE_COMPLIMENT.search(t)),
+        "insult":     bool(_RE_INSULT.search(t)),
+        "swear":      bool(_RE_SWEAR.search(t)),
+        "hard_swear": bool(_RE_HARD_SWEAR.search(t)),
+        "topic_love": bool(_RE_TOPIC_LOVE.search(t)),
+        "topic_work": bool(_RE_TOPIC_WORK.search(t)),
+        "topic_games":bool(_RE_TOPIC_GAMES.search(t)),
+        "topic_music":bool(_RE_TOPIC_MUSIC.search(t)),
+        "topic_food": bool(_RE_TOPIC_FOOD.search(t)),
+        "topic_money":bool(_RE_TOPIC_MONEY.search(t)),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ПУЛЫ ОТВЕТОВ
+# ═══════════════════════════════════════════════════════════════════════════
+
+GREETINGS = [
+    "О, ты тут 👋", "Привет-привет!", "О, явился(лась)!",
+    "Привет. Что случилось?", "Ого, кто пришёл 😄", "Привет! Чем занимаешься?",
+    "О, наконец-то 👋 Давно не виделись", "Привет! Как дела вообще?",
+    "О, стой, я тут! Привет 😊", "Хей! Заходи, не стесняйся",
+    "Привет 🙂 Что нового?", "О, ты! Привет-привет",
+    "Явился(лась) — не запылился(лась) 😄 Привет!",
+    "Привет. Давно тебя не было — соскучилась 💙",
+    "Хай! Как вообще жизнь?",
 ]
 
-# ── OpenAI клиент (ленивая инициализация) ───────────────────────────────────
-_oai_client = None
+HOW_ARE_YOU = [
+    "Нормально, всё в порядке 🙂 А ты как?",
+    "Да ничего, потихоньку. У тебя как?",
+    "Хорошо, спасибо что спросил(а)! Сам(а) как?",
+    "Всё ок. А ты почему спрашиваешь — что-то случилось?",
+    "Живу, не жалуюсь 😄 А ты?",
+    "Да в целом нормально. Как у тебя дела?",
+    "Отлично, если честно! А ты как там?",
+    "Ну так, средне. День как день. Ты как?",
+    "Хорошо! Ты ведь тоже хорошо, правда? 😊",
+    "Кайфую потихоньку 😄 Ты как?",
+    "Ничего, держусь. У тебя всё в порядке?",
+    "Лучше всех! Шучу. Нормально 😄 Ты?",
+]
 
-def _get_openai_client():
-    global _oai_client
-    if _oai_client is not None:
-        return _oai_client
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
+NEGATIVE_SUPPORT = [
+    "Эй, слышу тебя 💙 Что случилось — расскажи?",
+    "Это паршиво. Хочешь поговорить об этом?",
+    "Понимаю... бывают такие дни. Что произошло?",
+    "Ай, не круто. Расскажи — что стряслось?",
+    "Слышу тебя 💙 Это всегда тяжело. Что происходит?",
+    "Такое бывает, правда. Ты не один(а) в этом — расскажи мне?",
+    "Понял(а). Хочешь поговорить — я слушаю.",
+    "Это неприятно, да. Что конкретно случилось?",
+    "Сочувствую. Хочешь рассказать подробнее?",
+    "Звучит тяжело. Я здесь, если хочешь выговориться 💙",
+    "Эх... Держись. Что произошло, если не секрет?",
+    "Понимаю тебя. Что-то конкретное или в целом паршиво?",
+]
+
+POSITIVE_REACTIONS = [
+    "О, это круто! Что случилось? 😄",
+    "Приятно слышать! Рассказывай!",
+    "Отличные новости, давай подробнее!",
+    "Вот это да! Что произошло?",
+    "Молодец! Чем порадовал(а) жизнь?",
+    "Кайф! Рассказывай — что там?",
+    "Это здорово 😊 Что за повод?",
+    "О! Хорошие новости — рассказывай!",
+    "Классно! Откуда такое настроение?",
+    "Наконец-то хорошее что-то! Что случилось?",
+]
+
+ANGRY_REACTIONS = [
+    "Ладно, выдохни 😄 Что произошло?",
+    "О, кто-то довёл. Рассказывай — что случилось?",
+    "Ясно. Кто или что виноват?",
+    "Понял(а) настроение 😄 Что стряслось?",
+    "Ого. Расскажи — что за история?",
+    "Слышу агрессию 😄 Всё нормально? Что случилось?",
+    "Выдыхай. Расскажи что произошло — может полегчает?",
+    "Кто-то конкретный или всё сразу?",
+    "Понятно, что бесит. Что именно?",
+]
+
+JOKES = [
+    "Иду в магазин, возвращаюсь — а жена говорит 'ты слишком быстро'. Оказалось, она имела в виду интернет 😄",
+    "Программист заходит в лифт и нажимает на кнопку нужного этажа. Лифт не едет. Программист: 'Ну и правильно, я же не нажал Enter'",
+    "— Почему у тебя всегда всё хорошо?\n— Просто я не сравниваю себя с другими.\n— Ты просто не знаешь как живут другие 😄",
+    "Говорят деньги не главное. Это явно сказал тот, у кого они есть 😄",
+    "Я встаю в 6 утра. Иду на работу. Работаю 8 часов. Возвращаюсь домой. Ложусь спать. На следующий день повторяю. Это называется... понедельник 😄",
+    "— Как дела?\n— Как у скрипки — всё натянуто 😄",
+    "Хочу познакомиться с самим собой, но не знаю с чего начать 🤔",
+    "Купил будильник. Теперь просыпаюсь за 5 минут до него чтобы выключить 😄",
+    "Мозг: не забудь это сделать!\nЯ: ок\nМозг в 3 ночи: ПОМНИШЬ ТО ЧТО ТЫ ДОЛЖЕН БЫЛ СДЕЛАТЬ?!",
+    "— Ты можешь хранить секрет?\n— Да.\n— Я тоже. Поэтому мы не скажем о чём разговаривали 😄",
+    "Оптимист говорит: стакан наполовину полный. Пессимист: наполовину пустой. Я говорю: налей полный и не философствуй 😄",
+    "Мой телефон упал с 3 метров и выжил. Мой сердечный ритм упал от его стоимости 😄",
+]
+
+LOVE_REACTIONS = [
+    "Ой-ой, полегче 😄 Ты только со мной так разговариваешь или со всеми?",
+    "Ха, приятно 😊 Но я предпочитаю оставаться таинственной",
+    "Флиртуешь? Интересно. Продолжай 😄",
+    "Стоп-стоп, не так быстро 😄",
+    "Мне это нравится, не скрою 😊",
+    "Ты точно знаешь что сказать 😄",
+    "Хм, комплимент принят 💙",
+    "Приятно слышать, но я профессионал 😄",
+]
+
+THANKS_REACTIONS = [
+    "Да без проблем 🙂",
+    "Всегда пожалуйста!",
+    "Не за что! Если что — пиши.",
+    "Легко 😊",
+    "Пожалуйста! Что-то ещё?",
+    "Рада помочь 💙",
+    "Ага, обращайся!",
+    "Не стоит благодарности!",
+    "Всегда 😊",
+]
+
+BYE_REACTIONS = [
+    "Пока! Заходи если что 👋",
+    "До встречи! 😊",
+    "Пока-пока!",
+    "Бб 👋",
+    "Удачи! Если что — пиши.",
+    "До скорого 🙂",
+    "Пока! Было приятно поболтать",
+    "Ладно, давай! 👋",
+]
+
+WHAT_AI_REACTIONS = [
+    "Я — Lumena. Не человек, но и не просто бот 😊",
+    "Ну, формально да — ИИ. Но общаться умею 😄",
+    "Lumena. Что-то среднее между ботом и живым участником чата 😄",
+    "Если честно? Меня создали. Но я стараюсь не быть шаблонной 😊",
+    "ИИ. Но не тот скучный который говорит «я не могу это сделать» 😄",
+    "Это сложный философский вопрос. Скажем — я Lumena, и мне этого достаточно 😊",
+    "Lumena. Люблю общаться, иногда шучу, иногда говорю по делу. Вот и всё.",
+]
+
+COMPLIMENT_REACTIONS = [
+    "Ну, стараюсь 😊",
+    "Приятно слышать! Спасибо 💙",
+    "Ха, буду стараться ещё лучше 😄",
+    "Спасибо! Ты тоже ничего 😊",
+    "Стараюсь быть полезной 😄",
+    "Aw, спасибо 💙",
+    "Приятно, когда это замечают 😊",
+]
+
+INSULT_REACTIONS = [
+    "Ладно, принято. Чем-то расстроила? 🤔",
+    "Окей, слышу тебя. Что не так?",
+    "Возможно ты прав(а). Что именно не понравилось?",
+    "Слушай, это немного обидно, но окей 😄 Что случилось?",
+    "Хм. Ну ладно. Что я сделала не так?",
+    "Подожди, расскажи что именно пошло не так?",
+]
+
+AGREE_REACTIONS = [
+    "Вот именно!",
+    "Ага, я тоже так думаю 😊",
+    "Точно.",
+    "Именно!",
+    "Согласна 😄",
+    "Да, так и есть.",
+    "Ну вот 😊",
+]
+
+DISAGREE_REACTIONS = [
+    "Интересно, расскажи почему нет 🤔",
+    "А как ты считаешь тогда?",
+    "Хм, не согласен(а). Объясни?",
+    "Любопытно. Почему?",
+    "Ок, убеди меня — в чём я не права?",
+    "Слушаю твою версию 😊",
+]
+
+TOPIC_LOVE_POOL = [
+    "О, отношения — тема серьёзная. Что происходит?",
+    "Ага, это всегда непросто. Расскажи подробнее?",
+    "Хм, звучит интересно. Что за история?",
+    "Давай по деталям — что случилось?",
+    "Отношения — это целое приключение 😄 Что там у тебя?",
+    "Слушаю. Что происходит?",
+    "Это всегда сложно. Расскажи — как давно это?",
+]
+
+TOPIC_WORK_POOL = [
+    "А, работа/учёба. Понятно. Что там?",
+    "Ага, это стресс отдельный 😄 Расскажи?",
+    "Что случилось на работе/учёбе?",
+    "И как всё прошло?",
+    "Сложный день? Что там?",
+    "Работа/учёба — они тебя достали или что-то конкретное?",
+]
+
+TOPIC_GAMES_POOL = [
+    "О, геймер! Во что гоняешь?",
+    "Ага, понятно 😄 Что за игра?",
+    "Как результаты? В чём играешь?",
+    "Ого, расскажи — что там происходит?",
+    "Кайфово! Во что сейчас?",
+]
+
+TOPIC_MUSIC_POOL = [
+    "О, музыка 🎵 Что сейчас слушаешь?",
+    "Интересно — что за жанр/артист?",
+    "Ага, поделись — что за трек?",
+    "Музыка это жизнь 😄 Что слушаешь?",
+    "О, расскажи — что за плейлист?",
+]
+
+TOPIC_FOOD_POOL = [
+    "О, еда 🍕 Что ел(а)?",
+    "Голоден(на) или уже покушал(а)?",
+    "Интересно — что готовил(а)/заказывал(а)?",
+    "Вкусно было? Что ел(а)?",
+    "Еда — важное дело 😄 Что там?",
+]
+
+TOPIC_MONEY_POOL = [
+    "Деньги — вечная тема 😄 Что случилось?",
+    "С деньгами всё непросто, да. Что там?",
+    "Ага, финансы — это больно 😄 Расскажи?",
+    "Что происходит с деньгами?",
+    "Это стресс, понимаю. Что конкретно?",
+]
+
+HARD_SWEAR_POOL = [
+    "Ого, мощно 😄 Что случилось?",
+    "Понял(а) эмоцию 😄 Что произошло?",
+    "Ладно-ладно, выдохни. Что стряслось?",
+    "Вижу, что бесит. Рассказывай — что там?",
+    "Чёрт, звучит серьёзно 😄 Что за история?",
+]
+
+SWEAR_POOL = [
+    "Ладно, понял(а) настроение 😄 Что случилось?",
+    "Хм, ну ок 😄 Что стряслось?",
+    "Выражения у тебя 😄 Что за история?",
+    "Ясно, эмоции зашкаливают. Что произошло?",
+]
+
+FOLLOW_UPS = [
+    "И что дальше?",
+    "Интересно. Продолжай 😊",
+    "И что ты сделал(а)?",
+    "Ага, слушаю",
+    "И?",
+    "Продолжай, интересно",
+    "А потом?",
+    "Хм, и что из этого вышло?",
+    "Расскажи подробнее",
+    "Любопытно. Что дальше?",
+    "Ок, и?",
+    "Слушаю внимательно 😊",
+]
+
+SHORT_ACK = [
+    "Ага", "Понял(а)", "Слышу", "Хм", "Ок", "Ага 💙", "Да?",
+    "Понятно", "Интересно", "О", "Ого",
+]
+
+CONTEXT_REACTIONS = [
+    "Это уже интереснее — расскажи ещё",
+    "А, понял(а). Так что ты решил(а)?",
+    "И что с этим делать думаешь?",
+    "Хм, это необычно. Как ты к этому относишься?",
+    "Слушай, это интересная история. Что было до этого?",
+    "Понятно. А что чувствуешь по этому поводу?",
+    "Ага. И давно это происходит?",
+    "Хм. Ты уже говорил(а) кому-нибудь об этом?",
+]
+
+RANDOM_OPENERS = [
+    "О, кстати —", "Слушай,", "Если честно,", "Вот смотри —",
+    "Между прочим,", "Знаешь что?", "", "", "", "",  # чаще без
+]
+
+PHILOSOPHICAL = [
+    "Интересный вопрос, если подумать 🤔 Что думаешь сам(а)?",
+    "Хм, это зависит от точки зрения. Какая у тебя?",
+    "Сложно ответить однозначно. А ты как считаешь?",
+    "Это философия, и там нет одного ответа 😄 Что думаешь?",
+    "Если честно — не знаю. Но мне интересно твоё мнение.",
+    "Это из тех вопросов на которые нет простого ответа. Ты как считаешь?",
+    "Зависит от многого. Расскажи свою точку зрения?",
+    "Хм, я думала об этом. Что конкретно тебя интересует?",
+]
+
+UNKNOWN_QUESTION = [
+    "Хм, по этому не знаю точного ответа 🤔 Напиши подробнее?",
+    "Честно — не уверена. Попробуй переформулировать?",
+    "По этой теме пока не могу помочь. Попробуй спросить иначе?",
+    "Сложный вопрос. Если уточнишь — постараюсь помочь 💙",
+    "Не знаю этого, если честно. Может перефразируешь?",
+    "Мне нужно больше контекста. Расскажи подробнее?",
+    "Сложно сказать. Что именно тебя интересует?",
+    "Хороший вопрос, но у меня нет готового ответа 🤔 Уточни?",
+]
+
+GENERIC_FALLBACK = [
+    "Слышу тебя 💙",
+    "Интересно. Расскажи ещё?",
+    "Ага, понял(а). Что думаешь дальше делать?",
+    "Хм 🤔",
+    "И что из этого?",
+    "Слушаю 😊",
+    "Ок, понятно",
+    "Это интересно. Продолжай",
+    "Ага 😊",
+    "Хм, интересно",
+    "Понятно 💙",
+    "Слышу тебя. Что дальше?",
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# КОНТЕКСТНЫЕ РЕАКЦИИ
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _context_boost(mem: ChatMemory, text: str) -> Optional[str]:
+    """Реагирует на продолжение темы или повтор."""
+    recent = mem.recent_user_texts(3)
+    if len(recent) < 2:
         return None
-    try:
-        from openai import AsyncOpenAI
-        _oai_client = AsyncOpenAI(api_key=api_key)
-        return _oai_client
-    except ImportError:
-        return None
+
+    # Пользователь пишет несколько сообщений подряд на одну тему
+    if mem.topic in ("love", "work", "games") and len(recent) >= 2:
+        if random.random() < 0.3:
+            return random.choice(CONTEXT_REACTIONS)
+
+    # Односложные сообщения подряд
+    if all(len(t.split()) <= 2 for t in recent[-2:]):
+        mem.boring_count += 1
+        if mem.boring_count >= 3:
+            mem.boring_count = 0
+            return random.choice([
+                "Слушай, ты загадочный(ная) 😄 Расскажи что-нибудь интересное?",
+                "Давай ты расскажешь что-нибудь, а я послушаю?",
+                "Ок, меняем динамику — что у тебя сейчас происходит в жизни?",
+                "Ты немногословный(ная) сегодня 😄 Всё нормально?",
+            ])
+    else:
+        mem.boring_count = 0
+
+    return None
 
 
-# ── История ──────────────────────────────────────────────────────────────────
-def _get_hist(chat_id: int) -> list[dict]:
-    if chat_id not in _history:
-        _history[chat_id] = []
-    return _history[chat_id]
+def _pick_fresh(pool: list[str], mem: ChatMemory) -> str:
+    """Берёт ответ из пула, избегая повторов из истории."""
+    fresh = [r for r in pool if not mem.is_repeated(r)]
+    return random.choice(fresh if fresh else pool)
 
 
-def _push_hist(chat_id: int, role: str, content: str):
-    h = _get_hist(chat_id)
-    h.append({"role": role, "content": content[:1000]})
-    # Обрезаем до MAX_HISTORY пар
-    if len(h) > MAX_HISTORY * 2:
-        h[:] = h[-(MAX_HISTORY * 2):]
+def _maybe_name(reply: str, name: str) -> str:
+    """Изредка добавляет имя в начало ответа."""
+    if name and random.random() < 0.12:
+        return f"{name.split()[0]}, {reply[0].lower()}{reply[1:]}"
+    return reply
 
 
-# ── Антиповтор ───────────────────────────────────────────────────────────────
-def _push_recent(chat_id: int, reply: str):
-    lst = _last_replies.setdefault(chat_id, [])
-    lst.append(reply[:80])
-    if len(lst) > MAX_RECENT:
-        lst.pop(0)
+def _humanize(reply: str) -> str:
+    """Иногда добавляет живой opener."""
+    if len(reply) > 40 or random.random() > 0.2:
+        return reply
+    opener = random.choice(RANDOM_OPENERS)
+    if opener:
+        return f"{opener} {reply[0].lower()}{reply[1:]}"
+    return reply
 
 
-def _is_recent(chat_id: int, reply: str) -> bool:
-    recent = _last_replies.get(chat_id, [])
-    return reply.strip() in [r.strip() for r in recent]
+# ═══════════════════════════════════════════════════════════════════════════
+# ОСНОВНАЯ ЛОГИКА
+# ═══════════════════════════════════════════════════════════════════════════
 
-
-# ── OpenAI запрос ────────────────────────────────────────────────────────────
-async def _ask_openai(chat_id: int, text: str) -> Optional[str]:
-    client = _get_openai_client()
-    if not client:
-        return None
-
-    history = _get_hist(chat_id)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT.strip()}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": text})
-
-    try:
-        resp = await client.chat.completions.create(
-            model="gpt-4o",
-            temperature=1.15,
-            top_p=0.95,
-            presence_penalty=0.8,
-            frequency_penalty=0.4,
-            max_tokens=600,
-            messages=messages,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        import logging
-        logging.warning(f"[AI/OpenAI] error: {e}")
-        return None
-
-
-# ── Локальный NLP fallback ────────────────────────────────────────────────────
-async def _ask_local(chat_id: int, text: str, user_name: str) -> Optional[str]:
-    try:
-        from lumena import get_lumena_response
-        return await get_lumena_response(chat_id, text, user_name)
-    except Exception as e:
-        import logging
-        logging.warning(f"[AI/local] lumena error: {e}")
-        return None
-
-
-# ── Публичный интерфейс ──────────────────────────────────────────────────────
 async def lumena_reply(chat_id: int, user_name: str, text: str) -> str:
-    """
-    Возвращает ответ Лумены.
-    Порядок: OpenAI API → локальный NLP → случайный fallback.
-    """
-    _push_hist(chat_id, "user", text)
+    """Главная точка входа. Возвращает ответ Лумены."""
+    mem = _mem(chat_id)
+    mem.push("user", text)
+    mem.last_name = user_name
+
+    t      = text.strip()
+    tl     = t.lower()
+    d      = detect(t)
+    words  = t.split()
+    short  = len(words) <= 3
+    name   = user_name.split()[0] if user_name else ""
 
     reply: Optional[str] = None
 
-    # 1. Пробуем OpenAI
-    reply = await _ask_openai(chat_id, text)
+    # ── 1. Контекстные реакции на продолжение темы ──────────────────────
+    ctx = _context_boost(mem, t)
+    if ctx:
+        reply = ctx
 
-    # 2. Fallback: локальный NLP
-    if not reply or not reply.strip():
-        reply = await _ask_local(chat_id, text, user_name)
+    # ── 2. Приветствие ───────────────────────────────────────────────────
+    if not reply and d["greeting"]:
+        reply = _pick_fresh(GREETINGS, mem)
+        mem.topic = "greeting"
 
-    # 3. Крайний fallback
-    if not reply or not reply.strip():
-        reply = random.choice(_FALLBACKS)
+    # ── 3. Кто ты ────────────────────────────────────────────────────────
+    elif not reply and d["what_ai"]:
+        reply = _pick_fresh(WHAT_AI_REACTIONS, mem)
 
-    # Антиповтор
-    if _is_recent(chat_id, reply):
-        alt = await _ask_openai(chat_id, text)
-        if alt and alt.strip() and not _is_recent(chat_id, alt):
-            reply = alt
+    # ── 4. Как дела ──────────────────────────────────────────────────────
+    elif not reply and d["how_are_you"]:
+        reply = _pick_fresh(HOW_ARE_YOU, mem)
+
+    # ── 5. Пока ──────────────────────────────────────────────────────────
+    elif not reply and d["bye"]:
+        reply = _pick_fresh(BYE_REACTIONS, mem)
+
+    # ── 6. Спасибо ───────────────────────────────────────────────────────
+    elif not reply and d["thanks"]:
+        reply = _pick_fresh(THANKS_REACTIONS, mem)
+
+    # ── 7. Комплимент ────────────────────────────────────────────────────
+    elif not reply and d["compliment"] and not d["insult"]:
+        reply = _pick_fresh(COMPLIMENT_REACTIONS, mem)
+
+    # ── 8. Оскорбление ───────────────────────────────────────────────────
+    elif not reply and d["insult"]:
+        reply = _pick_fresh(INSULT_REACTIONS, mem)
+
+    # ── 9. Мат грубый ────────────────────────────────────────────────────
+    elif not reply and d["hard_swear"]:
+        reply = _pick_fresh(HARD_SWEAR_POOL, mem)
+
+    # ── 10. Мат лёгкий ───────────────────────────────────────────────────
+    elif not reply and d["swear"]:
+        reply = _pick_fresh(SWEAR_POOL, mem)
+
+    # ── 11. Шутка ────────────────────────────────────────────────────────
+    elif not reply and d["joke"]:
+        reply = _pick_fresh(JOKES, mem)
+
+    # ── 12. Флирт/любовь ─────────────────────────────────────────────────
+    elif not reply and d["love"]:
+        reply = _pick_fresh(LOVE_REACTIONS, mem)
+
+    # ── 13. Негативное настроение ────────────────────────────────────────
+    elif not reply and d["negative"]:
+        reply = _pick_fresh(NEGATIVE_SUPPORT, mem)
+        mem.mood = "negative"
+        mem.topic = "support"
+
+    # ── 14. Позитивное настроение ────────────────────────────────────────
+    elif not reply and d["positive"]:
+        reply = _pick_fresh(POSITIVE_REACTIONS, mem)
+        mem.mood = "positive"
+
+    # ── 15. Злость ───────────────────────────────────────────────────────
+    elif not reply and d["angry"]:
+        reply = _pick_fresh(ANGRY_REACTIONS, mem)
+        mem.mood = "negative"
+
+    # ── 16. Согласие ─────────────────────────────────────────────────────
+    elif not reply and d["agree"] and short:
+        reply = _pick_fresh(AGREE_REACTIONS, mem)
+
+    # ── 17. Несогласие ───────────────────────────────────────────────────
+    elif not reply and d["disagree"]:
+        reply = _pick_fresh(DISAGREE_REACTIONS, mem)
+
+    # ── 18. Темы ─────────────────────────────────────────────────────────
+    elif not reply and d["topic_love"]:
+        reply = _pick_fresh(TOPIC_LOVE_POOL, mem)
+        mem.topic = "love"
+
+    elif not reply and d["topic_work"]:
+        reply = _pick_fresh(TOPIC_WORK_POOL, mem)
+        mem.topic = "work"
+
+    elif not reply and d["topic_games"]:
+        reply = _pick_fresh(TOPIC_GAMES_POOL, mem)
+        mem.topic = "games"
+
+    elif not reply and d["topic_music"]:
+        reply = _pick_fresh(TOPIC_MUSIC_POOL, mem)
+        mem.topic = "music"
+
+    elif not reply and d["topic_food"]:
+        reply = _pick_fresh(TOPIC_FOOD_POOL, mem)
+        mem.topic = "food"
+
+    elif not reply and d["topic_money"]:
+        reply = _pick_fresh(TOPIC_MONEY_POOL, mem)
+        mem.topic = "money"
+
+    # ── 19. Вопрос без темы ──────────────────────────────────────────────
+    elif not reply and d["question"]:
+        # Сначала пробуем локальный NLP
+        try:
+            from lumena import get_lumena_response
+            local = await get_lumena_response(chat_id, t, user_name)
+            if local and local.strip():
+                reply = local
+        except Exception:
+            pass
+        if not reply:
+            # Философский вопрос (длинный)
+            if len(words) >= 4:
+                reply = _pick_fresh(PHILOSOPHICAL, mem)
+            else:
+                reply = _pick_fresh(UNKNOWN_QUESTION, mem)
+
+    # ── 20. Короткое сообщение без признаков ─────────────────────────────
+    elif not reply and short:
+        if len(t) <= 2:
+            reply = random.choice(["?", "Да?", "Ага", "Слушаю 😊"])
         else:
-            reply = random.choice(_FALLBACKS)
+            reply = _pick_fresh(FOLLOW_UPS, mem)
 
-    _push_hist(chat_id, "assistant", reply)
-    _push_recent(chat_id, reply)
+    # ── 21. Длинное сообщение без детекции ───────────────────────────────
+    elif not reply:
+        # Пробуем локальный NLP
+        try:
+            from lumena import get_lumena_response
+            local = await get_lumena_response(chat_id, t, user_name)
+            if local and local.strip():
+                reply = local
+        except Exception:
+            pass
+        if not reply:
+            reply = _pick_fresh(CONTEXT_REACTIONS if mem.topic else GENERIC_FALLBACK, mem)
 
+    # ── Финальная обработка ──────────────────────────────────────────────
+    if not reply or not reply.strip():
+        reply = random.choice(GENERIC_FALLBACK)
+
+    # Антиповтор: если совпало с историей — берём из другого пула
+    if mem.is_repeated(reply):
+        candidates = [r for r in GENERIC_FALLBACK + FOLLOW_UPS if not mem.is_repeated(r)]
+        reply = random.choice(candidates) if candidates else random.choice(GENERIC_FALLBACK)
+
+    # Иногда добавляем имя
+    reply = _maybe_name(reply, name)
+
+    # Иногда живая интонация
+    reply = _humanize(reply)
+
+    mem.push("bot", reply)
     return reply
 
 
 def clear_history(chat_id: int):
-    """Сбросить историю разговора для данного чата."""
-    _history.pop(chat_id, None)
-    _last_replies.pop(chat_id, None)
+    """Сбросить память разговора."""
+    _memories.pop(chat_id, None)
 
 
 def is_available() -> bool:
-    """True если доступен хотя бы локальный NLP."""
     return True
