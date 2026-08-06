@@ -808,29 +808,33 @@ def _fmt_role(role: str) -> str:
     return f"{icon} {name}"
 
 
-async def _promote_in_chat(user_id: int, role: str, chat_id: int | None = None) -> tuple[bool, str]:
+async def _promote_in_chat(
+    user_id: int, role: str, chat_id: int | None = None
+) -> tuple[bool, bool, str]:
     """Выдаёт права администратора в чате по роли.
-    Возвращает (успех, текст_ошибки)."""
+    Возвращает (promote_ok, title_ok, текст_ошибки)."""
     if chat_id is None:
         chat_id = _ank.get_pub_chat()
     if not chat_id or user_id is None:
-        return False, "чат не настроен"
+        return False, False, "чат не настроен"
     perms = _ROLE_PERMISSIONS.get(role, {})
     try:
         await bot.promote_chat_member(chat_id, user_id, **perms)
-        # Кастомный тег — название роли
-        custom_title = ROLE_NAMES.get(role, role)
-        try:
-            await bot.set_chat_administrator_custom_title(
-                chat_id, user_id, custom_title
-            )
-        except Exception:
-            pass   # кастомный тег — не критично
-        return True, ""
     except Exception as e:
         err = str(e)
-        print(f"⚠️ _promote_in_chat({user_id}, {role}, chat={chat_id}): {err}")
-        return False, err
+        print(f"⚠️ promote_chat_member({user_id}, {role}, chat={chat_id}): {err}")
+        return False, False, err
+    # Кастомный тег — название роли (максимум 16 символов по ограничению Telegram)
+    custom_title = ROLE_NAMES.get(role, role)[:16]
+    try:
+        await bot.set_chat_administrator_custom_title(chat_id, user_id, custom_title)
+        title_ok = True
+        title_err = ""
+    except Exception as e:
+        title_err = str(e)
+        title_ok = False
+        print(f"⚠️ set_custom_title({user_id}, '{custom_title}', chat={chat_id}): {title_err}")
+    return True, title_ok, title_err
 
 
 async def _demote_in_chat(user_id: int, chat_id: int | None = None) -> tuple[bool, str]:
@@ -1001,36 +1005,44 @@ async def cmd_set_role(msg: Message, command=None):
         promoted_uid = target_id
 
     chat_ok = False
+    title_ok = False
     chat_err = ""
     if promoted_uid:
         # Промоут в текущем чате (где выдана команда)
-        chat_ok, chat_err = await _promote_in_chat(promoted_uid, role, msg.chat.id)
-        # Если текущий чат — не pub_chat, попробуем и там
+        chat_ok, title_ok, chat_err = await _promote_in_chat(promoted_uid, role, msg.chat.id)
+        # Если текущий чат — не pub_chat, промоутим и там
         pub_id = _ank.get_pub_chat()
         if pub_id and pub_id != msg.chat.id:
-            ok2, err2 = await _promote_in_chat(promoted_uid, role, pub_id)
+            ok2, tok2, err2 = await _promote_in_chat(promoted_uid, role, pub_id)
             if ok2:
                 chat_ok = True
-                chat_err = ""
+                if tok2:
+                    title_ok = True
+                    chat_err = ""
+                elif not chat_err:
+                    chat_err = err2
             elif not chat_ok:
                 chat_err = err2 or chat_err
         assigner = msg.from_user.full_name
         await _notify_role_assigned(promoted_uid, role, assigner)
 
-    if chat_ok:
-        chat_note = ""
-    elif chat_err:
-        chat_note = f"\n<i>⚠️ Права в чате не выданы: {html.escape(chat_err)}</i>"
+    if not promoted_uid:
+        chat_note = "\n<i>⚠️ ID неизвестен — права выдам автоматически при первом сообщении</i>"
+    elif not chat_ok:
+        chat_note = f"\n<i>⚠️ Права не выданы: {html.escape(chat_err)}</i>"
+    elif not title_ok:
+        chat_note = f"\n<i>⚠️ Права выданы, тег не установлен: {html.escape(chat_err)}</i>"
     else:
-        chat_note = "\n<i>⚠️ ID пользователя неизвестен — права выданы после первого сообщения в чате</i>"
+        chat_note = ""
 
+    tag_display = ROLE_NAMES.get(role, role)
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"{_fmt_role(role)} <b>назначена</b>\n\n"
         f"👤 {mention}\n"
-        f"🏷 Роль: <b>{ROLE_NAMES[role]}</b>\n"
-        f"💬 Тег в чате: <b>{ROLE_NAMES[role]}</b>\n"
-        f"📩 Уведомление: отправлено в ЛС{chat_note}\n\n"
+        f"🏷 Роль: <b>{tag_display}</b>\n"
+        f"💬 Тег в чате: {'<b>' + tag_display + '</b> ✅' if title_ok else '—'}{chat_note}\n"
+        f"📩 Уведомление: {'отправлено в ЛС' if promoted_uid else 'отправлю при первом контакте'}\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
     )
