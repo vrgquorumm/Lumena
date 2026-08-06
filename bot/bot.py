@@ -808,12 +808,13 @@ def _fmt_role(role: str) -> str:
     return f"{icon} {name}"
 
 
-async def _promote_in_chat(user_id: int, role: str) -> bool:
-    """Выдаёт права администратора в публичном чате по роли.
-    Возвращает True если успешно."""
-    chat_id = _ank.get_pub_chat()
+async def _promote_in_chat(user_id: int, role: str, chat_id: int | None = None) -> tuple[bool, str]:
+    """Выдаёт права администратора в чате по роли.
+    Возвращает (успех, текст_ошибки)."""
+    if chat_id is None:
+        chat_id = _ank.get_pub_chat()
     if not chat_id or user_id is None:
-        return False
+        return False, "чат не настроен"
     perms = _ROLE_PERMISSIONS.get(role, {})
     try:
         await bot.promote_chat_member(chat_id, user_id, **perms)
@@ -825,17 +826,19 @@ async def _promote_in_chat(user_id: int, role: str) -> bool:
             )
         except Exception:
             pass   # кастомный тег — не критично
-        return True
+        return True, ""
     except Exception as e:
-        print(f"⚠️ _promote_in_chat({user_id}, {role}): {e}")
-        return False
+        err = str(e)
+        print(f"⚠️ _promote_in_chat({user_id}, {role}, chat={chat_id}): {err}")
+        return False, err
 
 
-async def _demote_in_chat(user_id: int) -> bool:
-    """Снимает все права администратора в публичном чате."""
-    chat_id = _ank.get_pub_chat()
+async def _demote_in_chat(user_id: int, chat_id: int | None = None) -> tuple[bool, str]:
+    """Снимает все права администратора в чате."""
+    if chat_id is None:
+        chat_id = _ank.get_pub_chat()
     if not chat_id or user_id is None:
-        return False
+        return False, "чат не настроен"
     try:
         await bot.promote_chat_member(
             chat_id, user_id,
@@ -844,10 +847,11 @@ async def _demote_in_chat(user_id: int) -> bool:
             can_promote_members=False, can_change_info=False,
             can_invite_users=False, can_pin_messages=False,
         )
-        return True
+        return True, ""
     except Exception as e:
-        print(f"⚠️ _demote_in_chat({user_id}): {e}")
-        return False
+        err = str(e)
+        print(f"⚠️ _demote_in_chat({user_id}, chat={chat_id}): {err}")
+        return False, err
 
 
 async def _notify_role_assigned(user_id: int, role: str, assigner_name: str) -> None:
@@ -997,12 +1001,28 @@ async def cmd_set_role(msg: Message, command=None):
         promoted_uid = target_id
 
     chat_ok = False
+    chat_err = ""
     if promoted_uid:
-        chat_ok = await _promote_in_chat(promoted_uid, role)
+        # Промоут в текущем чате (где выдана команда)
+        chat_ok, chat_err = await _promote_in_chat(promoted_uid, role, msg.chat.id)
+        # Если текущий чат — не pub_chat, попробуем и там
+        pub_id = _ank.get_pub_chat()
+        if pub_id and pub_id != msg.chat.id:
+            ok2, err2 = await _promote_in_chat(promoted_uid, role, pub_id)
+            if ok2:
+                chat_ok = True
+                chat_err = ""
+            elif not chat_ok:
+                chat_err = err2 or chat_err
         assigner = msg.from_user.full_name
         await _notify_role_assigned(promoted_uid, role, assigner)
 
-    chat_note = "" if chat_ok else "\n<i>⚠️ Права в чате — добавь бота в администраторы с правом «Добавлять администраторов»</i>"
+    if chat_ok:
+        chat_note = ""
+    elif chat_err:
+        chat_note = f"\n<i>⚠️ Права в чате не выданы: {html.escape(chat_err)}</i>"
+    else:
+        chat_note = "\n<i>⚠️ ID пользователя неизвестен — права выданы после первого сообщения в чате</i>"
 
     await msg.reply(
         f"{brand.hdr()}\n\n"
@@ -1033,7 +1053,10 @@ async def cmd_remove_role(msg: Message, command=None):
         old   = get_role(u.id)
         remove_role(u.id, uname)
         save_data()
-        await _demote_in_chat(u.id)
+        await _demote_in_chat(u.id, msg.chat.id)
+        pub_id = _ank.get_pub_chat()
+        if pub_id and pub_id != msg.chat.id:
+            await _demote_in_chat(u.id, pub_id)
         if old:
             await _notify_role_removed(u.id, old)
         mention = f"@{uname}" if uname else html.escape(u.full_name)
@@ -1064,7 +1087,10 @@ async def cmd_remove_role(msg: Message, command=None):
     _ROLE_USERNAMES.pop(uname, None)
     if found_uid:
         ROLES.pop(found_uid, None)
-        await _demote_in_chat(found_uid)
+        await _demote_in_chat(found_uid, msg.chat.id)
+        pub_id = _ank.get_pub_chat()
+        if pub_id and pub_id != msg.chat.id:
+            await _demote_in_chat(found_uid, pub_id)
         if old:
             await _notify_role_removed(found_uid, old)
     save_data()
