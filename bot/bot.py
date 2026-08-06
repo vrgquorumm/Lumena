@@ -46,6 +46,8 @@ import brand
 
 _edit_sessions:     dict[int, str]  = {}  # uid → ключ текста на редактирование (ЛС с фаундером)
 _btn_edit_sessions: dict[int, dict] = {}  # uid → {"key": str, "step": "label"|"url"}  (редактор кнопок)
+# (chat_id, message_id) → text_key — трекинг исходящих сообщений для reply-редактора
+_tracked_bot_msgs:  dict[tuple[int, int], str] = {}
 
 # ═══════════════════════════════════════════════════════
 # КОНФИГУРАЦИЯ
@@ -520,15 +522,25 @@ async def _send_custom(chat_id: int, key: str, fallback_html: str,
 
 async def _answer_custom(msg, key: str, fallback_html: str,
                          name: str | None = None, **kwargs):
-    """Как _send_custom, но через msg.answer() — не нужен chat_id."""
+    """Как _send_custom, но через msg.answer() — не нужен chat_id.
+    Автоматически трекает отправленное сообщение для reply-редактора фаундера."""
     ct = brand.get_custom_text(key)
     if ct:
         text, ents_data = ct
         if name is not None:
             text, ents_data = brand.substitute_name(text, ents_data, name)
         ents = _build_entities(ents_data)
-        return await msg.answer(text, entities=ents or None, **kwargs)
-    return await msg.answer(fallback_html, parse_mode="HTML", **kwargs)
+        sent = await msg.answer(text, entities=ents or None, **kwargs)
+    else:
+        sent = await msg.answer(fallback_html, parse_mode="HTML", **kwargs)
+    # Трекаем только если ключ известен редактору
+    if key in brand.TEXT_LABELS and sent is not None:
+        _tracked_bot_msgs[(sent.chat.id, sent.message_id)] = key
+        # Ограничиваем размер кэша — удаляем старые записи
+        if len(_tracked_bot_msgs) > 2000:
+            oldest = next(iter(_tracked_bot_msgs))
+            del _tracked_bot_msgs[oldest]
+    return sent
 
 
 async def _edit_custom(message, key: str, fallback_html: str,
@@ -3653,6 +3665,58 @@ async def _send_editor_menu(msg):
     )
 
 
+# ── Reply-редактор: фаундер отвечает на сообщение бота словом «изменить» ──────
+# Регистрируется ПЕРВЫМ — более специфичный фильтр (reply + tracked msg)
+def _is_reply_edit(m) -> bool:
+    """True если: фаундер, ЛС, слово «изменить»/«edit», ответ на трекнутое сообщение."""
+    if not is_owner(m):
+        return False
+    if m.chat.type != "private":
+        return False
+    tl = (m.text or "").strip().lower().lstrip("/")
+    if tl not in ("изменить", "edit"):
+        return False
+    rm = m.reply_to_message
+    if not rm:
+        return False
+    return (m.chat.id, rm.message_id) in _tracked_bot_msgs
+
+
+@dp.message(F.func(_is_reply_edit))
+async def cmd_reply_edit(msg: Message):
+    """Фаундер ответил на сообщение бота командой «изменить» → начать редактирование."""
+    rm  = msg.reply_to_message
+    key = _tracked_bot_msgs.get((msg.chat.id, rm.message_id))
+    if not key or key not in brand.TEXT_LABELS:
+        return await msg.reply("❓ Этот текст нельзя редактировать через ответ.")
+
+    _edit_sessions[msg.from_user.id] = key
+    label = brand.TEXT_LABELS[key]
+    ct    = brand.get_custom_text(key)
+    current_note = (
+        f"Текущий текст:\n<blockquote>{html.escape(ct[0])}</blockquote>"
+        if ct else "Сейчас: <i>встроенный дефолтный текст</i>"
+    )
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
+    ]])
+    await msg.reply(
+        f"✏️ <b>{html.escape(label)}</b>\n\n"
+        f"{current_note}\n\n"
+        "Отправь новый текст — форматирование сохранится.\n"
+        "/отмена или кнопка ниже — выйти без сохранения.",
+        parse_mode="HTML",
+        reply_markup=back_kb,
+    )
+
+
+@dp.callback_query(F.data == "reply_edit_cancel")
+async def cb_reply_edit_cancel(cb: CallbackQuery):
+    _edit_sessions.pop(cb.from_user.id, None)
+    await cb.message.edit_text("❌ Редактирование отменено.", parse_mode="HTML")
+    await cb.answer()
+
+
 # /edit — латиница. is_owner вынесен В ФИЛЬТР: если не совпало — сообщение идёт дальше
 @dp.message(Command("edit"),
             F.chat.type == "private",
@@ -3661,10 +3725,12 @@ async def cmd_editor_latin(msg: Message):
     await _send_editor_menu(msg)
 
 
-# «изменить» / «/изменить» — кириллица. is_owner тоже в фильтре.
+# «изменить» / «/изменить» — кириллица без reply: открываем общее меню.
+# is_owner тоже в фильтре.
 @dp.message(F.chat.type == "private",
             F.func(lambda m: is_owner(m)
-                   and (m.text or "").strip().lower().lstrip("/") in ("изменить", "edit")))
+                   and (m.text or "").strip().lower().lstrip("/") in ("изменить", "edit")
+                   and not m.reply_to_message))
 async def cmd_editor_ru(msg: Message):
     await _send_editor_menu(msg)
 
