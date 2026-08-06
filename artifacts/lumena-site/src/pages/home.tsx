@@ -1,21 +1,136 @@
-import { motion, useScroll, useTransform } from 'framer-motion';
-import { useRef } from 'react';
+import { motion, useScroll, useTransform, AnimatePresence } from 'framer-motion';
+import { useRef, useState } from 'react';
 import { 
   Coins, 
   Heart, 
   ShieldAlert, 
   Link as LinkIcon, 
   Gamepad2, 
-  Sparkles, 
   UserCircle, 
   CheckCircle2, 
   Wand2,
-  CloudLightning,
   ChevronDown,
   Terminal,
-  MessageSquareText
+  MessageSquareText,
+  BookOpen,
+  Hash,
+  Users,
+  Radio,
+  ChevronRight,
+  ExternalLink,
+  Globe,
+  Send,
+  ScrollText,
+  ListChecks
 } from 'lucide-react';
 import { FloatingButton } from '@/components/FloatingButton';
+
+const CHAT_URL    = "https://t.me/+_K2SJRYIhq9hYjFi";
+const CHANNEL_URL = "https://t.me/lmnfff";
+const BOT_URL     = "https://t.me/LumenarAi_Bot";
+
+const COMMAND_CATEGORIES = [
+  {
+    label: "💰 Економіка",
+    color: "text-yellow-400",
+    commands: [
+      { cmd: "/balance",  desc: "Переглянути баланс LMN" },
+      { cmd: "/work",     desc: "Попрацювати та заробити LMN (кд 1 год)" },
+      { cmd: "/fish",     desc: "Порибалити за LMN (кд 2 год)" },
+      { cmd: "/casino",   desc: "Поставити LMN у казино" },
+      { cmd: "/slots",    desc: "Зіграти в слоти" },
+      { cmd: "/rob",      desc: "Пограбувати учасника (ризик)" },
+      { cmd: "/give",     desc: "Подарувати LMN іншому" },
+      { cmd: "/richest",  desc: "Топ багатіїв чату" },
+    ]
+  },
+  {
+    label: "💑 Соціум та Аура",
+    color: "text-pink-400",
+    commands: [
+      { cmd: "/marry",    desc: "Зробити пропозицію (реплай)" },
+      { cmd: "/divorce",  desc: "Розлучитися" },
+      { cmd: "/marriages",desc: "Список пар у чаті" },
+      { cmd: "/rep",      desc: "Дати репутацію (раз на день)" },
+      { cmd: "/aura",     desc: "Переглянути свою ауру %" },
+      { cmd: "/topaura",  desc: "Топ аури в чаті" },
+      { cmd: "/checkin",  desc: "Щоденна відмітка (стрік)" },
+      { cmd: "/streak",   desc: "Переглянути стрік" },
+      { cmd: "/topstreak",desc: "Топ стріків" },
+      { cmd: "/ship",     desc: "Сумісність двох учасників" },
+      { cmd: "/couple",   desc: "Знайти ідеальну пару в чаті" },
+      { cmd: "/serenade", desc: "♪ Серенада комусь" },
+    ]
+  },
+  {
+    label: "🛡 Модерація",
+    color: "text-red-400",
+    commands: [
+      { cmd: "/mute",    desc: "Замовкнути учасника [реплай/час]" },
+      { cmd: "/unmute",  desc: "Зняти мут" },
+      { cmd: "/ban",     desc: "Заблокувати в чаті" },
+      { cmd: "/unban",   desc: "Розблокувати" },
+      { cmd: "/kick",    desc: "Вигнати з чату" },
+      { cmd: "/warn",    desc: "Видати попередження (3 = бан)" },
+      { cmd: "/unwarn",  desc: "Зняти попередження" },
+      { cmd: "/purge",   desc: "Видалити останні N повідомлень" },
+      { cmd: "/ro",      desc: "Read-only режим для учасника" },
+      { cmd: "/pin",     desc: "Закріпити повідомлення" },
+      { cmd: "/roles",   desc: "Переглянути ролі команди" },
+    ]
+  },
+  {
+    label: "🎮 Ігри та Розваги",
+    color: "text-green-400",
+    commands: [
+      { cmd: "/roulette", desc: "Почати/приєднатись до рулетки" },
+      { cmd: "/hangman",  desc: "Гра у шибеницю" },
+      { cmd: "/truth",    desc: "Запитання правда" },
+      { cmd: "/dare",     desc: "Виклик на сміливість" },
+      { cmd: "/riddle",   desc: "Загадка" },
+      { cmd: "/coin",     desc: "Підкинути монету" },
+    ]
+  },
+  {
+    label: "👤 Профіль",
+    color: "text-purple-400",
+    commands: [
+      { cmd: "/profile",    desc: "Переглянути свій профіль" },
+      { cmd: "/setbio",     desc: "Встановити біо" },
+      { cmd: "/settitle",   desc: "Встановити титул" },
+      { cmd: "/numerology", desc: "Нумерологія імені" },
+      { cmd: "/bmi",        desc: "Розрахунок ІМТ" },
+      { cmd: "/age",        desc: "Розрахунок віку" },
+      { cmd: "/myid",       desc: "Твій Telegram ID" },
+    ]
+  },
+  {
+    label: "🔧 Утиліти",
+    color: "text-blue-400",
+    commands: [
+      { cmd: "/rules",    desc: "Правила чату" },
+      { cmd: "/fact",     desc: "Цікавий факт" },
+      { cmd: "/quote",    desc: "Надихаюча цитата" },
+      { cmd: "/cat",      desc: "Фото котика 🐱" },
+      { cmd: "/dog",      desc: "Фото собаки 🐶" },
+      { cmd: "/ping",     desc: "Час відповіді бота" },
+      { cmd: "/chatinfo", desc: "Статистика чату" },
+      { cmd: "/announce", desc: "Оголошення (адмін)" },
+      { cmd: "/анкета",   desc: "Заповнити анкету знайомств" },
+    ]
+  },
+];
+
+const CHAT_RULES = [
+  { n: "01", title: "Повага", text: "Поважайте всіх учасників незалежно від поглядів. Образи, приниження та токсичність заборонені." },
+  { n: "02", title: "Без спаму", text: "Заборонено флуд, повторювані повідомлення та надмірне використання стікерів/емодзі." },
+  { n: "03", title: "Без реклами", text: "Будь-яка реклама, самопіар та посилання без дозволу адміністрації — видаляються автоматично." },
+  { n: "04", title: "Без пропаганди", text: "Підтримка або виправдання агресії рф — миттєвий бан. Ніяких винятків." },
+  { n: "05", title: "Без NSFW", text: "Контент 18+ суворо заборонений. Це стосується тексту, фото та відео." },
+  { n: "06", title: "Система варнів", text: "3 попередження = автоматичний бан. Мут видається за дрібні порушення. Апеляція — до адміністрації." },
+  { n: "07", title: "Команда", text: "Поважайте рішення адміністрації та модераторів. Суперечки вирішуються в приватному порядку." },
+  { n: "08", title: "Верифікація", text: "Нові учасники проходять математичну капчу перед отриманням доступу до функцій бота." },
+];
 
 const fadeUp = {
   hidden: { opacity: 0, y: 40 },
