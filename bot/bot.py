@@ -217,7 +217,7 @@ async def auto_save_loop():
         print("💾 Автосохранение выполнено")
 
 async def coin_rain_loop():
-    """Дождь монет LMN каждые 8 часов во всех активных группах."""
+    """Дождь монет LMN каждые 6 часов во всех активных группах."""
     await asyncio.sleep(60)   # небольшая задержка после старта бота
     while True:
         active_chats = [cid for cid in chat_members.keys() if cid < 0]
@@ -238,7 +238,7 @@ async def coin_rain_loop():
                 )
             except Exception:
                 _active_rain.pop(chat_id, None)
-        await asyncio.sleep(4 * 3600)
+        await asyncio.sleep(6 * 3600)
 
 # ═══════════════════════════════════════════════════════
 # АВТОМОДЕРАЦИЯ — ПРОПАГАНДА РОССИЙСКОЙ АРМИИ
