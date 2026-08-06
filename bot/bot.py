@@ -2703,8 +2703,14 @@ async def cmd_dice(msg: Message, command: CommandObject = None):
 
 async def cmd_roll(msg: Message, command: CommandObject = None):
     sides = 20
-    try: sides = int((command.args or "20").split()[0])
-    except: pass
+    try:
+        sides = int((command.args or "20").split()[0])
+    except Exception:
+        pass
+    if sides <= 0:
+        sides = 20
+    if sides > 1_000_000:
+        sides = 1_000_000
     await msg.reply(f"🎲 Бросок d{sides}: <b>{random.randint(1, sides)}</b>", parse_mode="HTML")
 
 async def cmd_rps(msg: Message, command: CommandObject = None):
@@ -5626,7 +5632,7 @@ async def cmd_setemojipack(msg: Message):
 # ═══════════════════════════════════════════════════════
 @dp.message(Command("antilink", "антилинк"))
 async def cmd_antilink(msg: Message, command: CommandObject):
-    if not is_owner(msg) and not is_admin(msg):
+    if not is_owner(msg) and not await is_admin(msg):
         return await msg.reply("⛔ Только администраторы")
     args = (command.args or "").strip().lower()
     cid  = msg.chat.id
@@ -5689,7 +5695,7 @@ TEXT_COMMANDS.update({
 
 @dp.message(Command("whitelist", "белый_список", "allowlink"))
 async def cmd_whitelist(msg: Message, command: CommandObject):
-    if not is_owner(msg) and not is_admin(msg):
+    if not is_owner(msg) and not await is_admin(msg):
         return await msg.reply("⛔ Только администраторы")
     args = (command.args or "").strip()
     cid  = msg.chat.id
@@ -5748,23 +5754,24 @@ async def cmd_sendlaunch(msg: Message):
     if not is_owner(msg):
         return await msg.reply("⛔ Тільки фаундер")
 
-    import bot_data as _bd  # noqa — reading pub_chat_id
-    pub_chat = bot_data.get("anketa_settings", {}).get("pub_chat_id")
+    pub_chat = _ank.get_pub_chat()
     if not pub_chat:
-        return await msg.reply("❌ pub_chat_id не встановлено в anketa_settings")
+        return await msg.reply("❌ pub_chat_id не встановлено. Спочатку запусти /setpubchat")
 
     # Collect all admins/mods to mention (skip founder)
     mentions: list[str] = []
-    for uid, role in bot_data.get("roles", {}).items():
-        if role in ("lead_admin", "co_admin", "admin", "moderator"):
-            uname = bot_data.get("role_usernames_rev", {}).get(str(uid))
-            if uname:
-                mentions.append(f"@{uname}")
-    # fallback: hardcoded known team usernames
+    team_roles = ("lead_admin", "co_admin", "admin", "moderator")
+    # From runtime ROLES dict (uid -> role)
+    for uid, role in ROLES.items():
+        if role in team_roles:
+            uname = next((u for u, r_uid in _ROLE_USERNAMES.items() if False), None)
+            # look up by uid in _ROLE_USERNAMES reverse
+    # From _ROLE_USERNAMES (username -> role) — simplest source
     for uname, role in _ROLE_USERNAMES.items():
-        mention = f"@{uname}"
-        if role in ("lead_admin", "co_admin", "admin", "moderator") and mention not in mentions:
-            mentions.append(mention)
+        if role in team_roles:
+            mention = f"@{uname}"
+            if mention not in mentions:
+                mentions.append(mention)
 
     mention_line = "  ".join(mentions) if mentions else ""
     site_line = f"\n🌐 Офіційний сайт: {LUMENA_SITE_URL}" if LUMENA_SITE_URL else ""
@@ -5797,6 +5804,7 @@ async def cmd_sendlaunch(msg: Message):
 @dp.message(Command("setsiteurl"))
 async def cmd_setsiteurl(msg: Message):
     """Встановлює URL офіційного сайту Лумени (відображається в меню та привітаннях)."""
+    global LUMENA_SITE_URL
     if not is_owner(msg):
         return await msg.reply("⛔ Тільки фаундер")
     parts = (msg.text or "").split(maxsplit=1)
@@ -5807,7 +5815,6 @@ async def cmd_setsiteurl(msg: Message):
             "Оновити:\n<code>/setsiteurl https://...</code>",
             parse_mode="HTML"
         )
-    global LUMENA_SITE_URL
     LUMENA_SITE_URL = parts[1].strip()
     await msg.reply(
         f"✅ <b>URL сайту оновлено!</b>\n🌐 <a href=\"{LUMENA_SITE_URL}\">{LUMENA_SITE_URL}</a>\n\n"
