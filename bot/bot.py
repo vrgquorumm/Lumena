@@ -753,11 +753,135 @@ _ROLE_ICON: dict[str, str] = {
     "moderator":  "🛡",
 }
 
+# Права в чате для каждой роли
+_ROLE_PERMISSIONS: dict[str, dict] = {
+    "lead_admin": dict(
+        can_manage_chat=True,
+        can_delete_messages=True,
+        can_manage_video_chats=True,
+        can_restrict_members=True,
+        can_promote_members=True,   # может сам назначать других
+        can_change_info=True,
+        can_invite_users=True,
+        can_pin_messages=True,
+    ),
+    "co_admin": dict(
+        can_manage_chat=True,
+        can_delete_messages=True,
+        can_manage_video_chats=True,
+        can_restrict_members=True,
+        can_promote_members=False,
+        can_change_info=True,
+        can_invite_users=True,
+        can_pin_messages=True,
+    ),
+    "admin": dict(
+        can_manage_chat=True,
+        can_delete_messages=True,
+        can_manage_video_chats=True,
+        can_restrict_members=True,
+        can_promote_members=False,
+        can_change_info=False,
+        can_invite_users=True,
+        can_pin_messages=True,
+    ),
+    "moderator": dict(
+        can_manage_chat=True,
+        can_delete_messages=True,
+        can_manage_video_chats=False,
+        can_restrict_members=True,
+        can_promote_members=False,
+        can_change_info=False,
+        can_invite_users=True,
+        can_pin_messages=False,
+    ),
+}
+
 
 def _fmt_role(role: str) -> str:
     icon = _ROLE_ICON.get(role, "🔹")
     name = ROLE_NAMES.get(role, role)
     return f"{icon} {name}"
+
+
+async def _promote_in_chat(user_id: int, role: str) -> bool:
+    """Выдаёт права администратора в публичном чате по роли.
+    Возвращает True если успешно."""
+    chat_id = _ank.get_pub_chat()
+    if not chat_id or user_id is None:
+        return False
+    perms = _ROLE_PERMISSIONS.get(role, {})
+    try:
+        await bot.promote_chat_member(chat_id, user_id, **perms)
+        # Кастомный тег — название роли
+        custom_title = ROLE_NAMES.get(role, role)
+        try:
+            await bot.set_chat_administrator_custom_title(
+                chat_id, user_id, custom_title
+            )
+        except Exception:
+            pass   # кастомный тег — не критично
+        return True
+    except Exception as e:
+        print(f"⚠️ _promote_in_chat({user_id}, {role}): {e}")
+        return False
+
+
+async def _demote_in_chat(user_id: int) -> bool:
+    """Снимает все права администратора в публичном чате."""
+    chat_id = _ank.get_pub_chat()
+    if not chat_id or user_id is None:
+        return False
+    try:
+        await bot.promote_chat_member(
+            chat_id, user_id,
+            can_manage_chat=False, can_delete_messages=False,
+            can_manage_video_chats=False, can_restrict_members=False,
+            can_promote_members=False, can_change_info=False,
+            can_invite_users=False, can_pin_messages=False,
+        )
+        return True
+    except Exception as e:
+        print(f"⚠️ _demote_in_chat({user_id}): {e}")
+        return False
+
+
+async def _notify_role_assigned(user_id: int, role: str, assigner_name: str) -> None:
+    """Отправляет DM юзеру о назначении роли с ссылкой на чат."""
+    chat_link = _ank.get_chat_link() or "https://t.me/+_K2SJRYIhq9hYjFi"
+    role_icon = _ROLE_ICON.get(role, "🔹")
+    role_name = ROLE_NAMES.get(role, role)
+    try:
+        await bot.send_message(
+            user_id,
+            f"{brand.hdr()}\n\n"
+            f"{role_icon} <b>Тебе назначена роль!</b>\n\n"
+            f"🏷 Роль: <b>{role_name}</b>\n"
+            f"👤 Назначил: <b>{html.escape(assigner_name)}</b>\n\n"
+            f"Ты получил права администратора в чате сообщества.\n\n"
+            f"🔗 <a href=\"{chat_link}\">Перейти в чат</a>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        print(f"⚠️ _notify_role_assigned DM to {user_id}: {e}")
+
+
+async def _notify_role_removed(user_id: int, role: str) -> None:
+    """Отправляет DM юзеру о снятии роли."""
+    role_name = ROLE_NAMES.get(role, role)
+    try:
+        await bot.send_message(
+            user_id,
+            f"{brand.hdr()}\n\n"
+            f"🔕 <b>Роль снята</b>\n\n"
+            f"🏷 Была роль: <b>{role_name}</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 @dp.message(Command("setrole"))
@@ -857,11 +981,29 @@ async def cmd_set_role(msg: Message, command=None):
         return
 
     save_data()
+
+    # Промоут в чате + DM-уведомление
+    promoted_uid = None
+    if msg.reply_to_message:
+        promoted_uid = msg.reply_to_message.from_user.id
+    elif "target_id" in dir() and target_id:
+        promoted_uid = target_id
+
+    chat_ok = False
+    if promoted_uid:
+        chat_ok = await _promote_in_chat(promoted_uid, role)
+        assigner = msg.from_user.full_name
+        await _notify_role_assigned(promoted_uid, role, assigner)
+
+    chat_note = "" if chat_ok else "\n<i>⚠️ Права в чате — добавь бота в администраторы с правом «Добавлять администраторов»</i>"
+
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"{_fmt_role(role)} <b>назначена</b>\n\n"
         f"👤 {mention}\n"
-        f"🏷 Роль: <b>{ROLE_NAMES[role]}</b>\n\n"
+        f"🏷 Роль: <b>{ROLE_NAMES[role]}</b>\n"
+        f"💬 Тег в чате: <b>{ROLE_NAMES[role]}</b>\n"
+        f"📩 Уведомление: отправлено в ЛС{chat_note}\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
     )
@@ -884,12 +1026,16 @@ async def cmd_remove_role(msg: Message, command=None):
         old   = get_role(u.id)
         remove_role(u.id, uname)
         save_data()
+        await _demote_in_chat(u.id)
+        if old:
+            await _notify_role_removed(u.id, old)
         mention = f"@{uname}" if uname else html.escape(u.full_name)
         old_str = f" (была {_fmt_role(old)})" if old else ""
         return await msg.reply(
             f"{brand.hdr()}\n\n"
             f"✅ Роль снята{old_str}\n\n"
-            f"👤 {mention}\n\n"
+            f"👤 {mention}\n"
+            f"📩 Пользователь уведомлён в ЛС\n\n"
             f"{brand.div()}",
             parse_mode="HTML",
         )
@@ -901,7 +1047,6 @@ async def cmd_remove_role(msg: Message, command=None):
         )
 
     uname = raw_args.lower()
-    # Ищем по username в ROLES
     found_uid = next(
         (uid for uid, r in ROLES.items()
          if _ROLE_USERNAMES.get(uname) == r and uid in
@@ -912,6 +1057,9 @@ async def cmd_remove_role(msg: Message, command=None):
     _ROLE_USERNAMES.pop(uname, None)
     if found_uid:
         ROLES.pop(found_uid, None)
+        await _demote_in_chat(found_uid)
+        if old:
+            await _notify_role_removed(found_uid, old)
     save_data()
     old_str = f" (была {_fmt_role(old)})" if old else ""
     await msg.reply(
