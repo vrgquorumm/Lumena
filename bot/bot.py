@@ -728,18 +728,22 @@ def parse_time_and_reason(args: str) -> tuple:
 # ═══════════════════════════════════════════════════════
 
 _ROLE_ALIASES: dict[str, str] = {
-    # русские псевдонимы → canonical key
+    # lead_admin
     "lead_admin":  "lead_admin",
     "lead":        "lead_admin",
     "лид":         "lead_admin",
-    "лид_адмін":   "lead_admin",
+    "лидадмин":    "lead_admin",
+    # co_admin
     "co_admin":    "co_admin",
+    "co-admin":    "co_admin",    # через дефис
     "coadmin":     "co_admin",
     "коадмин":     "co_admin",
-    "со_адмін":    "co_admin",
+    "ко-админ":    "co_admin",
+    # admin
     "admin":       "admin",
     "адмін":       "admin",
     "админ":       "admin",
+    # moderator
     "moderator":   "moderator",
     "mod":         "moderator",
     "модератор":   "moderator",
@@ -918,8 +922,11 @@ async def cmd_set_role(msg: Message, command=None):
     role_raw = ""
 
     if msg.reply_to_message:
-        target   = msg.reply_to_message.from_user
-        role_raw = args[0].lower() if args else ""
+        target = msg.reply_to_message.from_user
+        # Пропускаем @упоминания в аргументах — берём первое не-mention слово как роль
+        role_raw = next(
+            (a.lower() for a in args if not a.startswith("@")), ""
+        )
     elif len(args) >= 2:
         username = args[0].lstrip("@")
         role_raw = args[1].lower()
