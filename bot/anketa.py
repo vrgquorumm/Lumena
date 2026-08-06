@@ -196,6 +196,21 @@ ANKETA_USERS_FILE = "data/anketa_users.json"
 # ──────────────────────────────────────────
 # ЗБЕРЕЖЕННЯ / ЗАВАНТАЖЕННЯ
 # ──────────────────────────────────────────
+async def restore_anketa_from_github() -> None:
+    """При старті відновлює anketa_users.json із GitHub якщо локальний файл відсутній."""
+    if os.path.exists(ANKETA_USERS_FILE) and os.path.getsize(ANKETA_USERS_FILE) > 5:
+        return
+    print("📥 anketa_users.json не знайдено — спроба відновити з GitHub...")
+    raw = await brand.fetch_bot_data_from_github("data/anketa_users.json")
+    if raw:
+        os.makedirs("data", exist_ok=True)
+        with open(ANKETA_USERS_FILE, "wb") as f:
+            f.write(raw)
+        print("✅ anketa_users.json відновлено з GitHub")
+    else:
+        print("⚠️ GitHub не повернув anketa_users.json — старт без анкет")
+
+
 def load_anketa_settings():
     if os.path.exists(ANKETA_DATA_FILE):
         try:
@@ -220,6 +235,7 @@ def load_anketa_settings():
 
 
 def save_anketa_settings():
+    import asyncio
     os.makedirs("data", exist_ok=True)
     with open(ANKETA_DATA_FILE, "w", encoding="utf-8") as f:
         json.dump({
@@ -228,11 +244,19 @@ def save_anketa_settings():
             "anketa_counter":  _anketa_counter[0],
             "chat_link":       _chat_link[0],
         }, f)
+    users_payload = {
+        "status":   {str(k): v for k, v in _user_status.items()},
+        "approved": {str(k): v for k, v in _approved_data.items()},
+    }
     with open(ANKETA_USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "status":   {str(k): v for k, v in _user_status.items()},
-            "approved": {str(k): v for k, v in _approved_data.items()},
-        }, f, ensure_ascii=False)
+        json.dump(users_payload, f, ensure_ascii=False)
+    # Пушимо в GitHub — дані виживуть після Railway-редеплою
+    try:
+        raw = json.dumps(users_payload, ensure_ascii=False).encode()
+        loop = asyncio.get_running_loop()
+        loop.create_task(brand.push_bot_data_to_github(raw, "data/anketa_users.json"))
+    except RuntimeError:
+        pass  # виклик поза async-контекстом
 
 
 def next_anketa_number() -> int:

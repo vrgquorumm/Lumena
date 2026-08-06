@@ -6132,10 +6132,13 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
         return  # тихо ігноруємо для всіх крім фаундера
 
     # ── Розбираємо аргументи ──────────────────────────────────
-    args_raw = (command.args or "").strip() if command else ""
-    parts    = args_raw.split(maxsplit=1)
+    args_raw  = (command.args or "").strip() if command else ""
+    parts     = args_raw.split(maxsplit=1)
     target_uid: int | None = None
     reason: str = ""
+    # Флаг: юзер щось вказав, але пошук не дав результату
+    arg_given = bool(msg.reply_to_message) or bool(parts)
+    not_found_hint = ""  # пояснення що саме не знайдено
 
     # 1. З reply — шукаємо uid по message_id паблік-поста
     if msg.reply_to_message:
@@ -6143,7 +6146,8 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
             msg.reply_to_message.message_id,
             msg.chat.id,
         )
-        reason = args_raw  # всі аргументи — причина
+        reason = args_raw
+        not_found_hint = "Повідомлення не прив'язане до жодної анкети."
 
     # 2. З аргументів: числовий ID або @username
     if not target_uid and parts:
@@ -6152,14 +6156,23 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
         if first.isdigit():
             target_uid = int(first)
         else:
-            # шукаємо по username в approved_data
             uname_low = first.lower()
             for uid_key, d in _ank._approved_data.items():
                 if (d.get("username") or "").lower() == uname_low:
                     target_uid = uid_key
                     break
+            if not target_uid:
+                not_found_hint = (
+                    f"Юзер <code>@{html.escape(first)}</code> не знайдений в базі анкет.\n"
+                    "Перевір username або вкажи Telegram ID."
+                )
 
     if not target_uid:
+        if arg_given and not_found_hint:
+            return await msg.reply(
+                f"{brand.hdr()}\n\n⚠️ {not_found_hint}",
+                parse_mode="HTML",
+            )
         return await msg.reply(
             f"{brand.hdr()}\n\n"
             "❓ <b>Вкажи юзера:</b>\n\n"
@@ -6569,6 +6582,7 @@ async def main():
     # Спочатку відновлюємо з GitHub (якщо Railway перезапустив з нуля),
     # потім завантажуємо дані в пам'ять
     await restore_bot_data_from_github()
+    await _ank.restore_anketa_from_github()
     load_data()
     _ank.load_anketa_settings()
     brand.load_custom_texts()
