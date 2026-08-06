@@ -173,10 +173,32 @@ def save_data():
         "link_whitelist":   {str(c): v for c, v in _link_whitelist.items()},
     }
     try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        raw = json.dumps(payload, ensure_ascii=False, indent=2).encode()
+        with open(DATA_FILE, "wb") as f:
+            f.write(raw)
+        # Пушим в GitHub → данные выживают после Railway-деплоя
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(brand.push_bot_data_to_github(raw))
+        except RuntimeError:
+            pass  # вызов вне async-контекста (KeyboardInterrupt и т.п.)
     except Exception as e:
         print(f"⚠️ save_data error: {e}")
+
+async def restore_bot_data_from_github() -> None:
+    """При старте: если bot_data.json отсутствует — скачиваем с GitHub."""
+    if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 10:
+        return  # локальный файл есть — GitHub не нужен
+    print("📥 bot_data.json не найден локально — пробуем GitHub...")
+    raw = await brand.fetch_bot_data_from_github()
+    if raw:
+        os.makedirs("data", exist_ok=True)
+        with open(DATA_FILE, "wb") as f:
+            f.write(raw)
+        print("✅ bot_data.json восстановлен из GitHub")
+    else:
+        print("⚠️ GitHub не вернул данные — старт с чистого листа")
+
 
 def load_data():
     """Загружает данные из JSON-файла при старте."""
@@ -1563,15 +1585,22 @@ async def marry_callback(cb: CallbackQuery):
         add_balance(target_id, 500)
         save_data()
         header = random.choice(_marry_accept)
-        await cb.message.edit_text(
+        marry_text = (
             f"{brand.hdr()}\n\n"
             f"{header}\n\n"
             f"💕 <b>{proposal['proposer_full']}</b>\n"
             f"❤️ <b>{cb.from_user.full_name}</b>\n\n"
             f"🎊 +500 LMN каждому в подарок!\n\n"
-            f"{brand.div()}",
-            parse_mode="HTML"
+            f"{brand.div()}"
         )
+        await cb.message.edit_text(marry_text, parse_mode="HTML")
+        # Дублюємо оголошення в основний чат
+        pub_chat = _ank.get_pub_chat()
+        if pub_chat and pub_chat != chat_id:
+            try:
+                await bot.send_message(pub_chat, marry_text, parse_mode="HTML")
+            except Exception:
+                pass
     else:
         header = random.choice(_marry_reject)
         reject_lines = [
@@ -1615,13 +1644,21 @@ async def cmd_divorce(msg: Message):
         "Всему своё время",
         "Не судьба — значит так надо",
     ]
-    await msg.reply(
+    divorce_text = (
         f"{brand.hdr()}\n\n"
         f"{random.choice(_divorce_txt)}\n\n"
         f"<b>{msg.from_user.full_name}</b> и <b>{partner_name}</b> расстались\n\n"
         f"<i>{random.choice(_divorce_comment)}</i>\n\n"
-        f"{brand.div()}",
-        parse_mode="HTML")
+        f"{brand.div()}"
+    )
+    await msg.reply(divorce_text, parse_mode="HTML")
+    # Дублюємо в основний чат
+    pub_chat = _ank.get_pub_chat()
+    if pub_chat and pub_chat != msg.chat.id:
+        try:
+            await bot.send_message(pub_chat, divorce_text, parse_mode="HTML")
+        except Exception:
+            pass
 
 @dp.message(Command("marriages"))
 async def cmd_marriages(msg: Message):
@@ -6396,6 +6433,9 @@ async def global_error_handler(event, **kwargs):
 
 
 async def main():
+    # Спочатку відновлюємо з GitHub (якщо Railway перезапустив з нуля),
+    # потім завантажуємо дані в пам'ять
+    await restore_bot_data_from_github()
     load_data()
     _ank.load_anketa_settings()
     brand.load_custom_texts()

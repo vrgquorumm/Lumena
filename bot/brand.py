@@ -922,6 +922,90 @@ async def push_custom_texts_to_github(path: str = "data/custom_texts.json") -> b
         return False
 
 
+# ═══════════════════════════════════════════════════════════
+# ПЕРСИСТЕНТНОСТЬ bot_data.json → GitHub
+# ═══════════════════════════════════════════════════════════
+
+async def push_bot_data_to_github(
+    payload_bytes: bytes,
+    path: str = "data/bot_data.json",
+) -> bool:
+    """Пушит bot_data.json в GitHub — данные выживают после Railway-деплоя.
+    Требует: GITHUB_TOKEN, GITHUB_REPO (default: vrgquorumm/Lumena).
+    """
+    import base64, os
+    try:
+        import aiohttp
+    except ImportError:
+        return False
+
+    token = os.getenv("GITHUB_TOKEN", "")
+    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
+    if not token:
+        return False
+
+    git_path = f"bot/{path}"
+    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
+    headers  = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        content_b64 = base64.b64encode(payload_bytes).decode()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, headers=headers) as r:
+                sha = (await r.json()).get("sha") if r.status == 200 else None
+            put_payload: dict = {"message": "chore: auto-save bot data", "content": content_b64}
+            if sha:
+                put_payload["sha"] = sha
+            async with session.put(api_url, headers=headers, json=put_payload) as r:
+                if r.status in (200, 201):
+                    print("✅ bot_data.json → GitHub OK")
+                    return True
+                err = await r.text()
+                print(f"⚠️ GitHub push bot_data {r.status}: {err[:200]}")
+                return False
+    except Exception as ex:
+        print(f"⚠️ push_bot_data_to_github: {ex}")
+        return False
+
+
+async def fetch_bot_data_from_github(path: str = "data/bot_data.json") -> bytes | None:
+    """Скачивает bot_data.json из GitHub при старте (когда локального файла нет).
+    Возвращает raw bytes или None при ошибке.
+    """
+    import base64, os
+    try:
+        import aiohttp
+    except ImportError:
+        return None
+
+    token = os.getenv("GITHUB_TOKEN", "")
+    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
+    if not token:
+        return None
+
+    git_path = f"bot/{path}"
+    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
+    headers  = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, headers=headers) as r:
+                if r.status != 200:
+                    return None
+                data = await r.json()
+                b64 = data.get("content", "").replace("\n", "")
+                return base64.b64decode(b64) if b64 else None
+    except Exception as ex:
+        print(f"⚠️ fetch_bot_data_from_github: {ex}")
+        return None
+
+
 # ── Кастомные кнопки ──────────────────────────────────────
 _custom_buttons: dict[str, dict] = {}
 
