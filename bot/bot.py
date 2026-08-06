@@ -6895,11 +6895,12 @@ async def universal_handler(msg: Message):
             except TypeError: await handler(msg)
             return
 
-        # ── Лумена ИИ: личка — всегда, группа — при обращении
-        if msg.chat.type == "private":
-            await _lumena_ai_private(msg)
-        else:
-            await _lumena_ai_group(msg)
+        # ── Лумена ИИ: відключено
+        # if msg.chat.type == "private":
+        #     await _lumena_ai_private(msg)
+        # else:
+        #     await _lumena_ai_group(msg)
+        pass
 
 # ═══════════════════════════════════════════════════════
 # АВТОПІДКАЗКА КОЛИ БОТ ВХОДИТЬ У НОВИЙ ЧАТ
