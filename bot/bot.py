@@ -6115,6 +6115,130 @@ async def cmd_revoke_anketa(msg: Message):
             pass
 
 
+# ═══════════════════════════════════════════════════════════════
+# /delanket — тільки фаундер: видалити анкету і повідомити автора
+# ═══════════════════════════════════════════════════════════════
+@dp.message(Command("delanket"))
+async def cmd_delanket(msg: Message, command: CommandObject = None):
+    """Фаундер видаляє анкету юзера з бази і повідомляє його.
+
+    Синтаксис:
+      /delanket               — у відповідь на пост анкети в паб-чаті
+      /delanket @username     — за username
+      /delanket 123456789     — за Telegram ID
+      /delanket @username причина   — з поясненням для юзера
+    """
+    if not is_owner(msg):
+        return  # тихо ігноруємо для всіх крім фаундера
+
+    # ── Розбираємо аргументи ──────────────────────────────────
+    args_raw = (command.args or "").strip() if command else ""
+    parts    = args_raw.split(maxsplit=1)
+    target_uid: int | None = None
+    reason: str = ""
+
+    # 1. З reply — шукаємо uid по message_id паблік-поста
+    if msg.reply_to_message:
+        target_uid = _ank.get_uid_by_pub_msg(
+            msg.reply_to_message.message_id,
+            msg.chat.id,
+        )
+        reason = args_raw  # всі аргументи — причина
+
+    # 2. З аргументів: числовий ID або @username
+    if not target_uid and parts:
+        first = parts[0].lstrip("@")
+        reason = parts[1] if len(parts) > 1 else ""
+        if first.isdigit():
+            target_uid = int(first)
+        else:
+            # шукаємо по username в approved_data
+            uname_low = first.lower()
+            for uid_key, d in _ank._approved_data.items():
+                if (d.get("username") or "").lower() == uname_low:
+                    target_uid = uid_key
+                    break
+
+    if not target_uid:
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "❓ <b>Вкажи юзера:</b>\n\n"
+            "• Відповідь на пост анкети в чаті\n"
+            "• <code>/delanket @username</code>\n"
+            "• <code>/delanket 123456789</code>\n"
+            "• <code>/delanket @username причина</code>",
+            parse_mode="HTML",
+        )
+
+    # ── Видаляємо анкету ──────────────────────────────────────
+    data = _ank.revoke_anketa(target_uid)
+    if not data:
+        # Можливо статус не «approved» — пробуємо hard-delete
+        data = _ank.delete_user_anketa(target_uid)
+    if not data:
+        return await msg.reply("⚠️ Активна анкета у цього юзера не знайдена.")
+
+    # ── Видаляємо пост з паб-чату ─────────────────────────────
+    pub_msg  = data.get("pub_msg_id")
+    pub_chat = data.get("pub_chat_id") or _ank.get_pub_chat()
+    if pub_msg and pub_chat:
+        try:
+            await bot.delete_message(pub_chat, pub_msg)
+        except Exception:
+            pass
+
+    # ── Повідомляємо автора анкети ────────────────────────────
+    name_hint  = data.get("full_name") or data.get("username") or str(target_uid)
+    uname_hint = f"@{data['username']}" if data.get("username") else "—"
+    ank_num    = data.get("anketa_num") or "—"
+    reason_line = f"\n\n📌 <b>Причина:</b> {html.escape(reason)}" if reason else ""
+
+    try:
+        await bot.send_message(
+            target_uid,
+            f"{brand.hdr()}\n\n"
+            f"🗑 <b>Твоя анкета була видалена фаундером.</b>{reason_line}\n\n"
+            "Якщо вважаєш це помилкою — звернись до модераторів.\n"
+            "Подати нову анкету: /анкета\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+            reply_markup=_anketa_kb(target_uid),
+        )
+        notified = "✅ Юзер отримав повідомлення"
+    except Exception:
+        notified = "⚠️ Не вдалось надіслати повідомлення (юзер заблокував бота)"
+
+    # ── Підтвердження фаундеру ────────────────────────────────
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🗑 <b>Анкета видалена</b>\n\n"
+        f"👤 {html.escape(name_hint)} ({uname_hint})\n"
+        f"🆔 <code>{target_uid}</code>\n"
+        f"📋 Номер анкети: <b>№{ank_num}</b>\n"
+        f"{reason_line}\n\n"
+        f"{notified}\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+    # ── Лог у мод-чат ─────────────────────────────────────────
+    mod_chat = _ank.get_mod_chat()
+    if mod_chat:
+        try:
+            await bot.send_message(
+                mod_chat,
+                f"{brand.hdr()}\n\n"
+                f"🗑 <b>Анкета видалена фаундером</b>\n\n"
+                f"👤 {html.escape(name_hint)} ({uname_hint})\n"
+                f"🆔 <code>{target_uid}</code>\n"
+                f"📋 №{ank_num}{reason_line}\n\n"
+                f"{brand.div()}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
 @dp.message(F.text)
 async def universal_handler(msg: Message):
     if not msg.text:
