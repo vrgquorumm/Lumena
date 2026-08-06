@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/lumena-site/"
+title = "Lumena — офіційний сайт бота"
+description = "Офіційний сайт Telegram-бота Lumena для української спільноти. Описує всі функції бота: економіку, соціальні механіки, модерацію, ігри, AI-чат та систему анкет. Темна тема з glassmorphism та анімацією."
+version = "1.0.0"
+id = "artifacts/lumena-site"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/lumena-site/" ]
+localPort = 21113
+
+[services.development]
+run = "pnpm --filter @workspace/lumena-site run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/lumena-site", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/lumena-site/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21113"
+BASE_PATH = "/lumena-site/"
