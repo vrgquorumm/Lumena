@@ -511,6 +511,50 @@ def is_verified(uid: int) -> bool:
         return True
     return uid in _verified_users
 
+# ── Математическая капча ───────────────────────────────────────
+_captcha_pending: dict[int, int] = {}   # uid → правильный ответ
+
+
+def _gen_captcha() -> tuple[str, int]:
+    """Генерирует математическое уравнение и возвращает (вопрос, ответ).
+    Преимущественно умножение, иногда сложение/вычитание для разнообразия.
+    """
+    kind = random.choices(
+        ["mul", "mul", "mul", "add", "sub"],  # умножение чаще всего
+        k=1,
+    )[0]
+    if kind == "mul":
+        a, b = random.randint(2, 12), random.randint(2, 12)
+        return f"{a} × {b} = ?", a * b
+    elif kind == "add":
+        a, b = random.randint(11, 60), random.randint(11, 39)
+        return f"{a} + {b} = ?", a + b
+    else:  # sub
+        a = random.randint(20, 80)
+        b = random.randint(5, a - 1)
+        return f"{a} − {b} = ?", a - b
+
+
+def _captcha_keyboard(uid: int, correct: int) -> InlineKeyboardMarkup:
+    """4 кнопки с ответами (1 правильный, 3 ложных)."""
+    decoys: set[int] = set()
+    while len(decoys) < 3:
+        delta = random.randint(1, 18)
+        sign  = random.choice([-1, 1])
+        w = correct + sign * delta
+        if w != correct and w > 0:
+            decoys.add(w)
+    options = list(decoys) + [correct]
+    random.shuffle(options)
+    btns = [
+        InlineKeyboardButton(
+            text=str(opt),
+            callback_data=f"captcha_ans:{uid}:{opt}",
+        )
+        for opt in options
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[btns[:2], btns[2:]])
+
 def is_anketa_premium(uid: int, username: str = "") -> bool:
     """True якщо юзер має VIP-статус для анкети (куплений або безкоштовний)."""
     if uid in _premium_users:
@@ -4429,28 +4473,70 @@ async def cmd_start_private(msg: Message):
 
 @dp.callback_query(F.data == "verify:go")
 async def cb_verify_go(cb: CallbackQuery):
-    if is_verified(cb.from_user.id):
+    uid = cb.from_user.id
+    if is_verified(uid):
         await cb.answer("Ты уже верифицирован ✅", show_alert=False)
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=brand.btn_label("verify_confirm"),
-            callback_data="verify:done",
-        )]
-    ])
+    question, correct = _gen_captcha()
+    _captcha_pending[uid] = correct
+    kb = _captcha_keyboard(uid, correct)
     await _edit_custom(
         cb.message, "verify_prompt",
-        "🔐 <b>Верификация</b>\n\n"
-        "Нажми кнопку ниже, чтобы подтвердить что ты человек.\n\n"
-        "<i>Это разовая проверка — больше не потребуется.</i>",
+        f"🔐 <b>Верификация</b>\n\n"
+        f"Реши пример:\n\n"
+        f"<b>  {question}</b>\n\n"
+        f"<i>Выбери правильный ответ ниже 👇</i>",
         reply_markup=kb,
     )
     await cb.answer()
 
 
-@dp.callback_query(F.data == "verify:done")
-async def cb_verify_done(cb: CallbackQuery):
-    uid      = cb.from_user.id
+@dp.callback_query(F.data.startswith("captcha_ans:"))
+async def cb_captcha_ans(cb: CallbackQuery):
+    uid = cb.from_user.id
+    parts = cb.data.split(":")
+    if len(parts) != 3:
+        return await cb.answer("Ошибка данных", show_alert=True)
+    try:
+        target_uid = int(parts[1])
+        chosen     = int(parts[2])
+    except ValueError:
+        return await cb.answer("Ошибка данных", show_alert=True)
+
+    # Нельзя нажимать чужую капчу
+    if uid != target_uid:
+        return await cb.answer("Это не твоя капча 👀", show_alert=True)
+
+    correct = _captcha_pending.get(uid)
+    if correct is None:
+        # Капча устарела (бот перезапустился)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔄 Получить новый пример", callback_data="verify:go")
+        ]])
+        await _edit_custom(
+            cb.message, "verify_expired",
+            "⏳ <b>Капча устарела.</b>\n\nНажми кнопку, чтобы получить новый пример.",
+            reply_markup=kb,
+        )
+        return await cb.answer()
+
+    if chosen != correct:
+        # Неправильный ответ — сразу новый пример
+        question, new_correct = _gen_captcha()
+        _captcha_pending[uid] = new_correct
+        kb = _captcha_keyboard(uid, new_correct)
+        await _edit_custom(
+            cb.message, "verify_wrong",
+            f"❌ <b>Неверно!</b> Попробуй ещё раз.\n\n"
+            f"Реши пример:\n\n"
+            f"<b>  {question}</b>\n\n"
+            f"<i>Выбери правильный ответ 👇</i>",
+            reply_markup=kb,
+        )
+        return await cb.answer("Неверный ответ ❌", show_alert=False)
+
+    # ✅ Правильный ответ
+    _captcha_pending.pop(uid, None)
     raw_name = cb.from_user.first_name or "друг"
     name     = html.escape(raw_name)
     _verified_users.add(uid)
@@ -4467,7 +4553,7 @@ async def cb_verify_done(cb: CallbackQuery):
         name=raw_name,
         reply_markup=build_main_kb(),
     )
-    await cb.answer()
+    await cb.answer("✅ Правильно!", show_alert=False)
 
 
 @dp.message(Command("анкета", "anketa"))
