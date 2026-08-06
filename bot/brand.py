@@ -13,6 +13,7 @@ _custom_style: dict[str, str] = {}
 
 # Описания редактируемых параметров стиля
 STYLE_DEFS: dict[str, dict] = {
+    # ── Оформление ────────────────────────────────────────
     "header_text":  {
         "desc":    "Текст заголовка",
         "default": "L U M E N A",
@@ -22,8 +23,14 @@ STYLE_DEFS: dict[str, dict] = {
     "divider_char": {
         "desc":    "Символ разделителя",
         "default": "▬",
-        "hint":    "Повторяется 10 раз как горизонтальная черта. Один символ или emoji.",
+        "hint":    "Повторяется N раз как горизонтальная черта. Один символ или emoji.",
         "max":     8,
+    },
+    "divider_count": {
+        "desc":    "Длина разделителя",
+        "default": "10",
+        "hint":    "Сколько символов в разделителе. Число от 3 до 30.",
+        "max":     2,
     },
     "bullet_char":  {
         "desc":    "Буллет-поинт",
@@ -37,12 +44,145 @@ STYLE_DEFS: dict[str, dict] = {
         "hint":    "Используется для выделения важного. Один символ или emoji.",
         "max":     8,
     },
+    "bot_display_name": {
+        "desc":    "Имя бота в фразах",
+        "default": "Лумена",
+        "hint":    "Как бот называет себя. Пример: Лумена, Lumena, Lumena Bot",
+        "max":     30,
+    },
+    "community_name": {
+        "desc":    "Название сообщества",
+        "default": "Lumena",
+        "hint":    "Название проекта/сообщества в приветствиях и описаниях.",
+        "max":     30,
+    },
+    # ── Экономика ─────────────────────────────────────────
+    "currency_name": {
+        "desc":    "Название монеты",
+        "default": "LMN",
+        "hint":    "Обозначение валюты в экономике. Пример: LMN, COIN, ЛМН",
+        "max":     10,
+    },
+    "currency_emoji": {
+        "desc":    "Эмодзи монеты",
+        "default": "💰",
+        "hint":    "Показывается рядом с балансом. Один символ или emoji.",
+        "max":     4,
+    },
+    "work_emoji": {
+        "desc":    "Символ работы",
+        "default": "💼",
+        "hint":    "Показывается в командах работа/смена.",
+        "max":     4,
+    },
+    "fish_emoji": {
+        "desc":    "Символ рыбалки",
+        "default": "🎣",
+        "hint":    "Показывается в команде рыбалка.",
+        "max":     4,
+    },
+    "casino_emoji": {
+        "desc":    "Символ казино",
+        "default": "🎰",
+        "hint":    "Показывается в команде казино.",
+        "max":     4,
+    },
+    "slots_emoji": {
+        "desc":    "Символ слотов",
+        "default": "🎲",
+        "hint":    "Показывается в команде слоты.",
+        "max":     4,
+    },
+    "rob_emoji": {
+        "desc":    "Символ ограбления",
+        "default": "🦹",
+        "hint":    "Показывается в команде ограбить.",
+        "max":     4,
+    },
+    # ── Социальное ────────────────────────────────────────
+    "fire_emoji": {
+        "desc":    "Символ огня / стрика",
+        "default": "🔥",
+        "hint":    "Используется в чекинах и стриках.",
+        "max":     4,
+    },
+    "marry_emoji": {
+        "desc":    "Символ брака",
+        "default": "💍",
+        "hint":    "Показывается в командах брак/замуж/развод.",
+        "max":     4,
+    },
+    "rep_emoji": {
+        "desc":    "Символ репутации",
+        "default": "⭐",
+        "hint":    "Показывается в топе и профиле репутации.",
+        "max":     4,
+    },
+    "aura_emoji": {
+        "desc":    "Символ ауры",
+        "default": "✨",
+        "hint":    "Показывается в команде аура.",
+        "max":     4,
+    },
+    "coin_emoji": {
+        "desc":    "Символ монетки (игра)",
+        "default": "🪙",
+        "hint":    "Показывается в игре «монетка».",
+        "max":     4,
+    },
+    "gift_emoji": {
+        "desc":    "Символ подарка",
+        "default": "🎁",
+        "hint":    "Показывается в социальной команде подарить.",
+        "max":     4,
+    },
+    "vip_emoji": {
+        "desc":    "Символ VIP",
+        "default": "👑",
+        "hint":    "Показывается у VIP-пользователей.",
+        "max":     4,
+    },
+    # ── Модерация ─────────────────────────────────────────
+    "mute_emoji": {
+        "desc":    "Символ мута",
+        "default": "🔇",
+        "hint":    "Показывается при выдаче мута.",
+        "max":     4,
+    },
+    "ban_emoji": {
+        "desc":    "Символ бана",
+        "default": "🚫",
+        "hint":    "Показывается при выдаче бана.",
+        "max":     4,
+    },
+    "warn_emoji": {
+        "desc":    "Символ варна",
+        "default": "⚠️",
+        "hint":    "Показывается при выдаче предупреждения.",
+        "max":     4,
+    },
+    "kick_emoji": {
+        "desc":    "Символ кика",
+        "default": "👢",
+        "hint":    "Показывается при кике из чата.",
+        "max":     4,
+    },
 }
 
 
 def get_style(key: str) -> str:
     """Текущее значение стиля (кастомное или дефолтное)."""
     return _custom_style.get(key) or STYLE_DEFS.get(key, {}).get("default", "")
+
+
+def em(style_key: str, fallback: str = "") -> str:
+    """Эмодзи/символ из настроек стиля (кастомный или fallback)."""
+    return _custom_style.get(style_key) or fallback
+
+
+def currency() -> str:
+    """Название монеты из настроек (LMN по умолчанию)."""
+    return _custom_style.get("currency_name") or "LMN"
 
 
 def is_style_customized(key: str) -> bool:
@@ -187,8 +327,13 @@ def hdr() -> str:
     return f"{em}  {name}  {em}"
 
 
-def div(n: int = 10) -> str:
-    """Разделитель из n символов."""
+def div(n: int | None = None) -> str:
+    """Разделитель из n символов (n=None → берёт из настроек divider_count)."""
+    if n is None:
+        try:
+            n = max(3, min(30, int(_custom_style.get("divider_count") or 10)))
+        except (ValueError, TypeError):
+            n = 10
     ch = _custom_style.get("divider_char") or e("divider", "▬")
     return ch * n
 
@@ -374,6 +519,75 @@ DEFAULT_TEXTS: dict[str, str] = {
     "fortune_result":      "🔮 <b>Предсказание</b>\n\n{result}",
     "horoscope_result":    "♈ <b>Гороскоп для {sign}</b>\n\n{text}",
     "tarot_result":        "🃏 Твоя карта: <b>{card}</b>\n{meaning}",
+
+    # ── Монетка ───────────────────────────────────────────
+    "coin_heads":          "🪙 Орёл 🦅",
+    "coin_tails":          "🪙 Решка 🌟",
+
+    # ── Профиль ───────────────────────────────────────────
+    "profile_header":      "👤 Профиль · <b>{name}</b>",
+    "profile_bio_label":   "📝 Bio:",
+    "profile_balance_label": "💰 Баланс:",
+    "profile_streak_label":  "🔥 Стрик:",
+    "profile_rep_label":     "⭐ Репутация:",
+    "profile_marry_label":   "💍 Брак:",
+    "profile_id_label":      "🆔 ID:",
+
+    # ── Рейтинги ──────────────────────────────────────────
+    "richest_header":      "💰 Топ богачей чата",
+    "richest_empty":       "💸 Пока у всех пустые кошельки 😅",
+    "richest_total":       "💵 В обороте: <b>{total} {cur}</b>",
+    "top_rep_header":      "⭐ Топ репутации",
+    "top_checkin_header":  "🔥 Топ по чекинам",
+
+    # ── Казино — ошибки ───────────────────────────────────
+    "casino_no_bet":       "🎰 Укажи ставку: <code>казино [сумма]</code>",
+    "casino_no_balance":   "❌ Недостаточно {cur} для ставки",
+    "casino_invalid_bet":  "❌ Ставка должна быть числом",
+    "casino_negative_bet": "❌ Ставка должна быть положительной",
+
+    # ── Слоты — ошибки ────────────────────────────────────
+    "slots_no_bet":        "🎲 Укажи ставку: <code>слоты [сумма]</code>",
+    "slots_no_balance":    "❌ Недостаточно {cur} для ставки",
+    "slots_invalid_bet":   "❌ Ставка должна быть числом",
+
+    # ── Ограбление ────────────────────────────────────────
+    "rob_no_reply":        "🦹 Ответь на сообщение жертвы!",
+    "rob_self":            "❌ Нельзя грабить самого себя",
+    "rob_bot":             "❌ Нельзя грабить бота",
+    "rob_target_poor":     "💸 У жертвы нет денег 😅",
+    "rob_victim_notify":   "🚨 Тебя ограбили! <b>{thief}</b> украл <b>{stolen} {cur}</b>",
+
+    # ── Перевод ───────────────────────────────────────────
+    "give_self":           "❌ Нельзя переводить самому себе",
+    "give_zero":           "❌ Сумма должна быть больше нуля",
+    "give_bot":            "❌ Нельзя переводить боту",
+
+    # ── Рулетка ───────────────────────────────────────────
+    "roulette_already":    "🎯 Ты уже в рулетке! Используй: рулетка_старт",
+    "roulette_join_msg":   "🎯 <b>{name}</b> присоединился к рулетке!\nИгроков: <b>{count}</b>\nНапиши <b>рулетка_старт</b> чтобы начать (минимум 2)",
+    "roulette_not_enough": "🎯 Нужно минимум 2 игрока для старта!",
+    "roulette_result":     "🔫 Барабан крутится...\n💀 Проигравший: <b>{name}</b>!",
+
+    # ── Виселица ──────────────────────────────────────────
+    "hangman_no_game":     "🎮 Нет активной игры. Начни: виселица",
+    "hangman_letter_used": "🔄 «<b>{letter}</b>» уже было! Попробуй другую букву.",
+    "hangman_wrong":       "❌ «<b>{letter}</b>» нет в слове. Попыток осталось: <b>{tries}</b>\n<code>{mask}</code>",
+    "hangman_right":       "✅ «<b>{letter}</b>» есть! <code>{mask}</code>",
+
+    # ── Модерация — самодействия ──────────────────────────
+    "mute_self":           "❌ Нельзя замутить самого себя",
+    "ban_self":            "❌ Нельзя забанить самого себя",
+    "kick_self":           "❌ Нельзя кикнуть самого себя",
+
+    # ── Брак — таймаут ────────────────────────────────────
+    "marry_timeout":       "⏳ <b>{name}</b> не ответил(а) на предложение. Запрос отменён.",
+
+    # ── Варны ─────────────────────────────────────────────
+    "unwarn_no_warns":     "У <b>{name}</b> нет активных варнов.",
+
+    # ── Чекин — майлстоун ─────────────────────────────────
+    "checkin_milestone":   "🎉 <b>{name}</b> — {count} дней подряд! Бонус: <b>+{bonus} {cur}</b>",
 }
 
 TEXT_LABELS: dict[str, str] = {
@@ -503,6 +717,75 @@ TEXT_LABELS: dict[str, str] = {
     "fortune_result":      "Предсказание 🔮",
     "horoscope_result":    "Гороскоп ♈",
     "tarot_result":        "Таро 🃏",
+
+    # ── Монетка ────────────────────────────────────────────
+    "coin_heads":          "Монетка: выпал Орёл 🦅",
+    "coin_tails":          "Монетка: выпала Решка 🌟",
+
+    # ── Профиль ────────────────────────────────────────────
+    "profile_header":      "Заголовок профиля ({name})",
+    "profile_bio_label":   "Профиль: метка Bio",
+    "profile_balance_label": "Профиль: метка Баланс",
+    "profile_streak_label":  "Профиль: метка Стрик",
+    "profile_rep_label":     "Профиль: метка Репутация",
+    "profile_marry_label":   "Профиль: метка Брак",
+    "profile_id_label":      "Профиль: метка ID",
+
+    # ── Рейтинги ───────────────────────────────────────────
+    "richest_header":      "Богатейшие — заголовок",
+    "richest_empty":       "Богатейшие — пустой список",
+    "richest_total":       "Богатейшие — итого в обороте",
+    "top_rep_header":      "Топ репутации — заголовок",
+    "top_checkin_header":  "Топ чекинов — заголовок",
+
+    # ── Казино — ошибки ────────────────────────────────────
+    "casino_no_bet":       "Казино: не указана ставка",
+    "casino_no_balance":   "Казино: недостаточно монет",
+    "casino_invalid_bet":  "Казино: ставка не число",
+    "casino_negative_bet": "Казино: ставка ≤ 0",
+
+    # ── Слоты — ошибки ─────────────────────────────────────
+    "slots_no_bet":        "Слоты: не указана ставка",
+    "slots_no_balance":    "Слоты: недостаточно монет",
+    "slots_invalid_bet":   "Слоты: ставка не число",
+
+    # ── Ограбление ─────────────────────────────────────────
+    "rob_no_reply":        "Ограбление: нет reply",
+    "rob_self":            "Ограбление: цель — себя",
+    "rob_bot":             "Ограбление: цель — бот",
+    "rob_target_poor":     "Ограбление: у жертвы нет денег",
+    "rob_victim_notify":   "Ограбление: уведомление жертве",
+
+    # ── Перевод ────────────────────────────────────────────
+    "give_self":           "Перевод: попытка перевести себе",
+    "give_zero":           "Перевод: сумма ≤ 0",
+    "give_bot":            "Перевод: попытка перевести боту",
+
+    # ── Рулетка ────────────────────────────────────────────
+    "roulette_already":    "Рулетка: уже участвует",
+    "roulette_join_msg":   "Рулетка: игрок вошёл (расширенный)",
+    "roulette_not_enough": "Рулетка: мало игроков для старта",
+    "roulette_result":     "Рулетка: результат (проигравший)",
+
+    # ── Виселица ───────────────────────────────────────────
+    "hangman_no_game":     "Виселица: нет активной игры",
+    "hangman_letter_used": "Виселица: буква уже угадана",
+    "hangman_wrong":       "Виселица: неверная буква",
+    "hangman_right":       "Виселица: верная буква",
+
+    # ── Модерация — самодействия ───────────────────────────
+    "mute_self":           "Мут: попытка замутить себя",
+    "ban_self":            "Бан: попытка забанить себя",
+    "kick_self":           "Кик: попытка кикнуть себя",
+
+    # ── Брак ───────────────────────────────────────────────
+    "marry_timeout":       "Брак: таймаут ответа ({name})",
+
+    # ── Варны ──────────────────────────────────────────────
+    "unwarn_no_warns":     "Снять варн: варнов нет",
+
+    # ── Чекин — бонус ──────────────────────────────────────
+    "checkin_milestone":   "Чекин: бонус за N дней ({count})",
 }
 
 
@@ -680,6 +963,55 @@ BUTTON_DEFS: dict[str, dict] = {
         "desc":  "Кнопка в приветственном сообщении",
         "type":  "callback",
     },
+    # ── Новые кнопки ────────────────────────────────────
+    "support_link": {
+        "label": "💬 Поддержка",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка поддержки (ссылка)",
+        "type":  "url",
+    },
+    "rules_link": {
+        "label": "📋 Правила",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка правил сообщества (ссылка)",
+        "type":  "url",
+    },
+    "anketa_link": {
+        "label": "📝 Анкеты",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка анкет знакомств (ссылка)",
+        "type":  "url",
+    },
+    "donate_link": {
+        "label": "❤️ Поддержать проект",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка донатов / поддержки проекта",
+        "type":  "url",
+    },
+    "news_link": {
+        "label": "📢 Новости",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка новостей / обновлений",
+        "type":  "url",
+    },
+    "social_link": {
+        "label": "🌐 Соцсети",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка соцсетей проекта",
+        "type":  "url",
+    },
+    "partner_link": {
+        "label": "🤝 Партнёры",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка партнёров",
+        "type":  "url",
+    },
+    "store_link": {
+        "label": "🛒 Магазин",
+        "url":   "https://t.me/",
+        "desc":  "Кнопка магазина / мерча",
+        "type":  "url",
+    },
 }
 
 
@@ -734,6 +1066,51 @@ def save_custom_buttons(path: str = "data/custom_buttons.json") -> None:
     os.makedirs("data", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(_custom_buttons, f, ensure_ascii=False, indent=2)
+
+
+async def push_custom_buttons_to_github(path: str = "data/custom_buttons.json") -> bool:
+    """Коммитит custom_buttons.json в GitHub — кнопки выживают после Railway-деплоя."""
+    import json, os, base64
+    try:
+        import aiohttp
+    except ImportError:
+        return False
+
+    token = os.getenv("GITHUB_TOKEN", "")
+    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
+    if not token:
+        return False
+
+    git_path = f"bot/{path}"
+    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
+    headers  = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    try:
+        content_bytes = json.dumps(_custom_buttons, ensure_ascii=False, indent=2).encode()
+        content_b64   = base64.b64encode(content_bytes).decode()
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, headers=headers) as resp:
+                sha = (await resp.json()).get("sha") if resp.status == 200 else None
+
+            payload: dict = {"message": "chore: auto-save custom buttons", "content": content_b64}
+            if sha:
+                payload["sha"] = sha
+
+            async with session.put(api_url, headers=headers, json=payload) as resp:
+                if resp.status in (200, 201):
+                    print("✅ custom_buttons.json синхронизирован с GitHub")
+                    return True
+                err = await resp.text()
+                print(f"⚠️ GitHub buttons push failed {resp.status}: {err[:200]}")
+                return False
+    except Exception as ex:
+        print(f"⚠️ push_custom_buttons_to_github: {ex}")
+        return False
 
 
 def load_custom_buttons(path: str = "data/custom_buttons.json") -> None:

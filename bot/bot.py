@@ -1717,12 +1717,15 @@ async def cmd_give(msg: Message, command: CommandObject):
         "ℹ️ Ответь на сообщение получателя и укажи сумму.\n"
         "Пример: <i>дать 1000</i> (в ответ на сообщение)", parse_mode="HTML")
     target = msg.reply_to_message.from_user
-    if target.id == msg.from_user.id: return await msg.reply("❌ Нельзя переводить себе")
-    if target.is_bot: return await msg.reply("❌ Боту нельзя переводить монеты")
+    if target.id == msg.from_user.id:
+        return await msg.reply(brand.get_text("give_self"), parse_mode="HTML")
+    if target.is_bot:
+        return await msg.reply(brand.get_text("give_bot"), parse_mode="HTML")
     if not command.args: return await msg.reply("Укажи сумму: <b>дать [сумма]</b>", parse_mode="HTML")
     try: amount = int(command.args.split()[0])
     except: return await msg.reply("❌ Укажи целое число")
-    if amount <= 0: return await msg.reply("❌ Сумма должна быть больше нуля")
+    if amount <= 0:
+        return await msg.reply(brand.get_text("give_zero"), parse_mode="HTML")
     sender_bal = get_balance(msg.from_user.id)
     if sender_bal < amount:
         return await msg.reply(
@@ -1796,11 +1799,13 @@ async def cmd_fish(msg: Message):
 
 @dp.message(Command("casino"))
 async def cmd_casino(msg: Message, command: CommandObject):
-    if not command.args: return await msg.reply("Укажи ставку: казино [сумма]")
+    _cur = brand.currency()
+    if not command.args: return await msg.reply(brand.get_text("casino_no_bet"), parse_mode="HTML")
     try: bet = int(command.args.split()[0])
-    except: return await msg.reply("Укажи число")
-    if bet <= 0: return await msg.reply("Ставка должна быть положительной")
-    if get_balance(msg.from_user.id) < bet: return await msg.reply("❌ Недостаточно LMN")
+    except: return await msg.reply(brand.get_text("casino_invalid_bet"), parse_mode="HTML")
+    if bet <= 0: return await msg.reply(brand.get_text("casino_negative_bet"), parse_mode="HTML")
+    if get_balance(msg.from_user.id) < bet:
+        return await msg.reply(brand.get_text("casino_no_balance", cur=_cur), parse_mode="HTML")
     uid = msg.from_user.id
     _casino_win_txt = [
         "удача улыбнулась 🎉", "сегодня твой день 🔥", "вот это повезло!",
@@ -1845,11 +1850,13 @@ async def cmd_casino(msg: Message, command: CommandObject):
 
 @dp.message(Command("slots"))
 async def cmd_slots(msg: Message, command: CommandObject):
-    if not command.args: return await msg.reply("Укажи ставку: слоты [сумма]")
+    _cur = brand.currency()
+    if not command.args: return await msg.reply(brand.get_text("slots_no_bet"), parse_mode="HTML")
     try: bet = int(command.args.split()[0])
-    except: return await msg.reply("Укажи число")
-    if bet <= 0: return await msg.reply("Ставка должна быть положительной")
-    if get_balance(msg.from_user.id) < bet: return await msg.reply("❌ Недостаточно LMN")
+    except: return await msg.reply(brand.get_text("slots_invalid_bet"), parse_mode="HTML")
+    if bet <= 0: return await msg.reply(brand.get_text("casino_negative_bet"), parse_mode="HTML")
+    if get_balance(msg.from_user.id) < bet:
+        return await msg.reply(brand.get_text("slots_no_balance", cur=_cur), parse_mode="HTML")
     _slots_jackpot_txt = [
         "ДЖЕКПОТ! ты что, читерил(а)?! 😱", "это невозможно!! 🎊",
         "барабаны в шоке 💎", "три в ряд!! легенда! 🔥",
@@ -1900,14 +1907,19 @@ async def cmd_slots(msg: Message, command: CommandObject):
 
 @dp.message(Command("rob"))
 async def cmd_rob(msg: Message):
-    if not msg.reply_to_message: return await msg.reply("Ответь на сообщение жертвы")
+    _cur = brand.currency()
+    if not msg.reply_to_message:
+        return await msg.reply(brand.get_text("rob_no_reply"), parse_mode="HTML")
     robber = msg.from_user
     victim = msg.reply_to_message.from_user
-    if victim.id == robber.id: return await msg.reply("❌ Нельзя грабить самого себя")
-    if victim.is_bot: return await msg.reply("❌ Нельзя грабить бота")
+    if victim.id == robber.id:
+        return await msg.reply(brand.get_text("rob_self"), parse_mode="HTML")
+    if victim.is_bot:
+        return await msg.reply(brand.get_text("rob_bot"), parse_mode="HTML")
     # Проверяем баланс жертвы ДО кулдауна — не тратим попытку зря
     vic_bal = get_balance(victim.id)
-    if vic_bal < 100: return await msg.reply("💸 У жертвы нет денег 😅")
+    if vic_bal < 100:
+        return await msg.reply(brand.get_text("rob_target_poor"), parse_mode="HTML")
     now = now_kyiv()
     last = rob_cooldown.get(robber.id)
     if last and (now - last).seconds < 7200:
@@ -1967,7 +1979,9 @@ async def cmd_rob(msg: Message):
 
 @dp.message(Command("richest"))
 async def cmd_richest(msg: Message):
-    if not lmn_balances: return await msg.reply("💸 Пока у всех пустые кошельки 😅")
+    _cur = brand.currency()
+    empty_msg = brand.get_text("richest_empty")
+    if not lmn_balances: return await msg.reply(empty_msg, parse_mode="HTML")
     # Фильтруем только участников текущего чата
     chat_uids = chat_members.get(msg.chat.id, set())
     if chat_uids:
@@ -1975,12 +1989,12 @@ async def cmd_richest(msg: Message):
     else:
         filtered = lmn_balances
     if not filtered:
-        return await msg.reply("💸 Пока у всех пустые кошельки 😅")
+        return await msg.reply(empty_msg, parse_mode="HTML")
     top = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     lines = [
         f"{brand.hdr()}\n",
-        "💰 Топ богачей чата",
+        brand.get_text("richest_header"),
         f"{brand.div()}",
     ]
     for i, (uid, bal) in enumerate(top):
@@ -1988,9 +2002,9 @@ async def cmd_richest(msg: Message):
             m = await bot.get_chat_member(msg.chat.id, uid)
             name = m.user.full_name
         except: name = f"ID {uid}"
-        lines.append(f"{medals[i]} <b>{name}</b>  —  {fmt_lmn(bal)} LMN")
+        lines.append(f"{medals[i]} <b>{html.escape(name)}</b>  —  {fmt_lmn(bal)} {_cur}")
     lines.append(f"\n{brand.div()}")
-    lines.append(f"<i>В чате в обороте: {fmt_lmn(sum(filtered.values()))} LMN</i>")
+    lines.append(brand.get_text("richest_total", total=fmt_lmn(sum(filtered.values())), cur=_cur))
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 @dp.message(Command("givetoadmins"))
@@ -2606,7 +2620,11 @@ async def cmd_roast(msg: Message):
 # ═══════════════════════════════════════════════════════
 # ИГРЫ
 # ═══════════════════════════════════════════════════════
-async def cmd_coin(msg: Message): await msg.reply("🪙 " + random.choice(["Орёл 🦅","Решка 🌟"]))
+async def cmd_coin(msg: Message):
+    await msg.reply(random.choice([
+        brand.get_text("coin_heads"),
+        brand.get_text("coin_tails"),
+    ]))
 async def cmd_dice(msg: Message, command: CommandObject = None):
     n = 1
     try: n = min(max(int((command.args or "1").split()[0]), 1), 10)
@@ -2692,17 +2710,26 @@ async def cmd_roulette(msg: Message):
     name = msg.from_user.full_name
     roulette_players.setdefault(chat_id, {})
     if uid in roulette_players[chat_id]:
-        return await msg.reply("Ты уже в рулетке! Используй: рулетка_старт")
+        return await msg.reply(brand.get_text("roulette_already"), parse_mode="HTML")
     roulette_players[chat_id][uid] = name
-    await msg.reply(f"🎯 {name} присоединился к рулетке! Игроков: {len(roulette_players[chat_id])}\nНапиши рулетка_старт чтобы начать (минимум 2 игрока)")
+    await msg.reply(
+        brand.get_text("roulette_join_msg",
+                       name=html.escape(name),
+                       count=len(roulette_players[chat_id])),
+        parse_mode="HTML",
+    )
 
 async def cmd_roulette_start(msg: Message):
     chat_id = msg.chat.id
     players = roulette_players.get(chat_id, {})
-    if len(players) < 2: return await msg.reply("Нужно минимум 2 игрока!")
+    if len(players) < 2:
+        return await msg.reply(brand.get_text("roulette_not_enough"), parse_mode="HTML")
     loser_id, loser_name = random.choice(list(players.items()))
     roulette_players[chat_id] = {}
-    await msg.reply(f"🔫 Барабан крутится...\n💀 Проигравший: <b>{loser_name}</b>!", parse_mode="HTML")
+    await msg.reply(
+        brand.get_text("roulette_result", name=html.escape(loser_name)),
+        parse_mode="HTML",
+    )
 
 async def cmd_hangman(msg: Message):
     words = ["python","телеграм","программист","компьютер","телефон","приключение","музыка","технология"]
@@ -2715,24 +2742,32 @@ async def cmd_hangman(msg: Message):
 async def cmd_hangman_guess(msg: Message, letter: str):
     chat_id = msg.chat.id
     game = hangman_games.get(chat_id)
-    if not game: return await msg.reply("Нет активной игры. Начни: виселица")
+    if not game:
+        return await msg.reply(brand.get_text("hangman_no_game"), parse_mode="HTML")
     letter = letter.lower()
-    if letter in game["guessed"]: return await msg.reply(f"«{letter}» уже было загадано!")
+    if letter in game["guessed"]:
+        return await msg.reply(
+            brand.get_text("hangman_letter_used", letter=letter), parse_mode="HTML")
     game["guessed"].add(letter)
     word = game["word"]
     if letter not in word:
         game["tries"] += 1
         if game["tries"] >= 6:
             del hangman_games[chat_id]
-            return await msg.reply(f"💀 Проигрыш! Слово было: <b>{word}</b>", parse_mode="HTML")
+            return await msg.reply(
+                brand.get_text("hangman_lose", word=word), parse_mode="HTML")
         remaining = 6 - game["tries"]
-        display = " ".join(c if c in game["guessed"] else "_" for c in word)
-        return await msg.reply(f"❌ «{letter}» нет! Попыток осталось: {remaining}\n{display}")
-    display = " ".join(c if c in game["guessed"] else "_" for c in word)
-    if "_" not in display:
+        mask = " ".join(c if c in game["guessed"] else "_" for c in word)
+        return await msg.reply(
+            brand.get_text("hangman_wrong", letter=letter, tries=remaining, mask=mask),
+            parse_mode="HTML")
+    mask = " ".join(c if c in game["guessed"] else "_" for c in word)
+    if "_" not in mask:
         del hangman_games[chat_id]
-        return await msg.reply(f"🎉 Победа! Слово: <b>{word}</b>", parse_mode="HTML")
-    await msg.reply(f"✅ «{letter}» есть!\n{display}")
+        return await msg.reply(
+            brand.get_text("hangman_win", word=word), parse_mode="HTML")
+    await msg.reply(
+        brand.get_text("hangman_right", letter=letter, mask=mask), parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════
 # ОТНОШЕНИЯ
@@ -2970,22 +3005,23 @@ async def cmd_profile(msg: Message):
             partner_name = pm.user.full_name
         except: partner_name = "неизвестно"
     profile_data = profiles.get(uid, {})
-    bio = html.escape(profile_data.get("bio", "не указано"))
+    bio = html.escape(profile_data.get("bio", brand.get_text("profile_no_bio") or "не указано"))
     title_str = html.escape(profile_data.get("title", ""))
+    _cur = brand.currency()
     lines = [
         f"{brand.hdr()}\n",
-        f"👤 Профиль · {html.escape(target.full_name)}",
+        brand.get_text("profile_header", name=html.escape(target.full_name)),
     ]
     if title_str:
         lines.append(f"🏷 {title_str}")
     lines += [
         f"{brand.div()}",
-        f"📝 Bio: {bio}",
-        f"💰 Баланс: <b>{fmt_lmn(bal)} LMN</b>",
-        f"🔥 Стрик: <b>{streak_data['count']} дней</b>",
-        f"⭐ Репутация: <b>{rep_val:+d}</b>",
-        f"💍 Брак: {'❤️ ' + partner_name if married else '—'}",
-        f"🆔 ID: <code>{uid}</code>",
+        f"{brand.get_text('profile_bio_label')} {bio}",
+        f"{brand.get_text('profile_balance_label')} <b>{fmt_lmn(bal)} {_cur}</b>",
+        f"{brand.get_text('profile_streak_label')} <b>{streak_data['count']} дней</b>",
+        f"{brand.get_text('profile_rep_label')} <b>{rep_val:+d}</b>",
+        f"{brand.get_text('profile_marry_label')} {'❤️ ' + html.escape(partner_name) if married else brand.get_text('profile_no_partner') or '—'}",
+        f"{brand.get_text('profile_id_label')} <code>{uid}</code>",
         f"\n{brand.div()}",
     ]
     await msg.reply("\n".join(lines), parse_mode="HTML")
@@ -4483,8 +4519,7 @@ async def handle_emoji_extract(msg: Message):
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 
-@dp.message(F.chat.type == "private",
-            F.func(lambda m: m.from_user is not None
+@dp.message(F.func(lambda m: m.from_user is not None
                    and m.from_user.id in _edit_sessions
                    and not (m.text or "").startswith("/")))
 async def handle_founder_edit_text(msg: Message):
@@ -4628,25 +4663,44 @@ _EDITOR_TEXT_CATEGORIES = [
     ("💰 Экономика",         ["balance", "work", "work_cooldown",
                               "fish", "fish_cooldown",
                               "give", "give_no_reply", "give_no_funds",
+                              "give_self", "give_zero", "give_bot",
                               "casino_win", "casino_jackpot", "casino_lose",
+                              "casino_no_bet", "casino_no_balance",
+                              "casino_invalid_bet", "casino_negative_bet",
+                              "slots_no_bet", "slots_no_balance", "slots_invalid_bet",
                               "rob_success", "rob_fail", "rob_cooldown",
+                              "rob_no_reply", "rob_self", "rob_bot",
+                              "rob_target_poor", "rob_victim_notify",
                               "coin_rain", "coin_rain_collected"]),
     ("💍 Брак",              ["marry_proposal", "marry_accept", "marry_reject",
                               "marry_self", "marry_already", "marry_already_other",
-                              "marry_no_reply", "divorce", "divorce_not_married"]),
-    ("🔥 Стрики & Аура",    ["checkin", "checkin_already", "upvote", "downvote",
-                              "rep", "aura_show"]),
+                              "marry_no_reply", "marry_timeout",
+                              "divorce", "divorce_not_married"]),
+    ("🔥 Стрики & Аура",    ["checkin", "checkin_already", "checkin_milestone",
+                              "upvote", "downvote", "rep", "aura_show"]),
     ("🎮 Игры",              ["rps_win", "rps_lose", "rps_tie",
-                              "roulette_join", "roulette_winner", "coin",
-                              "hangman_start", "hangman_win", "hangman_lose"]),
+                              "roulette_join", "roulette_winner",
+                              "roulette_already", "roulette_join_msg",
+                              "roulette_not_enough", "roulette_result",
+                              "coin", "coin_heads", "coin_tails",
+                              "hangman_start", "hangman_win", "hangman_lose",
+                              "hangman_no_game", "hangman_letter_used",
+                              "hangman_wrong", "hangman_right"]),
     ("🤗 Социальные",        ["hug", "kiss", "gift", "slap", "pat",
                               "dance", "bite", "poke", "wave", "highfive",
                               "facepalm", "serenade"]),
     ("🛡 Модерация чата",   ["mute_done", "ban_done", "unban_done", "unmute_done",
                               "kick_done", "warn_done", "warn_ban", "unwarn_done",
+                              "unwarn_no_warns",
+                              "mute_self", "ban_self", "kick_self",
                               "admin_only", "reply_needed", "owner_only"]),
     ("🔮 Предсказания",     ["fortune_result", "horoscope_result", "tarot_result"]),
-    ("👤 Профиль",          ["profile_no_bio", "profile_no_partner", "info_founder_badge"]),
+    ("👤 Профиль & Рейтинги", ["profile_no_bio", "profile_no_partner", "info_founder_badge",
+                                "profile_header", "profile_bio_label",
+                                "profile_balance_label", "profile_streak_label",
+                                "profile_rep_label", "profile_marry_label", "profile_id_label",
+                                "richest_header", "richest_empty", "richest_total",
+                                "top_rep_header", "top_checkin_header"]),
 ]
 
 _PAGE_SIZE = 8  # строк на страницу в категории
@@ -5236,6 +5290,7 @@ async def handle_btn_edit_input(msg: Message):
         brand.set_custom_button(key, label=text)
 
     brand.save_custom_buttons()
+    asyncio.create_task(brand.push_custom_buttons_to_github())
 
     what = "Ссылка" if step == "url" else "Название"
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
