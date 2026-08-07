@@ -1661,6 +1661,65 @@ async def cmd_marry(msg: Message):
         parse_mode="HTML", reply_markup=kb
     )
 
+
+@dp.message(Command("forcemarry"))
+async def cmd_forcemarry(msg: Message, command: CommandObject):
+    """Фаундер сразу оформляет брак: reply на первого + ID второго участника."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер может оформить принудительный брак.")
+    if msg.chat.type == "private":
+        return await msg.reply("💍 Используй команду прямо в групповом чате.")
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply(
+            "ℹ️ Ответь на сообщение первого человека и напиши:\n"
+            "<code>/forcemarry ID_второго</code>",
+            parse_mode="HTML",
+        )
+    try:
+        target_id = int((command.args or "").strip().split()[0])
+        second_member = await bot.get_chat_member(msg.chat.id, target_id)
+        second = second_member.user
+    except (IndexError, ValueError):
+        return await msg.reply("ℹ️ После команды укажи числовой Telegram ID второго человека.")
+    except Exception:
+        return await msg.reply("❌ Не удалось найти второго человека в этом чате по ID.")
+
+    first = msg.reply_to_message.from_user
+    if first.is_bot or second.is_bot:
+        return await msg.reply("🤖 Ботов нельзя оформить в брак.")
+    if first.id == second.id:
+        return await msg.reply("😄 Нельзя оформить человека в брак с самим собой.")
+    if is_married(msg.chat.id, first.id):
+        return await msg.reply(f"💔 {first.full_name} уже состоит в браке.")
+    if is_married(msg.chat.id, second.id):
+        return await msg.reply(f"💔 {second.full_name} уже состоит в браке.")
+
+    cid = econ_cid(msg.chat.id)
+    marriages.setdefault(cid, {})
+    marriages[cid][first.id] = second.id
+    marriages[cid][second.id] = first.id
+    add_balance(first.id, 500)
+    add_balance(second.id, 500)
+    save_data()
+
+    marriage_text = (
+        f"{brand.hdr()}\n\n"
+        "💍 <b>Брак оформлен фаундером!</b>\n\n"
+        f"💕 <b>{html.escape(first.full_name)}</b>\n"
+        f"❤️ <b>{html.escape(second.full_name)}</b>\n\n"
+        "🎊 +500 LMN каждому в подарок!\n\n"
+        f"{brand.div()}"
+    )
+    await msg.reply(marriage_text, parse_mode="HTML")
+
+    pub_chat = _ank.get_pub_chat()
+    if pub_chat and pub_chat != msg.chat.id:
+        try:
+            await bot.send_message(pub_chat, marriage_text, parse_mode="HTML")
+        except Exception:
+            pass
+
+
 @dp.callback_query(F.data.startswith("mar_"))
 async def marry_callback(cb: CallbackQuery):
     parts = cb.data.split("_")
