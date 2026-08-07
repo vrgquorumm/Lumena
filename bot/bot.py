@@ -86,6 +86,8 @@ reputation = {}           # {chat_id: {user_id: int}}
 work_cooldown = {}        # {user_id: datetime}
 fish_cooldown = {}        # {user_id: datetime}
 rob_cooldown = {}         # {user_id: datetime}
+bank_balances = {}        # {user_id: int} — гроші в банку (захищені від /rob)
+bank_withdraw_cd = {}     # {user_id: datetime} — кулдаун виведення з банку
 chat_rules = {}           # {chat_id: str}
 hangman_games = {}        # {chat_id: {"word": str, "guessed": set, "tries": int}}
 roulette_players = {}     # {chat_id: {user_id: name}}
@@ -175,6 +177,7 @@ def save_data():
         "link_guard_warns": {str(c): {str(u): v for u, v in w.items()}
                              for c, w in _link_guard_warns.items()},
         "link_whitelist":   {str(c): v for c, v in _link_whitelist.items()},
+        "bank_balances":    {str(u): b for u, b in bank_balances.items()},
     }
     try:
         raw = json.dumps(payload, ensure_ascii=False, indent=2).encode()
@@ -266,6 +269,8 @@ def load_data():
             _link_guard_warns[int(c)] = {int(u): v for u, v in w.items()}
         for c, wl in data.get("link_whitelist", {}).items():
             _link_whitelist[int(c)] = list(wl)
+        for u, b in data.get("bank_balances", {}).items():
+            bank_balances[int(u)] = int(b)
         print(f"✅ Данные загружены: {DATA_FILE}")
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
@@ -300,24 +305,27 @@ async def _save_all_to_db() -> None:
                 print(f"⚠️ PG save {pg_key}: {_pe}")
         print(f"💾 PostgreSQL: збережено {ok_count}/{len(_to_save)} ключів ✅")
     else:
-        # ── GitHub fallback ───────────────────────────────
+        # ── GitHub fallback — ПАРАЛЕЛЬНІ пуші (швидше, SIGTERM не встигне вбити) ──
+        _push_tasks = []
         for local, _, gh_path in _to_save[:3]:  # bot_data + anketa
-            try:
-                if os.path.exists(local):
+            if os.path.exists(local):
+                try:
                     with open(local, "rb") as _f:
-                        await brand.push_bot_data_to_github(_f.read(), gh_path)
-            except Exception as _ge:
-                print(f"⚠️ GitHub push {gh_path}: {_ge}")
-        for gh_fn in (
-            brand.push_custom_texts_to_github,
-            brand.push_custom_style_to_github,
-            brand.push_custom_buttons_to_github,
-        ):
-            try:
-                await gh_fn()
-            except Exception as _ge:
-                print(f"⚠️ GitHub push brand: {_ge}")
-        print("💾 GitHub fallback: дані збережено ✅")
+                        _raw = _f.read()
+                    _push_tasks.append(brand.push_bot_data_to_github(_raw, gh_path))
+                except Exception as _re:
+                    print(f"⚠️ читання {gh_path}: {_re}")
+        _push_tasks.extend([
+            brand.push_custom_texts_to_github(),
+            brand.push_custom_style_to_github(),
+            brand.push_custom_buttons_to_github(),
+        ])
+        _results = await asyncio.gather(*_push_tasks, return_exceptions=True)
+        _failed  = sum(1 for r in _results if isinstance(r, Exception) or r is False)
+        if _failed:
+            print(f"⚠️ GitHub: {_failed}/{len(_results)} файлів не збережено")
+        else:
+            print(f"💾 GitHub fallback: всі {len(_results)} файлів збережено паралельно ✅")
 
 
 async def auto_save_loop():
@@ -2185,9 +2193,18 @@ async def cmd_rob(msg: Message):
         return await msg.reply(brand.get_text("rob_self"), parse_mode="HTML")
     if victim.is_bot:
         return await msg.reply(brand.get_text("rob_bot"), parse_mode="HTML")
-    # Проверяем баланс жертвы ДО кулдауна — не тратим попытку зря
-    vic_bal = get_balance(victim.id)
+    # Перевіряємо баланс гаманця жертви ДО кулдауну — не витрачаємо спробу
+    vic_bal  = get_balance(victim.id)
+    vic_bank = get_bank(victim.id)
     if vic_bal < 100:
+        if vic_bank > 0:
+            return await msg.reply(
+                f"{brand.hdr()}\n\n"
+                f"🏦 <b>{html.escape(victim.full_name)}</b> зберіг(ла) монети в банку!\n\n"
+                f"<i>Гаманець майже порожній, але банк захищений від ограбування.</i>\n\n"
+                f"{brand.div()}",
+                parse_mode="HTML",
+            )
         return await msg.reply(brand.get_text("rob_target_poor"), parse_mode="HTML")
     now = now_kyiv()
     last = rob_cooldown.get(robber.id)
@@ -2252,6 +2269,123 @@ async def cmd_rob(msg: Message):
             f"💸 Штраф: <b>{fmt_lmn(actual_fine)} LMN</b>\n\n"
             f"{brand.div()}",
             parse_mode="HTML")
+
+# ═══════════════════════════════════════════════════════
+# БАНК — захист монет від ограбування
+# ═══════════════════════════════════════════════════════
+def get_bank(uid: int) -> int:
+    return bank_balances.get(uid, 0)
+
+async def _bank_card(msg: Message):
+    uid    = msg.from_user.id
+    wallet = get_balance(uid)
+    vault  = get_bank(uid)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🏦 <b>Твій банк</b>\n\n"
+        f"💳 Гаманець: <b>{fmt_lmn(wallet)}</b> {brand.currency()}\n"
+        f"🏦 В банку:  <b>{fmt_lmn(vault)}</b> {brand.currency()}\n"
+        f"💰 Всього:   <b>{fmt_lmn(wallet + vault)}</b> {brand.currency()}\n\n"
+        f"<i>Гроші в банку <b>не можна вкрасти</b> через /ограбити</i>\n\n"
+        f"<code>депозит 1000</code> — покласти в банк\n"
+        f"<code>зняти 1000</code> — вивести з банку\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def _bank_deposit(msg: Message, args_text: str = ""):
+    uid    = msg.from_user.id
+    wallet = get_balance(uid)
+    raw    = args_text.strip().replace(" ", "").replace(",", "").replace(".", "")
+    if not raw or not raw.isdigit():
+        return await msg.reply(
+            f"{brand.hdr()}\n\n🏦 <b>Депозит</b>\n\n"
+            f"💳 Гаманець: <b>{fmt_lmn(wallet)}</b>\n\n"
+            f"Вкажи суму: <code>депозит 1000</code>\n\n{brand.div()}",
+            parse_mode="HTML",
+        )
+    amount = int(raw)
+    if amount <= 0:
+        return await msg.reply("❌ Сума має бути більше 0.", parse_mode="HTML")
+    if amount > wallet:
+        return await msg.reply(
+            f"❌ Недостатньо коштів.\n💳 Гаманець: <b>{fmt_lmn(wallet)}</b>",
+            parse_mode="HTML",
+        )
+    add_balance(uid, -amount)
+    bank_balances[uid] = get_bank(uid) + amount
+    save_data()
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🏦 <b>Депозит успішний!</b>\n\n"
+        f"➕ Покладено: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
+        f"💳 Гаманець: <b>{fmt_lmn(get_balance(uid))}</b>\n"
+        f"🏦 В банку:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+async def _bank_withdraw(msg: Message, args_text: str = ""):
+    uid   = msg.from_user.id
+    vault = get_bank(uid)
+    now   = now_kyiv()
+    # Кулдаун 2 год — щоб не можна було миттєво вивести при ограбленні
+    last_wd = bank_withdraw_cd.get(uid)
+    if last_wd and (now - last_wd).total_seconds() < 7200:
+        mins = 120 - int((now - last_wd).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"⏳ Наступне зняття через <b>{mins} хв</b>\n\n"
+            f"<i>Кулдаун захищає від миттєвого виведення при ограбленні</i>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    raw = args_text.strip().replace(" ", "").replace(",", "")
+    if raw.lower() in ("все", "all", "усе", "max"):
+        amount = vault
+    elif raw.isdigit():
+        amount = int(raw)
+    else:
+        return await msg.reply(
+            f"{brand.hdr()}\n\n🏦 <b>Зняття з банку</b>\n\n"
+            f"🏦 В банку: <b>{fmt_lmn(vault)}</b>\n\n"
+            f"Вкажи суму: <code>зняти 1000</code> або <code>зняти все</code>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    if amount <= 0:
+        return await msg.reply("❌ Сума має бути більше 0.", parse_mode="HTML")
+    if amount > vault:
+        return await msg.reply(
+            f"❌ В банку лише <b>{fmt_lmn(vault)}</b> {brand.currency()}",
+            parse_mode="HTML",
+        )
+    bank_balances[uid] = vault - amount
+    add_balance(uid, amount)
+    bank_withdraw_cd[uid] = now
+    save_data()
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🏦 <b>Зняття успішне!</b>\n\n"
+        f"➖ Знято: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
+        f"💳 Гаманець: <b>{fmt_lmn(get_balance(uid))}</b>\n"
+        f"🏦 В банку:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+@dp.message(Command("bank", "банк"))
+async def cmd_bank_slash(msg: Message):
+    await _bank_card(msg)
+
+@dp.message(Command("deposit", "депозит"))
+async def cmd_deposit_slash(msg: Message, command: CommandObject = None):
+    await _bank_deposit(msg, (command.args or "") if command else "")
+
+@dp.message(Command("withdraw", "зняти", "вивести"))
+async def cmd_withdraw_slash(msg: Message, command: CommandObject = None):
+    await _bank_withdraw(msg, (command.args or "") if command else "")
+
 
 @dp.message(Command("richest"))
 async def cmd_richest(msg: Message):
@@ -4288,6 +4422,11 @@ TEXT_COMMANDS.update({
     "работа": cmd_work, "рыбалка": cmd_fish,
     "казино": cmd_casino, "слоты": cmd_slots, "слот": cmd_slots,
     "ограбить": cmd_rob, "украсть": cmd_rob,
+    "банк": _bank_card, "bank": _bank_card,
+    "депозит": lambda m: _bank_deposit(m, " ".join((m.text or "").split()[1:])),
+    "deposit": lambda m: _bank_deposit(m, " ".join((m.text or "").split()[1:])),
+    "зняти": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
+    "вивести": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
     "дать": cmd_give, "перевести": cmd_give,
     "топбогачей": cmd_richest, "топ богачей": cmd_richest,
     "выдатьадминам": cmd_givetoadmins,
@@ -5666,8 +5805,12 @@ _EDITOR_TEXT_CATEGORIES = [
                               "slots_no_bet", "slots_no_balance", "slots_invalid_bet",
                               "rob_success", "rob_fail", "rob_cooldown",
                               "rob_no_reply", "rob_self", "rob_bot",
-                              "rob_target_poor", "rob_victim_notify",
+                              "rob_target_poor", "rob_victim_notify", "rob_banked",
                               "coin_rain", "coin_rain_collected"]),
+    ("🏦 Банк",              ["bank_header", "bank_deposit_done", "bank_deposit_no_funds",
+                              "bank_deposit_zero", "bank_withdraw_done",
+                              "bank_withdraw_no_funds", "bank_withdraw_zero",
+                              "bank_withdraw_cooldown"]),
     ("💍 Брак",              ["marry_proposal", "marry_accept", "marry_reject",
                               "marry_self", "marry_already", "marry_already_other",
                               "marry_no_reply", "marry_timeout",

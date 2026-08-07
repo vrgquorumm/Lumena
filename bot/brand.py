@@ -753,6 +753,17 @@ TEXT_LABELS: dict[str, str] = {
     # ── Стрик: milestone ───────────────────────────────────
     "checkin_milestone":   "Чекин: milestone-бонус 🎁 ({days} дней, {bonus} LMN)",
 
+    # ── Банк ──────────────────────────────────────────────
+    "bank_header":            "Банк — заголовок картки",
+    "bank_deposit_done":      "Депозит успішний ({amount} LMN)",
+    "bank_deposit_no_funds":  "Депозит: недостатньо коштів у гаманці",
+    "bank_deposit_zero":      "Вкажи суму для депозиту",
+    "bank_withdraw_done":     "Зняття успішне ({amount} LMN)",
+    "bank_withdraw_no_funds": "Зняття: в банку недостатньо коштів",
+    "bank_withdraw_zero":     "Вкажи суму для зняття",
+    "bank_withdraw_cooldown": "Зняття заблоковано ще {mins} хв",
+    "rob_banked":             "Жертва зберегла монети в банку — гаманець захищений",
+
     # ── Монетка ────────────────────────────────────────────
     "coin_heads":          "Монетка: выпал Орёл 🦅",
     "coin_tails":          "Монетка: выпала Решка 🌟",
