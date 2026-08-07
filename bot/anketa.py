@@ -29,6 +29,7 @@ _anketa_counter:list        = [0]      # [0] — наступний номер �
 _chat_link:     list        = [None]   # [0] — посилання на чат публікацій
 _user_status:   dict        = {}       # uid → "pending"|"approved"|"rejected"
 _approved_data: dict        = {}       # uid → dict з даними анкети
+_sessions:      dict        = {}       # uid → незавершена анкета в поточному діалозі
 
 
 def _md_to_html(s: str) -> str:
