@@ -319,5 +319,6 @@
   "link_whitelist": {},
   "bank_balances": {},
   "bank_withdraw_cd": {},
+  "hunt_cooldown": {},
   "save_update_sent": false
 }

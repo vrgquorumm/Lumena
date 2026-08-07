@@ -165,6 +165,9 @@ def _build_main_payload() -> dict:
         "bank_withdraw_cd": {
             str(u): value.isoformat() for u, value in bank_withdraw_cd.items()
         },
+        "hunt_cooldown": {
+            str(u): value.isoformat() for u, value in hunt_cooldown.items()
+        },
         "save_update_sent": _save_update_sent,
     }
 
@@ -2074,11 +2077,25 @@ async def cmd_work(msg: Message):
         ("бухгалтер",       280, 620,  "🧾", "квартальный отчёт сдан без ошибок"),
         ("иллюзионист",     150, 700,  "🎩", "публика была в восторге от шоу"),
     ]
+    work_cooldown[uid] = now
+    # У каждой смены есть риск: работа не всегда приносит деньги.
+    if random.random() < 0.15:
+        fine = min(get_balance(uid), random.randint(30, 150))
+        add_balance(uid, -fine)
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"💼 <b>Смена не задалась</b>\n\n"
+            f"Ты допустил(а) ошибку на работе и оплатил(а) компенсацию.\n"
+            f"💸 Потеряно: <b>{fmt_lmn(fine)} LMN</b>\n"
+            f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+            f"⏳ Следующая работа через <b>60 мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
     job_data = random.choice(_jobs_tier)
     job, earn_min, earn_max, job_icon, job_phrase = job_data
     earned = random.randint(earn_min, earn_max)
     add_balance(uid, earned)
-    work_cooldown[uid] = now
     new_bal = get_balance(uid)
     _work_intros = [
         "Вышел на смену и", "Поработал на славу —", "Отличная смена!",
@@ -2138,6 +2155,68 @@ async def cmd_fish(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML",
     )
+
+
+@dp.message(Command("hunt", "охота"))
+async def cmd_hunt(msg: Message):
+    """Охота: рискованная экономическая команда с часовым кулдауном."""
+    uid = msg.from_user.id
+    now = now_kyiv()
+    last = hunt_cooldown.get(uid)
+    if last and (now - last).total_seconds() < 3600:
+        mins = 60 - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🏹 Ты уже был(а) на охоте.\n\n"
+            f"⏳ Следующая попытка через <b>{mins} мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    hunt_cooldown[uid] = now
+    roll = random.random()
+    if roll < 0.05:
+        icon, prey, earned, note = "🐉", "легендарного зверя", random.randint(2500, 5000), "О таком трофее будут говорить весь чат!"
+    elif roll < 0.23:
+        icon, prey, earned, note = "🦌", "крупную добычу", random.randint(700, 1500), "Отличная охота — трофей дорого оценили."
+    elif roll < 0.60:
+        icon, prey, earned, note = "🐇", "небольшую добычу", random.randint(180, 600), "Неплохой результат для одного похода."
+    elif roll < 0.82:
+        fine = min(get_balance(uid), random.randint(50, 220))
+        add_balance(uid, -fine)
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🏹 <b>Охота не удалась</b>\n\n"
+            f"Ты вернулся(лась) без добычи и потратился(лась) на снаряжение.\n"
+            f"💸 Потеряно: <b>{fmt_lmn(fine)} LMN</b>\n"
+            f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+            f"⏳ Следующая охота через <b>60 мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    else:
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🏹 <b>Охота без добычи</b>\n\n"
+            f"Следов было много, но зверь оказался хитрее. Сегодня без награды.\n\n"
+            f"⏳ Следующая охота через <b>60 мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    add_balance(uid, earned)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🏹 <b>Удачная охота!</b>\n\n"
+        f"{icon} Ты добыл(а) <b>{prey}</b>.\n"
+        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"<i>{note}</i>\n"
+        f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+        f"⏳ Следующая охота через <b>60 мин</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
 
 @dp.message(Command("casino"))
 async def cmd_casino(msg: Message, command: CommandObject):
@@ -3094,15 +3173,25 @@ async def cmd_tarot(msg: Message):
 
 async def cmd_horoscope(msg: Message, command: CommandObject = None):
     signs = list(HOROSCOPES.keys())
-    raw = (command.args or "").strip()
-    sign = None
-    if raw:
-        raw_lower = raw.lower()
-        for s in signs:
-            if s.lower().startswith(raw_lower[:3]):
-                sign = s
-                break
+    raw = (command.args or "").strip().lower()
+    normalized = raw.replace("ё", "е")
+    sign_aliases = {
+        "овен": "Овен", "телец": "Телец", "близнецы": "Близнецы",
+        "рак": "Рак", "лев": "Лев", "дева": "Дева", "весы": "Весы",
+        "скорпион": "Скорпион", "стрелец": "Стрелец", "козерог": "Козерог",
+        "водолей": "Водолей", "рыбы": "Рыбы",
+    }
+    sign = sign_aliases.get(normalized)
+    if not sign and normalized:
+        matches = [value for key, value in sign_aliases.items() if key.startswith(normalized)]
+        if len(matches) == 1:
+            sign = matches[0]
     if not sign:
+        if raw:
+            return await msg.reply(
+                "Не узнала знак зодиака. Напиши, например: <code>гороскоп козерог</code>.",
+                parse_mode="HTML",
+            )
         sign = random.choice(signs)
     text = random.choice(HOROSCOPES[sign])
     if not await reply_t(msg, "horoscope_result", sign=sign, text=text):
@@ -4555,7 +4644,7 @@ TEXT_COMMANDS.update({
     "сбросстрик": cmd_resetstreak,
     # Валюта
     "баланс": cmd_balance, "кошелёк": cmd_balance,
-    "работа": cmd_work, "рыбалка": cmd_fish,
+    "работа": cmd_work, "рыбалка": cmd_fish, "охота": cmd_hunt, "hunt": cmd_hunt,
     "казино": cmd_casino, "слоты": cmd_slots, "слот": cmd_slots,
     "ограбить": cmd_rob, "украсть": cmd_rob,
     "банк": _bank_card, "bank": _bank_card,
@@ -4685,7 +4774,7 @@ for slash_name, func in [
     # ─── Кириллические слэш-алиасы ───────────────────────
     # Теперь /баланс, /брак, /чекин и др. работают со слешем
     ("брак", cmd_marry), ("развод", cmd_divorce), ("браки", cmd_marriages),
-    ("баланс", cmd_balance), ("работа", cmd_work), ("рыбалка", cmd_fish),
+    ("баланс", cmd_balance), ("работа", cmd_work), ("рыбалка", cmd_fish), ("hunt", cmd_hunt),
     ("казино", cmd_casino), ("слоты", cmd_slots), ("ограбить", cmd_rob),
     ("дать", cmd_give),
     ("чекин", cmd_checkin), ("стрик", cmd_streak),
@@ -7826,6 +7915,11 @@ def _apply_data(data: dict) -> None:
             bank_withdraw_cd[int(u)] = datetime.fromisoformat(value)
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown банку для user=%s пропущено", u)
+    for u, value in data.get("hunt_cooldown", {}).items():
+        try:
+            hunt_cooldown[int(u)] = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            logging.warning("⚠️ Некоректний cooldown охоти для user=%s пропущено", u)
 
 
 if __name__ == "__main__":
