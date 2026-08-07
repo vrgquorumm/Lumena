@@ -2426,13 +2426,13 @@ async def _bank_card(msg: Message):
     vault  = get_bank(uid)
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🏦 <b>Твій банк</b>\n\n"
+        f"🏦 <b>Твой банк</b>\n\n"
         f"💳 Гаманець: <b>{fmt_lmn(wallet)}</b> {brand.currency()}\n"
-        f"🏦 В банку:  <b>{fmt_lmn(vault)}</b> {brand.currency()}\n"
-        f"💰 Всього:   <b>{fmt_lmn(wallet + vault)}</b> {brand.currency()}\n\n"
-        f"<i>Гроші в банку <b>не можна вкрасти</b> через /ограбити</i>\n\n"
-        f"<code>депозит 1000</code> — покласти в банк\n"
-        f"<code>зняти 1000</code> — вивести з банку\n\n"
+        f"🏦 В банке:  <b>{fmt_lmn(vault)}</b> {brand.currency()}\n"
+        f"💰 Всего:    <b>{fmt_lmn(wallet + vault)}</b> {brand.currency()}\n\n"
+        f"<i>Деньги в банке <b>нельзя украсть</b> через ограбление</i>\n\n"
+        f"<code>депозит 1000</code> — положить в банк\n"
+        f"<code>снять 1000</code> — вывести из банка\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
     )
@@ -2444,16 +2444,16 @@ async def _bank_deposit(msg: Message, args_text: str = ""):
     if not raw or not raw.isdigit():
         return await msg.reply(
             f"{brand.hdr()}\n\n🏦 <b>Депозит</b>\n\n"
-            f"💳 Гаманець: <b>{fmt_lmn(wallet)}</b>\n\n"
-            f"Вкажи суму: <code>депозит 1000</code>\n\n{brand.div()}",
+            f"💳 Кошелёк: <b>{fmt_lmn(wallet)}</b>\n\n"
+            f"Укажи сумму: <code>депозит 1000</code>\n\n{brand.div()}",
             parse_mode="HTML",
         )
     amount = int(raw)
     if amount <= 0:
-        return await msg.reply("❌ Сума має бути більше 0.", parse_mode="HTML")
+        return await msg.reply("❌ Сумма должна быть больше 0.", parse_mode="HTML")
     if amount > wallet:
         return await msg.reply(
-            f"❌ Недостатньо коштів.\n💳 Гаманець: <b>{fmt_lmn(wallet)}</b>",
+            f"❌ Недостаточно средств.\n💳 Кошелёк: <b>{fmt_lmn(wallet)}</b>",
             parse_mode="HTML",
         )
     add_balance(uid, -amount)
@@ -2461,10 +2461,10 @@ async def _bank_deposit(msg: Message, args_text: str = ""):
     save_data()
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🏦 <b>Депозит успішний!</b>\n\n"
-        f"➕ Покладено: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
-        f"💳 Гаманець: <b>{fmt_lmn(get_balance(uid))}</b>\n"
-        f"🏦 В банку:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
+        f"🏦 <b>Депозит выполнен!</b>\n\n"
+        f"➕ Положено: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
+        f"💳 Кошелёк: <b>{fmt_lmn(get_balance(uid))}</b>\n"
+        f"🏦 В банке:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
     )
@@ -2473,14 +2473,14 @@ async def _bank_withdraw(msg: Message, args_text: str = ""):
     uid   = msg.from_user.id
     vault = get_bank(uid)
     now   = now_kyiv()
-    # Кулдаун 2 год — щоб не можна було миттєво вивести при ограбленні
+    # Кулдаун 2 часа — чтобы нельзя было мгновенно вывести деньги при ограблении
     last_wd = bank_withdraw_cd.get(uid)
     if last_wd and (now - last_wd).total_seconds() < 7200:
         mins = 120 - int((now - last_wd).total_seconds()) // 60
         return await msg.reply(
             f"{brand.hdr()}\n\n"
-            f"⏳ Наступне зняття через <b>{mins} хв</b>\n\n"
-            f"<i>Кулдаун захищає від миттєвого виведення при ограбленні</i>\n\n"
+            f"⏳ Следующее снятие через <b>{mins} мин</b>\n\n"
+            f"<i>Кулдаун защищает от мгновенного вывода при ограблении</i>\n\n"
             f"{brand.div()}",
             parse_mode="HTML",
         )
@@ -2491,17 +2491,17 @@ async def _bank_withdraw(msg: Message, args_text: str = ""):
         amount = int(raw)
     else:
         return await msg.reply(
-            f"{brand.hdr()}\n\n🏦 <b>Зняття з банку</b>\n\n"
-            f"🏦 В банку: <b>{fmt_lmn(vault)}</b>\n\n"
-            f"Вкажи суму: <code>зняти 1000</code> або <code>зняти все</code>\n\n"
+            f"{brand.hdr()}\n\n🏦 <b>Снятие из банка</b>\n\n"
+            f"🏦 В банке: <b>{fmt_lmn(vault)}</b>\n\n"
+            f"Укажи сумму: <code>снять 1000</code> или <code>снять всё</code>\n\n"
             f"{brand.div()}",
             parse_mode="HTML",
         )
     if amount <= 0:
-        return await msg.reply("❌ Сума має бути більше 0.", parse_mode="HTML")
+        return await msg.reply("❌ Сумма должна быть больше 0.", parse_mode="HTML")
     if amount > vault:
         return await msg.reply(
-            f"❌ В банку лише <b>{fmt_lmn(vault)}</b> {brand.currency()}",
+            f"❌ В банке только <b>{fmt_lmn(vault)}</b> {brand.currency()}",
             parse_mode="HTML",
         )
     bank_balances[uid] = vault - amount
@@ -2510,10 +2510,10 @@ async def _bank_withdraw(msg: Message, args_text: str = ""):
     save_data()
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🏦 <b>Зняття успішне!</b>\n\n"
-        f"➖ Знято: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
-        f"💳 Гаманець: <b>{fmt_lmn(get_balance(uid))}</b>\n"
-        f"🏦 В банку:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
+        f"🏦 <b>Снятие выполнено!</b>\n\n"
+        f"➖ Снято: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
+        f"💳 Кошелёк: <b>{fmt_lmn(get_balance(uid))}</b>\n"
+        f"🏦 В банке:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
     )
