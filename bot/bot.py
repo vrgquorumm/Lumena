@@ -122,6 +122,7 @@ _PREMIUM_ALWAYS = {"hdrttttttt", "veroniksssxa"}
 _BOT_ID: int = 0
 _BOT_USERNAME: str = ""
 _state_save_task: asyncio.Task | None = None
+_save_update_sent: bool = False
 
 # ═══════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
@@ -163,6 +164,7 @@ def _build_main_payload() -> dict:
         "bank_withdraw_cd": {
             str(u): value.isoformat() for u, value in bank_withdraw_cd.items()
         },
+        "save_update_sent": _save_update_sent,
     }
 
 
@@ -4170,6 +4172,44 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     if not (command and command.args): return await msg.reply("Укажи текст объявления")
     await msg.reply(f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{command.args}", parse_mode="HTML")
+
+
+@dp.message(Command("updatesave"))
+async def cmd_updatesave(msg: Message):
+    """Одноразово публикует фаундерское обновление о сохранении данных."""
+    global _save_update_sent
+    if not is_owner(msg):
+        return await msg.reply("⛔ Эта команда доступна только фаундеру.")
+    if _save_update_sent:
+        return await msg.reply("ℹ️ Это обновление уже было опубликовано.")
+
+    pub_chat = _ank.get_pub_chat()
+    if not pub_chat:
+        return await msg.reply("❌ Паб-чат не настроен. Сначала используй /setpubchat в нужном чате.")
+
+    update_text = (
+        f"{brand.hdr()}\n\n"
+        "<b>✨ Обновление Lumena</b>\n\n"
+        "<b>Исправлено сохранение данных бота.</b>\n\n"
+        "Теперь надёжно сохраняются:\n"
+        "• браки и разводы\n"
+        "• стрики и чекины\n"
+        "• баланс LMN, банк и экономика\n"
+        "• репутация\n"
+        "• роли пользователей\n"
+        "• анкеты и настройки чатов\n\n"
+        "Данные сохраняются после обновлений и перезапусков бота.\n\n"
+        f"{brand.div()}"
+    )
+    try:
+        await bot.send_message(pub_chat, update_text, parse_mode="HTML")
+    except Exception as error:
+        logging.error("Не удалось отправить обновление о сохранении: %s", error)
+        return await msg.reply("❌ Не удалось отправить сообщение в паб-чат. Проверь права бота.")
+
+    _save_update_sent = True
+    save_data()
+    await msg.reply("✅ Обновление опубликовано в паб-чате. Повторно команда недоступна.")
 
 # ═══════════════════════════════════════════════════════
 # ЛУМЕНА АИ
