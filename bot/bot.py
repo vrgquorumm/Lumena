@@ -4178,7 +4178,7 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
 async def cmd_updatesave(msg: Message):
     """Одноразово публикует фаундерское обновление о сохранении данных."""
     global _save_update_sent
-    if not is_owner(msg):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin")):
         return await msg.reply("⛔ Эта команда доступна только фаундеру.")
     if _save_update_sent:
         return await msg.reply("ℹ️ Это обновление уже было опубликовано.")
