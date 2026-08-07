@@ -6866,12 +6866,15 @@ async def _lumena_ai_group(msg: Message):
                     is_addressed = True
                     break
 
-    # 3. Имя бота в начале сообщения
+    # 3. Звернення по імені: «Лумена, ...», «лумка ...», «Lumena ...».
+    # Дозволяємо розділовий знак або пробіл після імені, щоб не реагувати
+    # на випадкові частини інших слів.
     if not is_addressed:
-        for trigger in ("лумена", "лумка", "лум,"):
-            if tl.startswith(trigger):
-                is_addressed = True
-                break
+        is_addressed = bool(re.match(
+            r"^(?:лумена|лумену|лумко|лумка|лум|lumena)\b[\s,!.:;—-]",
+            tl,
+            flags=re.IGNORECASE,
+        ))
 
     if not is_addressed:
         return
