@@ -67,14 +67,39 @@ def _m(cid: int) -> _Mem:
 
 
 def terra_available() -> bool:
-    """True, коли доступний ключ OpenAI для моделі Terra."""
-    return bool(os.getenv("OPENAI_API_KEY", "").strip())
+    """True, коли є будь-який спосіб викликати Terra:
+    — прямий ключ OPENAI_API_KEY, або
+    — Replit AI Integrations (AI_INTEGRATIONS_OPENAI_BASE_URL + AI_INTEGRATIONS_OPENAI_API_KEY).
+    """
+    if os.getenv("OPENAI_API_KEY", "").strip():
+        return True
+    if (os.getenv("AI_INTEGRATIONS_OPENAI_BASE_URL", "").strip()
+            and os.getenv("AI_INTEGRATIONS_OPENAI_API_KEY", "").strip()):
+        return True
+    return False
+
+
+def terra_mode() -> str:
+    """Повертає рядок з поточним режимом Terra для статус-повідомлень власника."""
+    if os.getenv("OPENAI_API_KEY", "").strip():
+        return "direct_key"
+    if (os.getenv("AI_INTEGRATIONS_OPENAI_BASE_URL", "").strip()
+            and os.getenv("AI_INTEGRATIONS_OPENAI_API_KEY", "").strip()):
+        return "replit_proxy"
+    return "unavailable"
 
 
 def _create_terra_client():
-    """Створює клієнт OpenAI окремо, щоб AI-шар можна було тестувати без мережі."""
+    """Створює клієнт OpenAI, підтримуючи прямий ключ і Replit AI Integrations proxy."""
     from openai import AsyncOpenAI
-    return AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    direct_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if direct_key:
+        return AsyncOpenAI(api_key=direct_key)
+    proxy_url = os.getenv("AI_INTEGRATIONS_OPENAI_BASE_URL", "").strip()
+    proxy_key = os.getenv("AI_INTEGRATIONS_OPENAI_API_KEY", "").strip()
+    if proxy_url and proxy_key:
+        return AsyncOpenAI(api_key=proxy_key, base_url=proxy_url)
+    raise RuntimeError("Немає доступних облікових даних OpenAI (OPENAI_API_KEY або Replit AI Integrations).")
 
 
 async def _terra_reply(mem: _Mem, user_name: str, text: str) -> Optional[str]:

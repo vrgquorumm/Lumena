@@ -6710,7 +6710,41 @@ async def cmd_sendlaunch(msg: Message):
     except Exception as e:
         await msg.reply(f"❌ Помилка: {e}")
 
+@dp.message(Command("aistatus"))
+async def cmd_aistatus(msg: Message):
+    """Статус AI Terra — тільки для власника. Не розкриває секретів."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Тільки фаундер")
 
+    mode = ai_agent.terra_mode()
+    available = ai_agent.terra_available()
+
+    if mode == "direct_key":
+        source = "🔑 Прямий ключ <code>OPENAI_API_KEY</code>"
+        status_icon = "✅"
+        status_text = "Terra <b>активна</b>"
+    elif mode == "replit_proxy":
+        source = "🔗 Replit AI Integrations proxy"
+        status_icon = "✅"
+        status_text = "Terra <b>активна</b> (через Replit проксі)"
+    else:
+        source = "—"
+        status_icon = "❌"
+        status_text = "Terra <b>недоступна</b> — використовується локальний AI"
+
+    fallback_ok = "✅ Локальний AI готовий як резерв"
+
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"<b>🤖 Статус AI Лумени</b>\n"
+        f"{brand.div()}\n"
+        f"{status_icon} {status_text}\n"
+        f"📡 Джерело: {source}\n"
+        f"🛡 {fallback_ok}\n"
+        f"🧠 Модель: <code>gpt-5.6-terra</code>\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 @dp.message(Command("setsiteurl"))
 async def cmd_setsiteurl(msg: Message):
     """Встановлює URL офіційного сайту Лумени (відображається в меню та привітаннях)."""
@@ -7630,7 +7664,6 @@ def _apply_data(data: dict) -> None:
             bank_withdraw_cd[int(u)] = datetime.fromisoformat(value)
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown банку для user=%s пропущено", u)
-
 
 
 if __name__ == "__main__":
