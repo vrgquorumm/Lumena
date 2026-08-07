@@ -1,0 +1,111 @@
+  File "/app/bot/brand.py", line 991, in fetch_bot_data_from_github
+    token = os.getenv("GITHUB_TOKEN", "")
+            ^^
+ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub
+NameError: name 'os' is not defined
+📥 Завантажую bot_data.json з GitHub...
+Traceback (most recent call last):
+  File "/app/bot.py", line 17, in <module>
+    asyncio.run(main())
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/bot/bot.py", line 7374, in main
+    await restore_bot_data()
+    return future.result()
+ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub
+           ^^^^^^^^^^^^^^^
+  File "/app/bot/bot.py", line 7374, in main
+📥 Завантажую bot_data.json з GitHub...
+Traceback (most recent call last):
+  File "/app/bot.py", line 17, in <module>
+    asyncio.run(main())
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    await restore_bot_data()
+  File "/app/bot/bot.py", line 191, in restore_bot_data
+    raw = await brand.fetch_bot_data_from_github()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/bot/brand.py", line 991, in fetch_bot_data_from_github
+    token = os.getenv("GITHUB_TOKEN", "")
+            ^^
+NameError: name 'os' is not defined
+ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub
+📥 Завантажую bot_data.json з GitHub...
+Traceback (most recent call last):
+  File "/app/bot.py", line 17, in <module>
+    asyncio.run(main())
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/bot/bot.py", line 7374, in main
+    await restore_bot_data()
+  File "/app/bot/bot.py", line 191, in restore_bot_data
+    raw = await brand.fetch_bot_data_from_github()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/bot/brand.py", line 991, in fetch_bot_data_from_github
+    token = os.getenv("GITHUB_TOKEN", "")
+            ^^
+NameError: name 'os' is not defined
+ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub
+📥 Завантажую bot_data.json з GitHub...
+Traceback (most recent call last):
+  File "/app/bot.py", line 17, in <module>
+    asyncio.run(main())
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/bot/bot.py", line 7374, in main
+    await restore_bot_data()
+  File "/app/bot/bot.py", line 191, in restore_bot_data
+    raw = await brand.fetch_bot_data_from_github()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/bot/brand.py", line 991, in fetch_bot_data_from_github
+    token = os.getenv("GITHUB_TOKEN", "")
+            ^^
+NameError: name 'os' is not defined
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/bot/bot.py", line 7374, in main
+    await restore_bot_data()
+  File "/app/bot/bot.py", line 191, in restore_bot_data
+    raw = await brand.fetch_bot_data_from_github()
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/bot/brand.py", line 991, in fetch_bot_data_from_github
+    token = os.getenv("GITHUB_TOKEN", "")
+            ^^
+NameError: name 'os' is not defined
+ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub
+📥 Завантажую bot_data.json з GitHub...
+Traceback (most recent call last):
+  File "/app/bot.py", line 17, in <module>
