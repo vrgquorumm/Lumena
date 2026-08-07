@@ -6931,12 +6931,59 @@ _HARD_INSULTS = {
     "да пошли вы","да пошёл ты","да пошла ты","пошёл в жопу",
     "отстаньте","отвалите","ненавижу вас","ненавижу этот чат",
 }
+_CHAT_INSULTS = {
+    "пидор", "пидоры", "пидорас", "пидорасы", "пидорасина",
+    "пидрила", "пидрилы", "гандон", "гандоны", "долбоеб",
+    "долбоёб", "долбоебы", "долбоёбы", "уебок", "уёбок",
+    "уебки", "уёбки", "еблан", "ебланы", "хуесос", "хуесосы",
+    "мразь", "мрази", "ублюдок", "ублюдки", "сука", "суки",
+    "мудак", "мудаки", "тварь", "твари", "дебил", "дебилы",
+    "идиот", "идиоты",
+}
 _ADMIN_TARGETS = {
     "админ","адмнн","адмнны","модер","модеры","модератор","владелец",
     "владелка","гидра","hydra","hydræ","создатель","руководство",
     "верхушка","команда","хдр","hdr","hdrttt","начальник","начальники",
     "боты","бот","lumena","лумена","лумена",
 }
+
+async def _check_chat_insult(msg: Message) -> bool:
+    """Удаляет оскорбление и выдаёт участнику мут на 10 минут."""
+    if not msg.text or not msg.from_user or msg.chat.type == "private":
+        return False
+    uid = msg.from_user.id
+    if uid in SUPER_IDS or has_role(uid, "lead_admin", "co_admin", "admin", "moderator"):
+        return False
+    words = re.findall(r"[а-яёa-z]+", msg.text.lower())
+    if not any(word in _CHAT_INSULTS for word in words):
+        return False
+    try:
+        member = await bot.get_chat_member(msg.chat.id, uid)
+        if member.status in ("administrator", "creator"):
+            return False
+    except Exception:
+        return False
+
+    try:
+        await msg.delete()
+        until = int(datetime.now(tz=KYIV_TZ).timestamp()) + 600
+        await bot.restrict_chat_member(
+            msg.chat.id,
+            uid,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until,
+        )
+        notice = await bot.send_message(
+            msg.chat.id,
+            f"🔇 <b>{html.escape(msg.from_user.full_name)}</b> — мут на <b>10 минут</b> за оскорбления.",
+            parse_mode="HTML",
+        )
+        asyncio.create_task(_delete_later(notice, 15))
+        return True
+    except Exception as error:
+        logging.warning("Автомодерация оскорблений не сработала: %s", error)
+        return False
+
 
 async def _check_admin_insult(msg: Message) -> bool:
     """Автомут за оскорбление верхушки. Возвращает True если был применён мут."""
