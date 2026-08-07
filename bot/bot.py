@@ -3827,6 +3827,18 @@ async def cmd_version(msg: Message):
     )
 
 # ═══════════════════════════════════════════════════════
+# ІНФО — опис проекту, команда, розробники
+# ═══════════════════════════════════════════════════════
+@dp.message(Command("info", "інфо", "инфо"))
+async def cmd_info(msg: Message):
+    """Показує опис проекту. Текст редагується через /edit → категорія ℹ️ Інфо."""
+    text = brand.get_text("info_project")
+    await msg.reply(
+        f"{brand.hdr()}\n\n{text}\n\n{brand.div()}",
+        parse_mode="HTML",
+    )
+
+# ═══════════════════════════════════════════════════════
 # УТИЛИТЫ
 # ═══════════════════════════════════════════════════════
 async def cmd_password(msg: Message, command: CommandObject = None):
@@ -4426,6 +4438,7 @@ TEXT_COMMANDS.update({
     "кто я": cmd_whois, "кто это": cmd_whois, "whois": cmd_whois, "досье": cmd_whois,
     "профиль": cmd_profile, "айди": cmd_myid, "инфочат": cmd_chatinfo,
     "статистика": cmd_botstats, "пинг": cmd_ping, "версия": cmd_version,
+    "інфо": cmd_info, "инфо": cmd_info, "info": cmd_info,
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
     "правила": cmd_rules, "сетправила": cmd_setrules,
     "объявление": cmd_announce,
@@ -4488,6 +4501,7 @@ for slash_name, func in [
     ("репутация", cmd_rep),
     ("профиль", cmd_profile), ("айди", cmd_myid), ("инфочат", cmd_chatinfo),
     ("статистика", cmd_botstats), ("пинг", cmd_ping), ("версия", cmd_version),
+    ("інфо", cmd_info), ("инфо", cmd_info), ("info", cmd_info),
     ("правила", cmd_rules), ("команды", cmd_help),
     ("помощь", cmd_support), ("поддержка", cmd_support), ("support", cmd_support),
 ]:
@@ -5777,6 +5791,7 @@ _EDITOR_TEXT_CATEGORIES = [
                               "fortune_8ball", "fortune_predict"]),
     ("🛒 Магазин & Інвентар", ["shop_header", "shop_coming_soon",
                                 "inventory_header", "inventory_empty"]),
+    ("ℹ️ Інфо",               ["info_project"]),
     ("👤 Профиль & Рейтинги", ["profile_no_bio", "profile_no_partner", "info_founder_badge",
                                 "profile_header", "profile_bio_label",
                                 "profile_balance_label", "profile_streak_label",
