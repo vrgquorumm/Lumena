@@ -5796,10 +5796,10 @@ async def cmd_resettext(msg: Message):
     if key not in brand.TEXT_LABELS:
         return await msg.reply(f"❓ Ключ <code>{html.escape(key)}</code> не найден.", parse_mode="HTML")
     brand.del_custom_text(key)
-    brand.save_custom_texts()
-    asyncio.create_task(brand.push_custom_texts_to_github())
+    saved = await brand.persist_brand_now()
     await msg.reply(
-        f"🔄 <b>{html.escape(brand.TEXT_LABELS[key])}</b> — сброшен к дефолту.",
+        f"🔄 <b>{html.escape(brand.TEXT_LABELS[key])}</b> — сброшен к дефолту."
+        + ("" if saved else "\n\n⚠️ PostgreSQL недоступний: зміна поки є лише локально."),
         parse_mode="HTML"
     )
 
@@ -6299,9 +6299,13 @@ async def cb_editor_btn_reset(cb: CallbackQuery):
     if key not in brand.BUTTON_DEFS:
         return await cb.answer("Неизвестная кнопка", show_alert=True)
     brand.reset_custom_button(key)
-    brand.save_custom_buttons()
+    saved = await brand.persist_brand_now()
     df = brand.BUTTON_DEFS[key]
-    await cb.answer(f"🔄 «{df['desc']}» сброшена к дефолту", show_alert=True)
+    await cb.answer(
+        f"🔄 «{df['desc']}» сброшена к дефолту"
+        if saved else "⚠️ Зміна локальна: PostgreSQL недоступний",
+        show_alert=True,
+    )
     # Обновляем сообщение
     lines = ["🔘 <b>Кнопки бота</b>\n",
              "✅ — изменена   ⬜ — стандартная\n"]
@@ -6388,10 +6392,13 @@ async def cb_editor_style_reset(cb: CallbackQuery):
     if key not in brand.STYLE_DEFS:
         return await cb.answer("Неизвестный параметр", show_alert=True)
     brand.reset_style(key)
-    brand.save_custom_style()
-    asyncio.create_task(brand.push_custom_style_to_github())
+    saved = await brand.persist_brand_now()
     df = brand.STYLE_DEFS[key]
-    await cb.answer(f"🔄 «{df['desc']}» сброшено к дефолту", show_alert=False)
+    await cb.answer(
+        f"🔄 «{df['desc']}» сброшено к дефолту"
+        if saved else "⚠️ Зміна локальна: PostgreSQL недоступний",
+        show_alert=False,
+    )
     # обновить экран детали
     cur = html.escape(brand.get_style(key))
     await cb.message.edit_text(
@@ -6423,8 +6430,7 @@ async def handle_style_edit_input(msg: Message):
         _style_edit_sessions[uid] = key
         return await msg.reply(f"❌ Слишком длинно (максимум {df['max']} символов).")
     brand.set_style(key, text)
-    brand.save_custom_style()
-    asyncio.create_task(brand.push_custom_style_to_github())
+    saved = await brand.persist_brand_now()
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎨 К оформлению", callback_data="editor:style")],
         [InlineKeyboardButton(text="🛠 Главное меню", callback_data="editor:menu")],
@@ -6433,7 +6439,8 @@ async def handle_style_edit_input(msg: Message):
         f"✅ <b>{html.escape(df['desc'])}</b> обновлено!\n\n"
         f"Новое значение: <code>{html.escape(text)}</code>\n\n"
         f"Заголовок теперь: {brand.hdr()}\n"
-        f"Разделитель: {brand.div()}",
+        f"Разделитель: {brand.div()}"
+        + ("" if saved else "\n\n⚠️ PostgreSQL недоступний: зміна поки є лише локально."),
         parse_mode="HTML",
         reply_markup=back_kb,
     )
@@ -6469,8 +6476,7 @@ async def handle_btn_edit_input(msg: Message):
             return await msg.reply("❌ Название кнопки не может быть длиннее 64 символов.")
         brand.set_custom_button(key, label=text)
 
-    brand.save_custom_buttons()
-    asyncio.create_task(brand.push_custom_buttons_to_github())
+    saved = await brand.persist_brand_now()
 
     what = "Ссылка" if step == "url" else "Название"
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -6479,7 +6485,8 @@ async def handle_btn_edit_input(msg: Message):
     ])
     await msg.reply(
         f"✅ {what} кнопки <b>{html.escape(df.get('desc', key))}</b> обновлено!\n\n"
-        f"Новое значение: <code>{html.escape(text)}</code>",
+        f"Новое значение: <code>{html.escape(text)}</code>"
+        + ("" if saved else "\n\n⚠️ PostgreSQL недоступний: зміна поки є лише локально."),
         parse_mode="HTML",
         reply_markup=back_kb,
     )

@@ -71,13 +71,17 @@ def terra_available() -> bool:
     return bool(os.getenv("OPENAI_API_KEY", "").strip())
 
 
+def _create_terra_client():
+    """Створює клієнт OpenAI окремо, щоб AI-шар можна було тестувати без мережі."""
+    from openai import AsyncOpenAI
+    return AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+
 async def _terra_reply(mem: _Mem, user_name: str, text: str) -> Optional[str]:
     """Повертає відповідь GPT-5.6 Terra або None, не ламаючи локальний AI."""
     if not terra_available():
         return None
     try:
-        from openai import AsyncOpenAI
-
         history: list[dict[str, str]] = []
         for user_text, bot_text in zip(
             list(mem.user_msgs)[-4:-1], list(mem.bot_msgs)[-4:]
@@ -86,7 +90,7 @@ async def _terra_reply(mem: _Mem, user_name: str, text: str) -> Optional[str]:
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": bot_text},
             ])
-        client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        client = _create_terra_client()
         response = await asyncio.wait_for(
             client.chat.completions.create(
                 model=_TERRA_MODEL,
