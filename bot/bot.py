@@ -138,7 +138,10 @@ _BOT_USERNAME: str = ""   # заполняется в main()
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
 # ═══════════════════════════════════════════════════════
 def save_data():
-    """Сохраняет все ключевые хранилища в JSON-файл."""
+    """Сохраняет все ключевые хранилища в локальный JSON-файл.
+    GitHub-пуш делается ТОЛЬКО через _push_all_to_github() раз в 30с —
+    это исключает race-condition на sha при параллельных PUT-запросах.
+    """
     os.makedirs("data", exist_ok=True)
     # Стрики: date → str
     streaks_serial = {}
@@ -176,28 +179,27 @@ def save_data():
         raw = json.dumps(payload, ensure_ascii=False, indent=2).encode()
         with open(DATA_FILE, "wb") as f:
             f.write(raw)
-        # Пушим в GitHub → данные выживают после Railway-деплоя
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(brand.push_bot_data_to_github(raw))
-        except RuntimeError:
-            pass  # вызов вне async-контекста (KeyboardInterrupt и т.п.)
+        # НЕ пушимо тут в GitHub — це робить тільки auto_save_loop / shutdown handler
+        # щоб уникнути race condition на GitHub sha при одночасних PUT запитах
     except Exception as e:
         print(f"⚠️ save_data error: {e}")
 
 async def restore_bot_data_from_github() -> None:
-    """При старте: если bot_data.json отсутствует — скачиваем с GitHub."""
-    if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 10:
-        return  # локальный файл есть — GitHub не нужен
-    print("📥 bot_data.json не найден локально — пробуем GitHub...")
+    """При старті: ЗАВЖДИ завантажуємо bot_data.json з GitHub (якщо він є).
+    Це гарантує актуальність навіть якщо Railway перезапустив контейнер
+    без повного перегортання файлової системи (локальний файл може бути застарілим).
+    """
+    os.makedirs("data", exist_ok=True)
+    print("📥 Завантажую bot_data.json з GitHub...")
     raw = await brand.fetch_bot_data_from_github()
-    if raw:
-        os.makedirs("data", exist_ok=True)
+    if raw and len(raw) > 10:
         with open(DATA_FILE, "wb") as f:
             f.write(raw)
-        print("✅ bot_data.json восстановлен из GitHub")
+        print(f"✅ bot_data.json відновлено з GitHub ({len(raw)} байт)")
+    elif os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 10:
+        print("⚠️ GitHub не повернув дані — використовую локальний файл")
     else:
-        print("⚠️ GitHub не вернул данные — старт с чистого листа")
+        print("⚠️ Ні GitHub, ні локального файлу — старт з нуля")
 
 
 def load_data():
@@ -283,12 +285,18 @@ async def _push_all_to_github() -> None:
 
 
 async def auto_save_loop():
-    """Автосохранение кожні 60 сек + надійний пуш ВСІХ файлів в GitHub."""
+    """Автосохранение кожні 30 сек + єдиний надійний пуш ВСІХ файлів в GitHub.
+    save_data() пише лише на диск — GitHub пушить ТІЛЬКИ тут, щоб уникнути
+    race condition на sha при паралельних PUT запитах.
+    """
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
         save_data()
-        await _push_all_to_github()
-        print("💾 Автосохранение всіх файлів → GitHub ✅")
+        try:
+            await _push_all_to_github()
+            print("💾 Автозбереження → GitHub ✅")
+        except Exception as _sl_err:
+            print(f"⚠️ auto_save_loop push: {_sl_err}")
 
 async def coin_rain_loop():
     """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
@@ -7128,6 +7136,32 @@ async def main():
 
     print(f"🤖 Лумена Бот v{BOT_VERSION} запущен!")
 
+    # ── SIGTERM handler (Railway зупиняє контейнер через SIGTERM) ────────
+    _shutdown_event = asyncio.Event()
+
+    def _handle_sigterm():
+        print("🛑 SIGTERM отримано — збереження і завершення...")
+        _shutdown_event.set()
+
+    import signal
+    loop_ref = asyncio.get_event_loop()
+    loop_ref.add_signal_handler(signal.SIGTERM, _handle_sigterm)
+    loop_ref.add_signal_handler(signal.SIGINT,  _handle_sigterm)
+
+    async def _shutdown_watcher():
+        await _shutdown_event.wait()
+        print("💾 Фінальне збереження ВСІХ файлів перед зупинкою...")
+        save_data()
+        try:
+            await _push_all_to_github()
+            print("✅ Всі дані збережено в GitHub")
+        except Exception as _se:
+            print(f"⚠️ Shutdown push error: {_se}")
+        # Зупиняємо polling
+        await dp.stop_polling()
+
+    asyncio.create_task(_shutdown_watcher())
+
     # Цикл перезапуска polling — при любом сбое сети/API бот сам восстанавливается
     retry_delay = 5
     while True:
@@ -7137,19 +7171,17 @@ async def main():
                 allowed_updates=dp.resolve_used_update_types(),
                 polling_timeout=30,
             )
+            break  # нормальне завершення (stop_polling викликано)
         except asyncio.CancelledError:
-            print("🛑 Бот остановлен — фінальне збереження ВСІХ файлів...")
-            save_data()
-            await _push_all_to_github()
-            print("✅ Всі дані збережено в GitHub перед зупинкою")
+            print("🛑 Polling скасовано")
             break
         except Exception as e:
+            if _shutdown_event.is_set():
+                break
             logging.error(f"💥 Polling упал: {e}. Перезапуск через {retry_delay}с...")
             save_data()
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, 60)  # экспоненциальный backoff до 60с
-        else:
-            retry_delay = 5  # сбрасываем задержку при успешном завершении
 
 
 if __name__ == "__main__":
@@ -7157,4 +7189,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("🛑 Остановлено")
-        save_data()
