@@ -5441,24 +5441,78 @@ async def cmd_setemoji(msg: Message):
     ))
 )
 async def handle_emoji_extract(msg: Message):
-    """Извлекает ID Premium/custom emoji из сообщения — только для фаундера."""
+    """Извлекает ID Premium/custom emoji из сообщения — только для фаундера.
+    Один emoji → одразу зберігається як header.
+    Кілька → показує список з кнопками для вибору.
+    """
     if not is_owner(msg):
         return
     if _ank.is_on_media_step(msg.from_user.id):
-        return  # не перехватываем медиа-шаг анкеты
+        return
     entities = msg.entities or []
     found = [(msg.text[e.offset: e.offset + e.length], e.custom_emoji_id)
              for e in entities if e.type == "custom_emoji" and e.custom_emoji_id]
     if not found:
         return
-    lines = ["🔍 <b>Найдены Custom Emoji ID:</b>\n"]
-    for i, (char, eid) in enumerate(found):
-        lines += [
-            f"[{i}] <tg-emoji emoji-id=\"{eid}\">{html.escape(char)}</tg-emoji>",
-            f"ID: <code>{eid}</code>",
-            "",
-        ]
-    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+    if len(found) == 1:
+        # ── Один emoji — одразу встановлюємо як header ───────
+        char, eid = found[0]
+        ids = brand.get_pack()
+        if ids:
+            ids[0] = eid
+        else:
+            ids = [eid]
+        brand.set_pack(ids, brand.get_pack_name())
+        save_data()
+        await msg.reply(
+            f"✅ <b>Header emoji збережено!</b>\n\n"
+            f"Emoji: <tg-emoji emoji-id=\"{eid}\">{html.escape(char)}</tg-emoji>  "
+            f"<code>{eid}</code>\n\n"
+            f"Превью: {brand.hdr()}\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    else:
+        # ── Кілька emoji — показуємо список з кнопками ───────
+        lines = ["🔍 <b>Знайдені Custom Emoji:</b>\n"]
+        buttons = []
+        for i, (char, eid) in enumerate(found):
+            lines += [
+                f"[{i}] <tg-emoji emoji-id=\"{eid}\">{html.escape(char)}</tg-emoji>  "
+                f"<code>{eid}</code>",
+            ]
+            buttons.append([InlineKeyboardButton(
+                text=f"[{i}] Встановити як header",
+                callback_data=f"setemoji_hdr:{eid}",
+            )])
+        lines.append("\nНатисни кнопку щоб встановити потрібний як header emoji:")
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await msg.reply("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("setemoji_hdr:"))
+async def cb_setemoji_hdr(cb: CallbackQuery):
+    """Встановлює вибраний emoji як header."""
+    if not is_owner(cb):
+        return await cb.answer("Тільки фаундер", show_alert=True)
+    eid = cb.data.split(":", 1)[1]
+    ids = brand.get_pack()
+    if ids:
+        ids[0] = eid
+    else:
+        ids = [eid]
+    brand.set_pack(ids, brand.get_pack_name())
+    save_data()
+    await cb.message.edit_text(
+        f"✅ <b>Header emoji збережено!</b>\n\n"
+        f"<code>{eid}</code>\n\n"
+        f"Превью: {brand.hdr()}\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+        reply_markup=None,
+    )
+    await cb.answer("Збережено ✅")
 
 
 @dp.message(F.func(lambda m: m.from_user is not None
