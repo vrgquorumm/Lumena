@@ -19,6 +19,15 @@ from aiogram.types import (
     MessageEntity as _ME,
 )
 
+ANKETA_USERS_FILE = "data/anketa_users.json"
+ANKETA_DATA_FILE  = "data/anketa_settings.json"
+
+# ── In-memory стан ──────────────────────────────────────────
+_mod_chat_id:   list        = [None]   # [0] — id чату модерації
+_pub_chat_id:   list        = [None]   # [0] — id чату публікацій
+_user_status:   dict        = {}       # uid → "pending"|"approved"|"rejected"
+_approved_data: dict        = {}       # uid → dict з даними анкети
+
 
 def _md_to_html(s: str) -> str:
     """Конвертирует базовый Markdown (*bold*, _italic_) в HTML."""
