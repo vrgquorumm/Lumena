@@ -220,47 +220,15 @@ def load_custom_style(path: str = "data/custom_style.json") -> None:
 
 
 async def push_custom_style_to_github(path: str = "data/custom_style.json") -> bool:
-    """Коммитит custom_style.json в GitHub — оформление выживает после Railway-деплоя."""
-    import json, os, base64
+    """Зберігає custom_style в PostgreSQL (і локальний файл)."""
+    save_custom_style(path)
     try:
-        import aiohttp
-    except ImportError:
-        return False
-
-    token = os.getenv("GITHUB_TOKEN", "")
-    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
-    if not token:
-        return False
-
-    git_path = f"bot/{path}"
-    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
-    headers  = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    try:
-        content_bytes = json.dumps(_custom_style, ensure_ascii=False, indent=2).encode()
-        content_b64   = base64.b64encode(content_bytes).decode()
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, headers=headers) as resp:
-                sha = (await resp.json()).get("sha") if resp.status == 200 else None
-
-            payload: dict = {"message": "chore: auto-save custom style", "content": content_b64}
-            if sha:
-                payload["sha"] = sha
-
-            async with session.put(api_url, headers=headers, json=payload) as resp:
-                if resp.status in (200, 201):
-                    print("✅ custom_style.json синхронизирован с GitHub")
-                    return True
-                err = await resp.text()
-                print(f"⚠️ GitHub style push failed {resp.status}: {err[:200]}")
-                return False
+        import db as _db
+        await _db.save_kv("custom_style", _custom_style)
+        print("✅ custom_style збережено в PostgreSQL")
+        return True
     except Exception as ex:
-        print(f"⚠️ push_custom_style_to_github: {ex}")
+        print(f"⚠️ push_custom_style_to_github (DB): {ex}")
         return False
 
 
@@ -917,54 +885,15 @@ def load_custom_texts(path: str = "data/custom_texts.json") -> None:
 
 
 async def push_custom_texts_to_github(path: str = "data/custom_texts.json") -> bool:
-    """Коммитит custom_texts.json в GitHub через API — тексты выживают после Railway-деплоя.
-    Требует переменных окружения: GITHUB_TOKEN и GITHUB_REPO (например vrgquorumm/Lumena).
-    Возвращает True при успехе, False при любой ошибке (тихий фейл).
-    """
-    import json, os, base64
+    """Зберігає custom_texts в PostgreSQL (і локальний файл)."""
+    save_custom_texts(path)
     try:
-        import aiohttp
-    except ImportError:
-        return False
-
-    token = os.getenv("GITHUB_TOKEN", "")
-    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
-    if not token:
-        return False
-
-    git_path = f"bot/{path}"          # путь в репозитории
-    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
-    headers  = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    try:
-        content_bytes = json.dumps(_custom_texts, ensure_ascii=False, indent=2).encode()
-        content_b64   = base64.b64encode(content_bytes).decode()
-
-        async with aiohttp.ClientSession() as session:
-            # Получаем текущий SHA файла (нужен для обновления)
-            async with session.get(api_url, headers=headers) as resp:
-                sha = (await resp.json()).get("sha") if resp.status == 200 else None
-
-            payload: dict = {
-                "message": "chore: auto-save custom texts",
-                "content": content_b64,
-            }
-            if sha:
-                payload["sha"] = sha
-
-            async with session.put(api_url, headers=headers, json=payload) as resp:
-                if resp.status in (200, 201):
-                    print("✅ custom_texts.json синхронизирован с GitHub")
-                    return True
-                err = await resp.text()
-                print(f"⚠️ GitHub push failed {resp.status}: {err[:200]}")
-                return False
+        import db as _db
+        await _db.save_kv("custom_texts", _custom_texts)
+        print("✅ custom_texts збережено в PostgreSQL")
+        return True
     except Exception as ex:
-        print(f"⚠️ push_custom_texts_to_github: {ex}")
+        print(f"⚠️ push_custom_texts_to_github (DB): {ex}")
         return False
 
 
@@ -976,47 +905,25 @@ async def push_bot_data_to_github(
     payload_bytes: bytes,
     path: str = "data/bot_data.json",
 ) -> bool:
-    """Пушит bot_data.json в GitHub — данные выживают после Railway-деплоя.
-    Требует: GITHUB_TOKEN, GITHUB_REPO (default: vrgquorumm/Lumena).
-    """
-    import base64, os
-    try:
-        import aiohttp
-    except ImportError:
-        return False
+    """Залишено для сумісності — більше не використовується (замінено PostgreSQL)."""
+    return True
 
-    token = os.getenv("GITHUB_TOKEN", "")
-    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
-    if not token:
-        return False
-
-    git_path = f"bot/{path}"
-    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
-    headers  = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    try:
-        content_b64 = base64.b64encode(payload_bytes).decode()
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, headers=headers) as r:
-                sha = (await r.json()).get("sha") if r.status == 200 else None
-            put_payload: dict = {"message": "chore: auto-save bot data", "content": content_b64}
-            if sha:
-                put_payload["sha"] = sha
-            async with session.put(api_url, headers=headers, json=put_payload) as r:
-                if r.status in (200, 201):
-                    print("✅ bot_data.json → GitHub OK")
-                    return True
-                err = await r.text()
-                print(f"⚠️ GitHub push bot_data {r.status}: {err[:200]}")
-                return False
-    except Exception as ex:
-        print(f"⚠️ push_bot_data_to_github: {ex}")
-        return False
-
-
+async def restore_brand_from_db() -> None:
+    """При старті завантажує custom_texts/style/buttons з PostgreSQL."""
+    import db as _db
+    mapping = [
+        ("custom_texts",   _custom_texts,   "custom_texts"),
+        ("custom_style",   _custom_style,   "custom_style"),
+        ("custom_buttons", _custom_buttons, "custom_buttons"),
+    ]
+    for key, store, label in mapping:
+        try:
+            data = await _db.load_kv(key)
+            if data is not None:  # {} — валідний (очищений стан)
+                store.update(data)
+                print(f"✅ {label} завантажено з PostgreSQL")
+        except Exception as ex:
+            print(f"⚠️ restore_brand_from_db({label}): {ex}")
 async def restore_brand() -> None:
     """При старті відновлює custom_texts/style/buttons: PostgreSQL → GitHub → локальний файл."""
     import os
@@ -1036,14 +943,14 @@ async def restore_brand() -> None:
         # 1. PostgreSQL
         if _db and _db.has_pg():
             data = await _db.db_get(pg_key)
-            if data:
+            if data is not None:  # {} — валідний (очищений стан)
                 import json as _j
                 with open(local, "w", encoding="utf-8") as f:
                     _j.dump(data, f, ensure_ascii=False)
                 loader()
                 print(f"✅ {pg_key} відновлено з PostgreSQL")
                 continue
-            print(f"⚠️ PostgreSQL: {pg_key} порожній")
+            print(f"⚠️ PostgreSQL: {pg_key} ще не записано")
 
         # 2. GitHub fallback
         if os.path.exists(local) and os.path.getsize(local) > 5:
@@ -1064,10 +971,10 @@ restore_brand_from_github = restore_brand
 
 
 async def fetch_bot_data_from_github(path: str = "data/bot_data.json") -> bytes | None:
-    """Скачивает bot_data.json из GitHub при старте (когда локального файла нет).
-    Возвращает raw bytes или None при ошибке.
+    """Завантажує файл з GitHub при старті (read-only fallback поки PostgreSQL порожній).
+    Повертає raw bytes або None при помилці / відсутності GITHUB_TOKEN.
     """
-    import base64, os
+    import base64
     try:
         import aiohttp
     except ImportError:
@@ -1245,47 +1152,15 @@ def save_custom_buttons(path: str = "data/custom_buttons.json") -> None:
 
 
 async def push_custom_buttons_to_github(path: str = "data/custom_buttons.json") -> bool:
-    """Коммитит custom_buttons.json в GitHub — кнопки выживают после Railway-деплоя."""
-    import json, os, base64
+    """Зберігає custom_buttons в PostgreSQL (і локальний файл)."""
+    save_custom_buttons(path)
     try:
-        import aiohttp
-    except ImportError:
-        return False
-
-    token = os.getenv("GITHUB_TOKEN", "")
-    repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
-    if not token:
-        return False
-
-    git_path = f"bot/{path}"
-    api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
-    headers  = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    try:
-        content_bytes = json.dumps(_custom_buttons, ensure_ascii=False, indent=2).encode()
-        content_b64   = base64.b64encode(content_bytes).decode()
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, headers=headers) as resp:
-                sha = (await resp.json()).get("sha") if resp.status == 200 else None
-
-            payload: dict = {"message": "chore: auto-save custom buttons", "content": content_b64}
-            if sha:
-                payload["sha"] = sha
-
-            async with session.put(api_url, headers=headers, json=payload) as resp:
-                if resp.status in (200, 201):
-                    print("✅ custom_buttons.json синхронизирован с GitHub")
-                    return True
-                err = await resp.text()
-                print(f"⚠️ GitHub buttons push failed {resp.status}: {err[:200]}")
-                return False
+        import db as _db
+        await _db.save_kv("custom_buttons", _custom_buttons)
+        print("✅ custom_buttons збережено в PostgreSQL")
+        return True
     except Exception as ex:
-        print(f"⚠️ push_custom_buttons_to_github: {ex}")
+        print(f"⚠️ push_custom_buttons_to_github (DB): {ex}")
         return False
 
 

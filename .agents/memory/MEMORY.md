@@ -1,0 +1,1 @@
+- [PostgreSQL persistence — operational decision](pg-persistence.md) — Railway PG replaces GitHub writes; DATABASE_URL absent = disk-only with clear warning; {} is valid authoritative state

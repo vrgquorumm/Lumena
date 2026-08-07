@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import ssl
+from typing import Optional
 
 try:
     import asyncpg  # type: ignore
@@ -43,14 +44,15 @@ ON CONFLICT (key) DO UPDATE
 """
 
 
-def _make_ssl(url: str) -> "ssl.SSLContext | None":
-    """Railway вимагає SSL. Повертаємо контекст якщо схоже на production."""
+
+def _make_ssl(url: str) -> "ssl.SSLContext | bool | None":
+    """Повертає SSL-налаштування для asyncpg.
+    Використовує системний CA з перевіркою сертифіката і hostname.
+    """
     if "sslmode=disable" in url:
         return None
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    # Стандартний контекст з повною перевіркою (hostname + ланцюжок сертифікатів)
+    return ssl.create_default_context()
 
 
 async def init_db() -> bool:
@@ -67,26 +69,24 @@ async def init_db() -> bool:
         print("ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub")
         return False
 
-    # Спочатку пробуємо з SSL (Railway), потім без
-    for ssl_arg in (_make_ssl(db_url), None):
-        try:
-            pool = await asyncpg.create_pool(
-                db_url,
-                min_size=1,
-                max_size=5,
-                command_timeout=15,
-                ssl=ssl_arg,
-            )
-            async with pool.acquire() as conn:
-                await conn.execute(_CREATE_TABLE)
-            _pool = pool
-            print("✅ PostgreSQL підключено, таблиця bot_store готова")
-            return True
-        except Exception as e:
-            logging.debug(f"db init attempt (ssl={ssl_arg is not None}): {e}")
-            continue
+    ssl_arg = _make_ssl(db_url)
+    try:
+        pool = await asyncpg.create_pool(
+            db_url,
+            min_size=1,
+            max_size=5,
+            command_timeout=15,
+            ssl=ssl_arg,
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(_CREATE_TABLE)
+        _pool = pool
+        print("✅ PostgreSQL підключено, таблиця bot_store готова")
+        return True
+    except Exception as e:
+        logging.warning(f"⚠️ Не вдалося підключитись до PostgreSQL: {e}")
 
-    print("⚠️ Не вдалося підключитись до PostgreSQL — використовується GitHub-fallback")
+    print("⚠️ PostgreSQL недоступний — дані НЕ будуть збережено надійно між перезапусками")
     return False
 
 
@@ -146,6 +146,28 @@ async def db_set_raw(key: str, raw_bytes: bytes) -> bool:
         return False
 
 
+async def db_set_many(records: list[tuple[str, dict]]) -> bool:
+    """Зберігає кілька ключів в одній транзакції PostgreSQL.
+    records: list of (key, data) pairs.
+    Повертає True якщо всі записи збережено, False при будь-якій помилці.
+    """
+    if not _pool:
+        return False
+    try:
+        async with _pool.acquire() as conn:
+            async with conn.transaction():
+                for key, data in records:
+                    await conn.execute(
+                        _UPSERT,
+                        key,
+                        json.dumps(data, ensure_ascii=False, default=str),
+                    )
+        return True
+    except Exception as e:
+        logging.warning(f"db_set_many: {e}")
+        return False
+
+
 async def close_db() -> None:
     """Закриває connection pool."""
     global _pool
@@ -153,3 +175,12 @@ async def close_db() -> None:
         await _pool.close()
         _pool = None
         print("🔒 PostgreSQL з'єднання закрито")
+
+# ── Aliases for callers using save_kv / load_kv ──────────────
+async def save_kv(key: str, data: dict) -> bool:
+    """Alias for db_set — зберігає JSON у bot_store."""
+    return await db_set(key, data)
+
+async def load_kv(key: str) -> Optional[dict]:
+    """Alias for db_get — завантажує JSON з bot_store."""
+    return await db_get(key)

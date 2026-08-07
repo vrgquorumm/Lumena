@@ -45,10 +45,9 @@ import ai_agent
 import brand
 import db as _db
 
-_edit_sessions:     dict[int, str]  = {}  # uid → ключ текста на редактирование (ЛС с фаундером)
-_btn_edit_sessions: dict[int, dict] = {}    # uid → {"key": str, "step": "label"|"url"}  (редактор кнопок)
-_style_edit_sessions: dict[int, str] = {}  # uid → style_key  (редактор оформления)
-# (chat_id, message_id) → text_key — трекинг исходящих сообщений для reply-редактора
+_edit_sessions:     dict[int, str]  = {}
+_btn_edit_sessions: dict[int, dict] = {}
+_style_edit_sessions: dict[int, str] = {}
 _tracked_bot_msgs:  dict[tuple[int, int], str] = {}
 
 # ═══════════════════════════════════════════════════════
@@ -60,13 +59,10 @@ if not BOT_TOKEN:
 
 OWNER_USERNAME = "hdrttttttt"
 OWNER_ID       = 8655306548
-SUPER_IDS      = {OWNER_ID}   # могут банить/мутить даже админов
+SUPER_IDS      = {OWNER_ID}
 BOT_VERSION = "5.0"
 DATA_FILE = "data/bot_data.json"
 
-# ── Сайт Лумены ───────────────────────────────────────────────
-# Обновить после деплоя: /setsiteurl <url>
-# URL сайту: Railway env-var → /setsiteurl → порожньо (кнопка прихована)
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
 
 logging.basicConfig(level=logging.INFO)
@@ -76,49 +72,41 @@ dp = Dispatcher()
 # ═══════════════════════════════════════════════════════
 # ХРАНИЛИЩА ДАННЫХ
 # ═══════════════════════════════════════════════════════
-warnings_db = {}          # {chat_id: {user_id: count}}
-ru_army_warns = {}        # {chat_id: {user_id: count}} — варны за пропаганду РА
-marriages = {}            # {chat_id: {user_id: partner_id}}
-marriage_proposals = {}   # {(chat_id, target_id): {proposer_id, proposer_name, proposer_full}}
-streaks = {}              # {chat_id: {user_id: {"count": int, "last": date}}}
-lmn_balances = {}         # {user_id: int}
-reputation = {}           # {chat_id: {user_id: int}}
-work_cooldown = {}        # {user_id: datetime}
-fish_cooldown = {}        # {user_id: datetime}
-rob_cooldown = {}         # {user_id: datetime}
+warnings_db = {}
+ru_army_warns = {}
+marriages = {}
+marriage_proposals = {}
+streaks = {}
+lmn_balances = {}
+reputation = {}
+work_cooldown = {}
+fish_cooldown = {}
+rob_cooldown = {}
 bank_balances = {}        # {user_id: int} — гроші в банку (захищені від /rob)
 bank_withdraw_cd = {}     # {user_id: datetime} — кулдаун виведення з банку
-chat_rules = {}           # {chat_id: str}
-hangman_games = {}        # {chat_id: {"word": str, "guessed": set, "tries": int}}
-roulette_players = {}     # {chat_id: {user_id: name}}
-profiles = {}             # {user_id: {"bio": str, "title": str}}
-chat_members = {}         # {chat_id: {user_id: full_name}} — все кто писал в чате
-support_sessions = {}    # {user_id: True} — ожидают ввода обращения к администрации
-_active_rain: dict = {}  # {chat_id: int} — активный дождь монет LMN
-_last_rain_time: float = 0.0  # unix-timestamp последнего дождя
+chat_rules = {}
+hangman_games = {}
+roulette_players = {}
+profiles = {}
+chat_members = {}
+support_sessions = {}
+_active_rain: dict = {}
+_last_rain_time: float = 0.0
 
-# ── Антилинк ──────────────────────────────────────────────────
-_link_guard:       dict[int, bool]        = {}   # chat_id → enabled
-_link_guard_warns: dict[int, dict]        = {}   # chat_id → {uid: count}
-_link_whitelist:   dict[int, list[str]]   = {}   # chat_id → [pattern, ...]
-_premium_users:  set = set()  # {user_id} — купили или получили VIP-анкету
-_verified_users: set = set()  # {user_id} — прошли верификацию в ЛС
+_link_guard:       dict[int, bool]        = {}
+_link_guard_warns: dict[int, dict]        = {}
+_link_whitelist:   dict[int, list[str]]   = {}
+_premium_users:  set = set()
+_verified_users: set = set()
 
-# ── Аура ──────────────────────────────────────────────
-aura:              dict[int, float] = {}  # {user_id: float}  0.0–100.0 %
-_aura_credited:    set              = set()  # {(chat_id, msg_id)} — плюс уже засчитан
-_msg_authors:      dict             = {}     # {(chat_id, msg_id): user_id} — для аура-реакций
+aura:              dict[int, float] = {}
+_aura_credited:    set              = set()
+_msg_authors:      dict             = {}
 
-# ── Синхронизация чатов ───────────────────────────────
-# Оба чата (основной + админ) используют общую экономику.
-# Canonical ID = pub_chat; любые обращения к mod_chat → переадресуются на pub_chat.
-_ECON_CANONICAL: dict[int, int] = {}   # secondary_cid → primary_cid  (заполняется в main)
+_ECON_CANONICAL: dict[int, int] = {}
 
-ANKETA_PREMIUM_STARS = 300  # стоимость VIP-анкеты в Stars
-# Username-ы которые всегда имеют VIP (вечный бесплатный премиум)
-# ── Роли ──────────────────────────────────────────────
-# Иерархия: founder > lead_admin > co_admin > admin > moderator
-ROLES: dict[int, str] = {}          # {user_id: role}
+ANKETA_PREMIUM_STARS = 300
+ROLES: dict[int, str] = {}
 ROLE_NAMES: dict[str, str] = {
     "lead_admin":  "Lead Admin",
     "co_admin":    "Co-Admin",
@@ -126,28 +114,21 @@ ROLE_NAMES: dict[str, str] = {
     "moderator":   "Moderator",
 }
 ROLE_HIERARCHY = ["lead_admin", "co_admin", "admin", "moderator"]
-# Имена пользователей для быстрой связки при первом контакте
 _ROLE_USERNAMES: dict[str, str] = {
     "veroniksssxa": "lead_admin",
 }
-
 _PREMIUM_ALWAYS = {"hdrttttttt", "veroniksssxa"}
 
-# ── ИИ-агент ──────────────────────────────────────────
-_BOT_ID: int = 0          # заполняется в main()
-_BOT_USERNAME: str = ""   # заполняется в main()
+_BOT_ID: int = 0
+_BOT_USERNAME: str = ""
 
 # ═══════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
 # ═══════════════════════════════════════════════════════
-def save_data():
-    """Сохраняет все ключевые хранилища в локальный JSON-файл.
-    GitHub-пуш делается ТОЛЬКО через _push_all_to_github() раз в 30с —
-    это исключает race-condition на sha при параллельных PUT-запросах.
-    """
-    os.makedirs("data", exist_ok=True)
-    # Стрики: date → str
-    streaks_serial = {}
+
+def _build_main_payload() -> dict:
+    """Будує словник з усіма даними бота для збереження."""
+    streaks_serial: dict = {}
     for cid, users in streaks.items():
         streaks_serial[str(cid)] = {}
         for uid, d in users.items():
@@ -155,7 +136,7 @@ def save_data():
                 "count": d.get("count", 0),
                 "last": d["last"].isoformat() if d.get("last") else None,
             }
-    payload = {
+    return {
         "marriages":    {str(c): {str(u): v for u, v in m.items()} for c, m in marriages.items()},
         "streaks":      streaks_serial,
         "lmn_balances": {str(u): b for u, b in lmn_balances.items()},
@@ -179,15 +160,18 @@ def save_data():
         "link_whitelist":   {str(c): v for c, v in _link_whitelist.items()},
         "bank_balances":    {str(u): b for u, b in bank_balances.items()},
     }
+def save_data():
+    """Зберігає всі сховища в локальний JSON-файл (швидкий синхронний кеш на диску).
+    PostgreSQL-збереження виконується через _save_all_to_db() (auto_save_loop / shutdown).
+    """
+    os.makedirs("data", exist_ok=True)
+    payload = _build_main_payload()
     try:
         raw = json.dumps(payload, ensure_ascii=False, indent=2).encode()
         with open(DATA_FILE, "wb") as f:
             f.write(raw)
-        # НЕ пушимо тут в GitHub — це робить тільки auto_save_loop / shutdown handler
-        # щоб уникнути race condition на GitHub sha при одночасних PUT запитах
     except Exception as e:
         print(f"⚠️ save_data error: {e}")
-
 async def restore_bot_data() -> None:
     """При старті відновлює bot_data: PostgreSQL → GitHub → локальний файл."""
     os.makedirs("data", exist_ok=True)
@@ -195,12 +179,12 @@ async def restore_bot_data() -> None:
     # 1. PostgreSQL (пріоритет)
     if _db.has_pg():
         data = await _db.db_get("bot_data")
-        if data:
+        if data is not None:  # {} — валідний (очищений стан), None — ключ відсутній
             with open(DATA_FILE, "w", encoding="utf-8") as _f:
                 json.dump(data, _f, ensure_ascii=False)
             print("✅ bot_data відновлено з PostgreSQL")
             return
-        print("⚠️ PostgreSQL: bot_data порожній — пробую GitHub...")
+        print("⚠️ PostgreSQL: bot_data ще не записано — пробую GitHub...")
 
     # 2. GitHub fallback
     print("📥 Завантажую bot_data.json з GitHub...")
@@ -225,62 +209,19 @@ def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        for cid, m in data.get("marriages", {}).items():
-            marriages[int(cid)] = {int(u): int(v) for u, v in m.items()}
-        for cid, users in data.get("streaks", {}).items():
-            streaks[int(cid)] = {}
-            for uid, d in users.items():
-                streaks[int(cid)][int(uid)] = {
-                    "count": d.get("count", 0),
-                    "last": date.fromisoformat(d["last"]) if d.get("last") else None,
-                }
-        for u, b in data.get("lmn_balances", {}).items():
-            lmn_balances[int(u)] = b
-        for cid, r in data.get("reputation", {}).items():
-            reputation[int(cid)] = {int(u): v for u, v in r.items()}
-        for u, v in data.get("profiles", {}).items():
-            profiles[int(u)] = v
-        for cid, w in data.get("warnings_db", {}).items():
-            warnings_db[int(cid)] = {int(u): v for u, v in w.items()}
-        for cid, w in data.get("ru_army_warns", {}).items():
-            ru_army_warns[int(cid)] = {int(u): v for u, v in w.items()}
-        for cid, r in data.get("chat_rules", {}).items():
-            chat_rules[int(cid)] = r
-        for cid, m in data.get("chat_members", {}).items():
-            chat_members[int(cid)] = {int(u): n for u, n in m.items()}
-        for u in data.get("premium_users", []):
-            _premium_users.add(int(u))
-        for u in data.get("verified_users", []):
-            _verified_users.add(int(u))
-        for u, v in data.get("aura", {}).items():
-            aura[int(u)] = float(v)
-        for u, r in data.get("roles", {}).items():
-            ROLES[int(u)] = r
-        for uname, r in data.get("role_usernames", {}).items():
-            _ROLE_USERNAMES[uname] = r
-        _saved_pack = data.get("brand_emoji_pack", [])
-        if _saved_pack:
-            brand.set_pack(_saved_pack, data.get("brand_pack_name", ""))
-        global _last_rain_time
-        _last_rain_time = data.get("last_rain_time", 0)
-        for c, v in data.get("link_guard", {}).items():
-            _link_guard[int(c)] = bool(v)
-        for c, w in data.get("link_guard_warns", {}).items():
-            _link_guard_warns[int(c)] = {int(u): v for u, v in w.items()}
-        for c, wl in data.get("link_whitelist", {}).items():
-            _link_whitelist[int(c)] = list(wl)
+        _apply_data(data)
         for u, b in data.get("bank_balances", {}).items():
             bank_balances[int(u)] = int(b)
         print(f"✅ Данные загружены: {DATA_FILE}")
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
 
+
 async def _save_all_to_db() -> None:
-    """Зберігає ВСІ дані: PostgreSQL (основний) → GitHub (fallback).
+    """Зберігає ВСІ дані: PostgreSQL (основний).
     Викликається тільки з auto_save_loop і shutdown handler —
     ЄДИНА точка запису, без race conditions.
     """
-    # ── Збираємо все що треба зберегти ───────────────────
     _to_save = [
         (DATA_FILE,               "bot_data",         "data/bot_data.json"),
         (_ank.ANKETA_USERS_FILE,  "anketa_users",     "data/anketa_users.json"),
@@ -291,41 +232,32 @@ async def _save_all_to_db() -> None:
     ]
 
     if _db.has_pg():
-        # ── PostgreSQL шлях ───────────────────────────────
-        ok_count = 0
+        # ── PostgreSQL шлях — атомарна транзакція ────────
+        records: list[tuple[str, dict]] = []
         for local, pg_key, _ in _to_save:
             try:
-                if not os.path.exists(local):
+                if not os.path.exists(local) or os.path.getsize(local) < 2:
                     continue
                 with open(local, "r", encoding="utf-8") as _rf:
                     data_dict = json.load(_rf)
-                if await _db.db_set(pg_key, data_dict):
-                    ok_count += 1
+                if data_dict is not None:  # {} є валідним (стерті налаштування)
+                    records.append((pg_key, data_dict))
             except Exception as _pe:
-                print(f"⚠️ PG save {pg_key}: {_pe}")
-        print(f"💾 PostgreSQL: збережено {ok_count}/{len(_to_save)} ключів ✅")
-    else:
-        # ── GitHub fallback — ПАРАЛЕЛЬНІ пуші (швидше, SIGTERM не встигне вбити) ──
-        _push_tasks = []
-        for local, _, gh_path in _to_save[:3]:  # bot_data + anketa
-            if os.path.exists(local):
-                try:
-                    with open(local, "rb") as _f:
-                        _raw = _f.read()
-                    _push_tasks.append(brand.push_bot_data_to_github(_raw, gh_path))
-                except Exception as _re:
-                    print(f"⚠️ читання {gh_path}: {_re}")
-        _push_tasks.extend([
-            brand.push_custom_texts_to_github(),
-            brand.push_custom_style_to_github(),
-            brand.push_custom_buttons_to_github(),
-        ])
-        _results = await asyncio.gather(*_push_tasks, return_exceptions=True)
-        _failed  = sum(1 for r in _results if isinstance(r, Exception) or r is False)
-        if _failed:
-            print(f"⚠️ GitHub: {_failed}/{len(_results)} файлів не збережено")
+                print(f"⚠️ PG prepare {pg_key}: {_pe}")
+        if records:
+            ok = await _db.db_set_many(records)
+            status = "✅" if ok else "⚠️"
+            print(f"💾 PostgreSQL: {status} {len(records)}/{len(_to_save)} ключів збережено (1 транзакція)")
         else:
-            print(f"💾 GitHub fallback: всі {len(_results)} файлів збережено паралельно ✅")
+            print("⚠️ _save_all_to_db: немає даних для збереження — пропуск")
+    else:
+        # ── PostgreSQL недоступний — дані тільки на диску ──
+        # Запис через GitHub API прибрано; без PostgreSQL надійна персистентність відсутня.
+        print(
+            "⚠️ _save_all_to_db: PostgreSQL недоступний. "
+            "Дані збережено лише на диск контейнера і будуть втрачені при перезапуску. "
+            "Налаштуйте DATABASE_URL для надійної персистентності."
+        )
 
 
 async def auto_save_loop():
@@ -7518,7 +7450,7 @@ async def main():
 
     asyncio.create_task(_shutdown_watcher())
 
-    # Цикл перезапуска polling — при любом сбое сети/API бот сам восстанавливается
+    # Цикл перезапуска polling — при любом сбое сети/API бот сам восстанавливається
     retry_delay = 5
     while True:
         try:
@@ -7539,9 +7471,51 @@ async def main():
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, 60)  # экспоненциальный backoff до 60с
 
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🛑 Остановлено")
+def _apply_data(data: dict) -> None:
+    """Заповнює in-memory сховища зі словника (з PostgreSQL або JSON-файлу)."""
+    for cid, m in data.get("marriages", {}).items():
+        marriages[int(cid)] = {int(u): int(v) for u, v in m.items()}
+    for cid, users in data.get("streaks", {}).items():
+        streaks[int(cid)] = {}
+        for uid, d in users.items():
+            streaks[int(cid)][int(uid)] = {
+                "count": d.get("count", 0),
+                "last": date.fromisoformat(d["last"]) if d.get("last") else None,
+            }
+    for u, b in data.get("lmn_balances", {}).items():
+        lmn_balances[int(u)] = b
+    for cid, r in data.get("reputation", {}).items():
+        reputation[int(cid)] = {int(u): v for u, v in r.items()}
+    for u, v in data.get("profiles", {}).items():
+        profiles[int(u)] = v
+    for cid, w in data.get("warnings_db", {}).items():
+        warnings_db[int(cid)] = {int(u): v for u, v in w.items()}
+    for cid, w in data.get("ru_army_warns", {}).items():
+        ru_army_warns[int(cid)] = {int(u): v for u, v in w.items()}
+    for cid, r in data.get("chat_rules", {}).items():
+        chat_rules[int(cid)] = r
+    for cid, m in data.get("chat_members", {}).items():
+        chat_members[int(cid)] = {int(u): n for u, n in m.items()}
+    for u in data.get("premium_users", []):
+        _premium_users.add(int(u))
+    for u in data.get("verified_users", []):
+        _verified_users.add(int(u))
+    for u, v in data.get("aura", {}).items():
+        aura[int(u)] = float(v)
+    for u, r in data.get("roles", {}).items():
+        ROLES[int(u)] = r
+    for uname, r in data.get("role_usernames", {}).items():
+        _ROLE_USERNAMES[uname] = r
+    _saved_pack = data.get("brand_emoji_pack", [])
+    if _saved_pack:
+        brand.set_pack(_saved_pack, data.get("brand_pack_name", ""))
+    global _last_rain_time
+    _last_rain_time = data.get("last_rain_time", 0)
+    for c, v in data.get("link_guard", {}).items():
+        _link_guard[int(c)] = bool(v)
+    for c, w in data.get("link_guard_warns", {}).items():
+        _link_guard_warns[int(c)] = {int(u): v for u, v in w.items()}
+    for c, wl in data.get("link_whitelist", {}).items():
+        _link_whitelist[int(c)] = list(wl)
+    for u, b in data.get("bank_balances", {}).items():
+        bank_balances[int(u)] = int(b)

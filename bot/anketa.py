@@ -158,44 +158,30 @@ def _lang_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🇷🇺 Русский",    callback_data="ank_lang:ru"),
     ]])
 
+async def load_anketa_from_db() -> None:
+    """При старті завантажує дані анкет з PostgreSQL."""
+    import db as _db
+    # Завантажуємо налаштування анкет
+    settings = await _db.load_kv("anketa_settings")
+    if settings:
+        _mod_chat_id[0]    = settings.get("mod_chat_id")
+        _pub_chat_id[0]    = settings.get("pub_chat_id")
+        _anketa_counter[0] = settings.get("anketa_counter", 0)
+        _chat_link[0]      = settings.get("chat_link")
+        print("✅ anketa_settings завантажено з PostgreSQL")
+    else:
+        # Fallback: локальний файл
+        load_anketa_settings()
+        return
 
-# ──────────────────────────────────────────
-# ЗБЕРІГАННЯ ДАНИХ
-# ──────────────────────────────────────────
-_sessions: dict[int, dict] = {}
-# {user_id: {"step": int, "answers": {}, "username": str, "full_name": str}}
-
-_pending: dict[str, dict] = {}
-# {app_id: {...}}
-
-_mod_commenting: dict[int, str] = {}
-# {mod_user_id: app_id}
-
-_mod_chat_id: list[int | None] = [None]
-_pub_chat_id: list[int | None] = [None]
-_chat_link:   list[str | None] = [None]   # посилання на головний чат
-_anketa_counter: list[int] = [0]  # глобальний лічильник анкет
-
-# Статуси анкет юзерів
-# "pending" | "approved" | "rejected" | відсутній = немає анкети
-_user_status: dict[int, str] = {}
-
-# Дані схвалених анкет
-# {uid: {"answers": {}, "username": str, "full_name": str, "pub_msg_id": int|None}}
-_approved_data: dict[int, dict] = {}
-
-# Реакції в пабліку (in-memory, скидаються при рестарті)
-# {owner_uid: {"hearts": {reactor_uid: {"name": str, "username": str}},
-#              "dislikes": {reactor_uid: {"name": str, "username": str}}}}
-_reactions: dict[int, dict] = {}
-
-ANKETA_DATA_FILE = "data/anketa_settings.json"
-ANKETA_USERS_FILE = "data/anketa_users.json"
-
-
-# ──────────────────────────────────────────
-# ЗБЕРЕЖЕННЯ / ЗАВАНТАЖЕННЯ
-# ──────────────────────────────────────────
+    # Завантажуємо дані користувачів анкет
+    users = await _db.load_kv("anketa_users")
+    if users:
+        for k, v in users.get("status", {}).items():
+            _user_status[int(k)] = v
+        for k, v in users.get("approved", {}).items():
+            _approved_data[int(k)] = v
+        print("✅ anketa_users завантажено з PostgreSQL")
 async def restore_anketa() -> None:
     """При старті відновлює anketa_users і anketa_settings: PostgreSQL → GitHub → локальний файл."""
     import db as _db
@@ -210,13 +196,13 @@ async def restore_anketa() -> None:
         # 1. PostgreSQL
         if _db.has_pg():
             data = await _db.db_get(pg_key)
-            if data:
+            if data is not None:  # {} — валідний (очищений стан)
                 with open(local, "w", encoding="utf-8") as f:
                     import json as _j
                     _j.dump(data, f, ensure_ascii=False)
                 print(f"✅ {pg_key} відновлено з PostgreSQL")
                 continue
-            print(f"⚠️ PostgreSQL: {pg_key} порожній")
+            print(f"⚠️ PostgreSQL: {pg_key} ще не записано")
 
         # 2. GitHub fallback
         if os.path.exists(local) and os.path.getsize(local) > 5:
@@ -257,13 +243,8 @@ def load_anketa_settings():
         except Exception:
             pass
 
-
-def save_anketa_settings():
-    """Зберігає anketa дані на диск.
-    PostgreSQL/GitHub sync виконується тільки через _save_all_to_db() в bot.py
-    (auto_save_loop + shutdown handler) — без race conditions.
-    """
-    os.makedirs("data", exist_ok=True)
+def _build_anketa_payloads() -> tuple[dict, dict]:
+    """Будує словники для збереження налаштувань і користувачів анкет."""
     settings_payload = {
         "mod_chat_id":    _mod_chat_id[0],
         "pub_chat_id":    _pub_chat_id[0],
@@ -274,12 +255,25 @@ def save_anketa_settings():
         "status":   {str(k): v for k, v in _user_status.items()},
         "approved": {str(k): v for k, v in _approved_data.items()},
     }
+    return settings_payload, users_payload
+def save_anketa_settings():
+    """Зберігає anketa дані на диск.
+    PostgreSQL sync виконується тільки через _save_all_to_db() в bot.py
+    (auto_save_loop + shutdown handler) — без race conditions.
+    """
+    os.makedirs("data", exist_ok=True)
+    settings_payload, users_payload = _build_anketa_payloads()
     with open(ANKETA_DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(settings_payload, f, ensure_ascii=False)
     with open(ANKETA_USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users_payload, f, ensure_ascii=False)
 
-
+async def async_save_anketa_to_db() -> None:
+    """Зберігає дані анкет в PostgreSQL (для виклику при shutdown)."""
+    import db as _db
+    settings_payload, users_payload = _build_anketa_payloads()
+    await _db.save_kv("anketa_settings", settings_payload)
+    await _db.save_kv("anketa_users", users_payload)
 def next_anketa_number() -> int:
     """Повертає наступний номер анкети і зберігає лічильник."""
     _anketa_counter[0] += 1
