@@ -7536,3 +7536,8 @@ def _apply_data(data: dict) -> None:
         _link_whitelist[int(c)] = list(wl)
     for u, b in data.get("bank_balances", {}).items():
         bank_balances[int(u)] = int(b)
+
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
