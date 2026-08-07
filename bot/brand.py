@@ -906,6 +906,25 @@ async def push_custom_texts_to_github(path: str = "data/custom_texts.json") -> b
         return False
 
 
+async def persist_brand_now() -> bool:
+    """Зберігає всі налаштування бренду разом, включно з Premium Emoji entities."""
+    save_custom_texts()
+    save_custom_style()
+    save_custom_buttons()
+    try:
+        import db as _db
+        if not _db.has_pg():
+            return False
+        return await _db.db_set_many([
+            ("custom_texts", _custom_texts),
+            ("custom_style", _custom_style),
+            ("custom_buttons", _custom_buttons),
+        ])
+    except Exception as ex:
+        print(f"⚠️ persist_brand_now: {ex}")
+        return False
+
+
 # ═══════════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ bot_data.json → GitHub
 # ═══════════════════════════════════════════════════════════

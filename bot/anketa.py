@@ -25,6 +25,8 @@ ANKETA_DATA_FILE  = "data/anketa_settings.json"
 # ── In-memory стан ──────────────────────────────────────────
 _mod_chat_id:   list        = [None]   # [0] — id чату модерації
 _pub_chat_id:   list        = [None]   # [0] — id чату публікацій
+_anketa_counter:list        = [0]      # [0] — наступний номер анкети
+_chat_link:     list        = [None]   # [0] — посилання на чат публікацій
 _user_status:   dict        = {}       # uid → "pending"|"approved"|"rejected"
 _approved_data: dict        = {}       # uid → dict з даними анкети
 
@@ -265,6 +267,18 @@ def _build_anketa_payloads() -> tuple[dict, dict]:
         "approved": {str(k): v for k, v in _approved_data.items()},
     }
     return settings_payload, users_payload
+
+
+def build_settings_payload() -> dict:
+    """Поточні налаштування анкет у форматі для PostgreSQL."""
+    return _build_anketa_payloads()[0]
+
+
+def build_users_payload() -> dict:
+    """Поточні статуси й анкети користувачів у форматі для PostgreSQL."""
+    return _build_anketa_payloads()[1]
+
+
 def save_anketa_settings():
     """Зберігає anketa дані на диск.
     PostgreSQL sync виконується тільки через _save_all_to_db() в bot.py
@@ -277,16 +291,32 @@ def save_anketa_settings():
     with open(ANKETA_USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users_payload, f, ensure_ascii=False)
 
+
+def _schedule_anketa_save() -> None:
+    """Запускає асинхронне збереження, не затримуючи Telegram-відповідь."""
+    try:
+        import asyncio
+        asyncio.get_running_loop().create_task(async_save_anketa_to_db())
+    except RuntimeError:
+        pass
+
+
 async def async_save_anketa_to_db() -> None:
-    """Зберігає дані анкет в PostgreSQL (для виклику при shutdown)."""
+    """Зберігає дані анкет у PostgreSQL одним атомарним записом."""
     import db as _db
     settings_payload, users_payload = _build_anketa_payloads()
-    await _db.save_kv("anketa_settings", settings_payload)
-    await _db.save_kv("anketa_users", users_payload)
+    if _db.has_pg():
+        await _db.db_set_many([
+            ("anketa_settings", settings_payload),
+            ("anketa_users", users_payload),
+        ])
+
+
 def next_anketa_number() -> int:
     """Повертає наступний номер анкети і зберігає лічильник."""
     _anketa_counter[0] += 1
     save_anketa_settings()
+    _schedule_anketa_save()
     return _anketa_counter[0]
 
 
@@ -299,6 +329,7 @@ def get_mod_chat() -> int | None:
 def set_mod_chat(chat_id: int):
     _mod_chat_id[0] = chat_id
     save_anketa_settings()
+    _schedule_anketa_save()
 
 def get_pub_chat() -> int | None:
     return _pub_chat_id[0]
@@ -306,6 +337,7 @@ def get_pub_chat() -> int | None:
 def set_pub_chat(chat_id: int | None):
     _pub_chat_id[0] = chat_id
     save_anketa_settings()
+    _schedule_anketa_save()
 
 def get_chat_link() -> str | None:
     return _chat_link[0]
@@ -313,6 +345,7 @@ def get_chat_link() -> str | None:
 def set_chat_link(link: str):
     _chat_link[0] = link
     save_anketa_settings()
+    _schedule_anketa_save()
 
 def get_user_status(uid: int) -> str | None:
     """none / pending / approved / rejected"""
@@ -321,6 +354,7 @@ def get_user_status(uid: int) -> str | None:
 def set_pending(uid: int):
     _user_status[uid] = "pending"
     save_anketa_settings()
+    _schedule_anketa_save()
 
 def set_approved(uid: int, answers: dict, username: str, full_name: str,
                  pub_msg_id: int | None = None, pub_chat_id: int | None = None,
@@ -337,11 +371,13 @@ def set_approved(uid: int, answers: dict, username: str, full_name: str,
         "media_msg_ids": media_msg_ids or [],  # IDs медіа-повідомлень альбому
     }
     save_anketa_settings()
+    _schedule_anketa_save()
 
 def set_rejected(uid: int):
     _user_status[uid] = "rejected"
     _approved_data.pop(uid, None)
     save_anketa_settings()
+    _schedule_anketa_save()
 
 def revoke_anketa(uid: int) -> dict | None:
     """Розжаловує схвалену анкету. Повертає збережені дані для видалення поста."""
@@ -351,6 +387,7 @@ def revoke_anketa(uid: int) -> dict | None:
     _user_status.pop(uid, None)
     _reactions.pop(uid, None)
     save_anketa_settings()
+    _schedule_anketa_save()
     return data
 
 def get_uid_by_pub_msg(msg_id: int, chat_id: int | None = None) -> int | None:
@@ -367,6 +404,7 @@ def delete_user_anketa(uid: int) -> dict | None:
     _user_status.pop(uid, None)
     data = _approved_data.pop(uid, None)
     save_anketa_settings()
+    _schedule_anketa_save()
     return data
 
 def get_approved_data(uid: int) -> dict | None:

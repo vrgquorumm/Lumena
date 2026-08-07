@@ -159,7 +159,12 @@ def _build_main_payload() -> dict:
                              for c, w in _link_guard_warns.items()},
         "link_whitelist":   {str(c): v for c, v in _link_whitelist.items()},
         "bank_balances":    {str(u): b for u, b in bank_balances.items()},
+        "bank_withdraw_cd": {
+            str(u): value.isoformat() for u, value in bank_withdraw_cd.items()
+        },
     }
+
+
 def save_data():
     """Зберігає всі сховища в локальний JSON-файл (швидкий синхронний кеш на диску).
     PostgreSQL-збереження виконується через _save_all_to_db() (auto_save_loop / shutdown).
@@ -170,8 +175,56 @@ def save_data():
         raw = json.dumps(payload, ensure_ascii=False, indent=2).encode()
         with open(DATA_FILE, "wb") as f:
             f.write(raw)
+        # Усі команди, що вже викликають save_data(), отримують негайний
+        # PostgreSQL sync. Це зберігає стрики, шлюби, економіку й статистику
+        # без копіювання викликів у десятки обробників.
+        if _db.has_pg():
+            try:
+                asyncio.get_running_loop().create_task(
+                    _db.db_set("bot_data", payload)
+                )
+            except RuntimeError:
+                pass
     except Exception as e:
         print(f"⚠️ save_data error: {e}")
+
+
+async def save_state_now(reason: str = "оновлення") -> bool:
+    """Одразу зберігає весь критичний стан у PostgreSQL.
+
+    Локальний файл оновлюється першим, а недоступна БД не зупиняє обробник
+    команди: автозбереження та shutdown лишаються страховкою.
+    """
+    save_data()
+    _ank.save_anketa_settings()
+    try:
+        await brand.persist_brand_now()
+        if not _db.has_pg():
+            logging.warning("💾 %s: PostgreSQL недоступний, дані лишилися локально", reason)
+            return False
+        records = [
+            ("bot_data", _build_main_payload()),
+            ("anketa_settings", _ank.build_settings_payload()),
+            ("anketa_users", _ank.build_users_payload()),
+        ]
+        ok = await _db.db_set_many(records)
+        if not ok:
+            logging.warning("💾 %s: PostgreSQL не підтвердив запис", reason)
+        return ok
+    except Exception as exc:
+        logging.warning("💾 %s: негайне збереження не виконалось: %s", reason, exc)
+        return False
+
+
+def schedule_state_save(reason: str = "оновлення") -> None:
+    """Планує негайне збереження, не затримуючи відповідь Telegram."""
+    try:
+        asyncio.get_running_loop().create_task(save_state_now(reason))
+    except RuntimeError:
+        # Позa event loop лишається синхронний локальний кеш.
+        save_data()
+
+
 async def restore_bot_data() -> None:
     """При старті відновлює bot_data: PostgreSQL → GitHub → локальний файл."""
     os.makedirs("data", exist_ok=True)
@@ -5646,16 +5699,22 @@ async def handle_founder_edit_text(msg: Message):
         ents_data.append(d)
 
     brand.set_custom_text(key, raw_text, ents_data)
-    brand.save_custom_texts()
-    asyncio.create_task(brand.push_custom_texts_to_github())
+    brand_saved = await brand.persist_brand_now()
 
     label = brand.TEXT_LABELS.get(key, key)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛠 Открыть редактор", callback_data="editor:menu")]
     ])
     await msg.reply(
-        f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
-        "Бот будет использовать твой текст с Premium emoji.\n\n"
+        (
+            f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
+            +
+            "Текст, форматування та Premium Emoji записані в PostgreSQL.\n\n"
+            if brand_saved else
+            f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
+            "Текст збережено локально; PostgreSQL недоступний, автосинхронізація повторить запис.\n\n"
+        )
+        +
         f"<code>/resettext {key}</code> — сбросить к дефолту.",
         parse_mode="HTML",
         reply_markup=back_kb,
@@ -7555,6 +7614,11 @@ def _apply_data(data: dict) -> None:
         _link_whitelist[int(c)] = list(wl)
     for u, b in data.get("bank_balances", {}).items():
         bank_balances[int(u)] = int(b)
+    for u, value in data.get("bank_withdraw_cd", {}).items():
+        try:
+            bank_withdraw_cd[int(u)] = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            logging.warning("⚠️ Некоректний cooldown банку для user=%s пропущено", u)
 
 
 
