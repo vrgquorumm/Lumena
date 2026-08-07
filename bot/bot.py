@@ -3585,19 +3585,63 @@ async def cmd_settitle(msg: Message, command: CommandObject = None):
     await msg.reply("✅ Звание установлено!")
 
 async def cmd_botstats(msg: Message):
-    total_marriages = sum(len(v)//2 for v in marriages.values())
-    total_streaks = sum(len(v) for v in streaks.values())
-    total_balance = sum(lmn_balances.values())
-    total_warns = sum(sum(v.values()) for v in warnings_db.values())
-    total_users = len(lmn_balances)
+    import html as _html
+    cid = msg.chat.id
+    is_group = msg.chat.type in ("group", "supergroup")
+
+    if is_group:
+        # ── Статистика конкретного чату ──────────────────────
+        chat_uid_set = set(chat_members.get(cid, {}).keys())
+        total_users   = len(chat_uid_set)
+
+        chat_marr = marriages.get(cid, {})
+        total_marriages = len(chat_marr) // 2  # кожна пара записана двічі (A→B і B→A)
+
+        chat_str  = streaks.get(cid, {})
+        total_streaks   = sum(1 for d in chat_str.values() if d.get("count", 0) > 0)
+        best_streak     = max((d.get("count", 0) for d in chat_str.values()), default=0)
+
+        total_warns  = sum(warnings_db.get(cid, {}).values())
+        total_balance = sum(lmn_balances.get(uid, 0) for uid in chat_uid_set)
+
+        # Хто найбагатший у чаті
+        rich_in_chat = [(lmn_balances.get(uid, 0), uid) for uid in chat_uid_set]
+        rich_in_chat.sort(reverse=True)
+        richest_line = ""
+        if rich_in_chat and rich_in_chat[0][0] > 0:
+            top_bal, top_uid = rich_in_chat[0]
+            top_name = chat_members.get(cid, {}).get(top_uid, f"id{top_uid}")
+            richest_line = f"\n👑 Топ гаманець: <b>{_html.escape(str(top_name))}</b> · {fmt_lmn(top_bal)}"
+
+        chat_title = _html.escape(msg.chat.title or "чат")
+        scope_hdr  = f"📊 Статистика · {chat_title}"
+    else:
+        # ── Приватний чат → глобальна статистика ─────────────
+        total_users     = len({uid for m in chat_members.values() for uid in m})
+        total_marriages = sum(len(v) // 2 for v in marriages.values())
+        total_streaks   = sum(
+            1 for users in streaks.values()
+            for d in users.values() if d.get("count", 0) > 0
+        )
+        best_streak  = max(
+            (d.get("count", 0) for users in streaks.values() for d in users.values()),
+            default=0
+        )
+        total_warns   = sum(sum(v.values()) for v in warnings_db.values())
+        total_balance = sum(lmn_balances.values())
+        richest_line  = ""
+        scope_hdr     = "📊 Загальна статистика"
+
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"📊 Статистика\n\n"
-        f"👥 Пользователей: <b>{total_users}</b>\n"
-        f"💍 Браков: <b>{total_marriages}</b>\n"
-        f"🔥 Активных стриков: <b>{total_streaks}</b>\n"
-        f"💰 LMN в обороте: <b>{fmt_lmn(total_balance)}</b>\n"
-        f"⚠️ Предупреждений: <b>{total_warns}</b>\n\n"
+        f"{scope_hdr}\n\n"
+        f"👥 Учасників: <b>{total_users}</b>\n"
+        f"💍 Шлюбів: <b>{total_marriages}</b>\n"
+        f"🔥 Активних стріків: <b>{total_streaks}</b>\n"
+        f"🏆 Рекорд стріку: <b>{best_streak} дн.</b>\n"
+        f"⚠️ Попереджень: <b>{total_warns}</b>\n"
+        f"💰 LMN в обороті: <b>{fmt_lmn(total_balance)}</b>"
+        f"{richest_line}\n\n"
         f"{brand.div()}\n"
         f"🤖 v{BOT_VERSION}",
         parse_mode="HTML",
