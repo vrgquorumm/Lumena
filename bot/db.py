@@ -1,0 +1,155 @@
+"""PostgreSQL persistence layer for Lumena Bot.
+
+Використовує одну key-value таблицю (bot_store) для зберігання всіх даних бота
+у вигляді JSONB. Якщо DATABASE_URL не задано — автоматично падає на GitHub-fallback.
+
+Ключі:
+  bot_data         — весь стан бота (streaks, marriages, balances, aura…)
+  anketa_users     — статуси юзерів анкети
+  anketa_settings  — mod_chat_id, pub_chat_id, counter, chat_link
+  custom_texts     — кастомні тексти бренду
+  custom_style     — кастомний стиль бренду
+  custom_buttons   — кастомні кнопки бренду
+"""
+
+from __future__ import annotations
+import json
+import logging
+import os
+import ssl
+
+try:
+    import asyncpg  # type: ignore
+    _ASYNCPG_OK = True
+except ImportError:
+    _ASYNCPG_OK = False
+
+_pool: "asyncpg.Pool | None" = None  # type: ignore
+
+_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS bot_store (
+    key        TEXT PRIMARY KEY,
+    value      JSONB        NOT NULL,
+    updated_at TIMESTAMPTZ  DEFAULT NOW()
+)
+"""
+
+_UPSERT = """
+INSERT INTO bot_store (key, value, updated_at)
+VALUES ($1, $2::jsonb, NOW())
+ON CONFLICT (key) DO UPDATE
+    SET value      = EXCLUDED.value,
+        updated_at = NOW()
+"""
+
+
+def _make_ssl(url: str) -> "ssl.SSLContext | None":
+    """Railway вимагає SSL. Повертаємо контекст якщо схоже на production."""
+    if "sslmode=disable" in url:
+        return None
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+async def init_db() -> bool:
+    """Ініціалізує connection pool та схему БД.
+    Повертає True якщо PostgreSQL доступний, False — якщо ні.
+    """
+    global _pool
+    if not _ASYNCPG_OK:
+        print("⚠️ asyncpg не встановлено — PostgreSQL вимкнено, використовується GitHub")
+        return False
+
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        print("ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub")
+        return False
+
+    # Спочатку пробуємо з SSL (Railway), потім без
+    for ssl_arg in (_make_ssl(db_url), None):
+        try:
+            pool = await asyncpg.create_pool(
+                db_url,
+                min_size=1,
+                max_size=5,
+                command_timeout=15,
+                ssl=ssl_arg,
+            )
+            async with pool.acquire() as conn:
+                await conn.execute(_CREATE_TABLE)
+            _pool = pool
+            print("✅ PostgreSQL підключено, таблиця bot_store готова")
+            return True
+        except Exception as e:
+            logging.debug(f"db init attempt (ssl={ssl_arg is not None}): {e}")
+            continue
+
+    print("⚠️ Не вдалося підключитись до PostgreSQL — використовується GitHub-fallback")
+    return False
+
+
+def has_pg() -> bool:
+    """True якщо connection pool активний."""
+    return _pool is not None
+
+
+async def db_get(key: str) -> dict | None:
+    """Отримує JSON-об'єкт з БД за ключем.
+    Повертає None якщо ключ не знайдено або БД недоступна.
+    """
+    if not _pool:
+        return None
+    try:
+        async with _pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM bot_store WHERE key = $1", key
+            )
+        if not row:
+            return None
+        val = row["value"]
+        return json.loads(val) if isinstance(val, str) else dict(val)
+    except Exception as e:
+        logging.warning(f"db_get({key!r}): {e}")
+        return None
+
+
+async def db_set(key: str, data: dict) -> bool:
+    """Upsert JSON-об'єкта в БД.
+    Повертає True при успіху, False при помилці.
+    """
+    if not _pool:
+        return False
+    try:
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                _UPSERT,
+                key,
+                json.dumps(data, ensure_ascii=False, default=str),
+            )
+        return True
+    except Exception as e:
+        logging.warning(f"db_set({key!r}): {e}")
+        return False
+
+
+async def db_set_raw(key: str, raw_bytes: bytes) -> bool:
+    """Зберігає raw JSON bytes (без повторної серіалізації)."""
+    if not _pool:
+        return False
+    try:
+        data = json.loads(raw_bytes)
+        return await db_set(key, data)
+    except Exception as e:
+        logging.warning(f"db_set_raw({key!r}): {e}")
+        return False
+
+
+async def close_db() -> None:
+    """Закриває connection pool."""
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+        print("🔒 PostgreSQL з'єднання закрито")

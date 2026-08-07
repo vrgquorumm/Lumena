@@ -43,6 +43,7 @@ from lumena import get_lumena_response
 import anketa as _ank
 import ai_agent
 import brand
+import db as _db
 
 _edit_sessions:     dict[int, str]  = {}  # uid → ключ текста на редактирование (ЛС с фаундером)
 _btn_edit_sessions: dict[int, dict] = {}    # uid → {"key": str, "step": "label"|"url"}  (редактор кнопок)
@@ -184,22 +185,34 @@ def save_data():
     except Exception as e:
         print(f"⚠️ save_data error: {e}")
 
-async def restore_bot_data_from_github() -> None:
-    """При старті: ЗАВЖДИ завантажуємо bot_data.json з GitHub (якщо він є).
-    Це гарантує актуальність навіть якщо Railway перезапустив контейнер
-    без повного перегортання файлової системи (локальний файл може бути застарілим).
-    """
+async def restore_bot_data() -> None:
+    """При старті відновлює bot_data: PostgreSQL → GitHub → локальний файл."""
     os.makedirs("data", exist_ok=True)
+
+    # 1. PostgreSQL (пріоритет)
+    if _db.has_pg():
+        data = await _db.db_get("bot_data")
+        if data:
+            with open(DATA_FILE, "w", encoding="utf-8") as _f:
+                json.dump(data, _f, ensure_ascii=False)
+            print("✅ bot_data відновлено з PostgreSQL")
+            return
+        print("⚠️ PostgreSQL: bot_data порожній — пробую GitHub...")
+
+    # 2. GitHub fallback
     print("📥 Завантажую bot_data.json з GitHub...")
     raw = await brand.fetch_bot_data_from_github()
     if raw and len(raw) > 10:
-        with open(DATA_FILE, "wb") as f:
-            f.write(raw)
-        print(f"✅ bot_data.json відновлено з GitHub ({len(raw)} байт)")
-    elif os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 10:
-        print("⚠️ GitHub не повернув дані — використовую локальний файл")
+        with open(DATA_FILE, "wb") as _f:
+            _f.write(raw)
+        print(f"✅ bot_data відновлено з GitHub ({len(raw)} байт)")
+        return
+
+    # 3. Локальний файл (якщо є)
+    if os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 10:
+        print("⚠️ GitHub порожній — використовую локальний файл")
     else:
-        print("⚠️ Ні GitHub, ні локального файлу — старт з нуля")
+        print("⚠️ Немає жодного джерела даних — старт з нуля")
 
 
 def load_data():
@@ -257,46 +270,68 @@ def load_data():
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
 
-async def _push_all_to_github() -> None:
-    """Пушить ВСІ дані-файли в GitHub атомарно (викликається з auto_save_loop і при shutdown)."""
-    _files = [
-        (DATA_FILE,               "data/bot_data.json"),
-        (_ank.ANKETA_USERS_FILE,  "data/anketa_users.json"),
-        (_ank.ANKETA_DATA_FILE,   "data/anketa_settings.json"),
+async def _save_all_to_db() -> None:
+    """Зберігає ВСІ дані: PostgreSQL (основний) → GitHub (fallback).
+    Викликається тільки з auto_save_loop і shutdown handler —
+    ЄДИНА точка запису, без race conditions.
+    """
+    # ── Збираємо все що треба зберегти ───────────────────
+    _to_save = [
+        (DATA_FILE,               "bot_data",         "data/bot_data.json"),
+        (_ank.ANKETA_USERS_FILE,  "anketa_users",     "data/anketa_users.json"),
+        (_ank.ANKETA_DATA_FILE,   "anketa_settings",  "data/anketa_settings.json"),
+        ("data/custom_texts.json",  "custom_texts",   "data/custom_texts.json"),
+        ("data/custom_style.json",  "custom_style",   "data/custom_style.json"),
+        ("data/custom_buttons.json","custom_buttons", "data/custom_buttons.json"),
     ]
-    for local, gh_path in _files:
-        try:
-            if os.path.exists(local):
-                with open(local, "rb") as _f:
-                    _raw = _f.read()
-                await brand.push_bot_data_to_github(_raw, gh_path)
-        except Exception as _e:
-            print(f"⚠️ GitHub push {gh_path}: {_e}")
-    # Brand-файли (custom_texts, style, buttons)
-    for fn in (
-        brand.push_custom_texts_to_github,
-        brand.push_custom_style_to_github,
-        brand.push_custom_buttons_to_github,
-    ):
-        try:
-            await fn()
-        except Exception as _e:
-            print(f"⚠️ GitHub push brand: {_e}")
+
+    if _db.has_pg():
+        # ── PostgreSQL шлях ───────────────────────────────
+        ok_count = 0
+        for local, pg_key, _ in _to_save:
+            try:
+                if not os.path.exists(local):
+                    continue
+                with open(local, "r", encoding="utf-8") as _rf:
+                    data_dict = json.load(_rf)
+                if await _db.db_set(pg_key, data_dict):
+                    ok_count += 1
+            except Exception as _pe:
+                print(f"⚠️ PG save {pg_key}: {_pe}")
+        print(f"💾 PostgreSQL: збережено {ok_count}/{len(_to_save)} ключів ✅")
+    else:
+        # ── GitHub fallback ───────────────────────────────
+        for local, _, gh_path in _to_save[:3]:  # bot_data + anketa
+            try:
+                if os.path.exists(local):
+                    with open(local, "rb") as _f:
+                        await brand.push_bot_data_to_github(_f.read(), gh_path)
+            except Exception as _ge:
+                print(f"⚠️ GitHub push {gh_path}: {_ge}")
+        for gh_fn in (
+            brand.push_custom_texts_to_github,
+            brand.push_custom_style_to_github,
+            brand.push_custom_buttons_to_github,
+        ):
+            try:
+                await gh_fn()
+            except Exception as _ge:
+                print(f"⚠️ GitHub push brand: {_ge}")
+        print("💾 GitHub fallback: дані збережено ✅")
 
 
 async def auto_save_loop():
-    """Автосохранение кожні 30 сек + єдиний надійний пуш ВСІХ файлів в GitHub.
-    save_data() пише лише на диск — GitHub пушить ТІЛЬКИ тут, щоб уникнути
-    race condition на sha при паралельних PUT запитах.
+    """Автозбереження кожні 30 сек.
+    save_data() пише лише на диск.
+    _save_all_to_db() — єдина точка запису в PostgreSQL / GitHub.
     """
     while True:
         await asyncio.sleep(30)
         save_data()
         try:
-            await _push_all_to_github()
-            print("💾 Автозбереження → GitHub ✅")
+            await _save_all_to_db()
         except Exception as _sl_err:
-            print(f"⚠️ auto_save_loop push: {_sl_err}")
+            print(f"⚠️ auto_save_loop: {_sl_err}")
 
 async def coin_rain_loop():
     """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
@@ -7160,11 +7195,13 @@ async def global_error_handler(event, **kwargs):
 
 
 async def main():
-    # Спочатку відновлюємо з GitHub (якщо Railway перезапустив з нуля),
-    # потім завантажуємо дані в пам'ять
-    await restore_bot_data_from_github()
-    await _ank.restore_anketa_from_github()
-    await brand.restore_brand_from_github()
+    # 0. Ініціалізація PostgreSQL (якщо DATABASE_URL задано)
+    await _db.init_db()
+
+    # 1. Відновлюємо дані: PostgreSQL → GitHub → локальний файл
+    await restore_bot_data()
+    await _ank.restore_anketa()
+    await brand.restore_brand()
     load_data()
     _ank.load_anketa_settings()
     brand.load_custom_texts()
@@ -7248,10 +7285,11 @@ async def main():
         print("💾 Фінальне збереження ВСІХ файлів перед зупинкою...")
         save_data()
         try:
-            await _push_all_to_github()
-            print("✅ Всі дані збережено в GitHub")
+            await _save_all_to_db()
+            print("✅ Всі дані збережено перед зупинкою")
         except Exception as _se:
-            print(f"⚠️ Shutdown push error: {_se}")
+            print(f"⚠️ Shutdown save error: {_se}")
+        await _db.close_db()
         # Зупиняємо polling
         await dp.stop_polling()
 

@@ -196,23 +196,43 @@ ANKETA_USERS_FILE = "data/anketa_users.json"
 # ──────────────────────────────────────────
 # ЗБЕРЕЖЕННЯ / ЗАВАНТАЖЕННЯ
 # ──────────────────────────────────────────
-async def restore_anketa_from_github() -> None:
-    """При старті відновлює anketa_users.json і anketa_settings.json з GitHub."""
+async def restore_anketa() -> None:
+    """При старті відновлює anketa_users і anketa_settings: PostgreSQL → GitHub → локальний файл."""
+    import db as _db
     os.makedirs("data", exist_ok=True)
-    for local, gh_path, label in [
-        (ANKETA_USERS_FILE,   "data/anketa_users.json",    "anketa_users"),
-        (ANKETA_DATA_FILE,    "data/anketa_settings.json", "anketa_settings"),
-    ]:
+
+    _targets = [
+        (ANKETA_USERS_FILE,  "anketa_users",    "data/anketa_users.json"),
+        (ANKETA_DATA_FILE,   "anketa_settings", "data/anketa_settings.json"),
+    ]
+
+    for local, pg_key, gh_path in _targets:
+        # 1. PostgreSQL
+        if _db.has_pg():
+            data = await _db.db_get(pg_key)
+            if data:
+                with open(local, "w", encoding="utf-8") as f:
+                    import json as _j
+                    _j.dump(data, f, ensure_ascii=False)
+                print(f"✅ {pg_key} відновлено з PostgreSQL")
+                continue
+            print(f"⚠️ PostgreSQL: {pg_key} порожній")
+
+        # 2. GitHub fallback
         if os.path.exists(local) and os.path.getsize(local) > 5:
-            continue  # локальний файл є — пропускаємо
-        print(f"📥 {label} не знайдено — спроба відновити з GitHub...")
+            continue  # локальний файл є
+        print(f"📥 {pg_key} не знайдено — спроба відновити з GitHub...")
         raw = await brand.fetch_bot_data_from_github(gh_path)
         if raw:
             with open(local, "wb") as f:
                 f.write(raw)
-            print(f"✅ {label} відновлено з GitHub")
+            print(f"✅ {pg_key} відновлено з GitHub")
         else:
-            print(f"⚠️ GitHub не повернув {label}")
+            print(f"⚠️ GitHub не повернув {pg_key}")
+
+
+# Аліас для зворотної сумісності
+restore_anketa_from_github = restore_anketa
 
 
 def load_anketa_settings():
@@ -239,40 +259,25 @@ def load_anketa_settings():
 
 
 def save_anketa_settings():
-    import asyncio
+    """Зберігає anketa дані на диск.
+    PostgreSQL/GitHub sync виконується тільки через _save_all_to_db() в bot.py
+    (auto_save_loop + shutdown handler) — без race conditions.
+    """
     os.makedirs("data", exist_ok=True)
-    with open(ANKETA_DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "mod_chat_id":     _mod_chat_id[0],
-            "pub_chat_id":     _pub_chat_id[0],
-            "anketa_counter":  _anketa_counter[0],
-            "chat_link":       _chat_link[0],
-        }, f)
-    users_payload = {
-        "status":   {str(k): v for k, v in _user_status.items()},
-        "approved": {str(k): v for k, v in _approved_data.items()},
-    }
     settings_payload = {
         "mod_chat_id":    _mod_chat_id[0],
         "pub_chat_id":    _pub_chat_id[0],
         "anketa_counter": _anketa_counter[0],
         "chat_link":      _chat_link[0],
     }
+    users_payload = {
+        "status":   {str(k): v for k, v in _user_status.items()},
+        "approved": {str(k): v for k, v in _approved_data.items()},
+    }
+    with open(ANKETA_DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings_payload, f, ensure_ascii=False)
     with open(ANKETA_USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users_payload, f, ensure_ascii=False)
-    # Пушимо обидва файли в GitHub
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(brand.push_bot_data_to_github(
-            json.dumps(users_payload, ensure_ascii=False).encode(),
-            "data/anketa_users.json"
-        ))
-        loop.create_task(brand.push_bot_data_to_github(
-            json.dumps(settings_payload, ensure_ascii=False).encode(),
-            "data/anketa_settings.json"
-        ))
-    except RuntimeError:
-        pass  # виклик поза async-контекстом
 
 
 def next_anketa_number() -> int:

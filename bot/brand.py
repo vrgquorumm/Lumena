@@ -1006,28 +1006,50 @@ async def push_bot_data_to_github(
         return False
 
 
-async def restore_brand_from_github() -> None:
-    """При старті відновлює custom_texts/style/buttons з GitHub якщо локальних файлів немає."""
+async def restore_brand() -> None:
+    """При старті відновлює custom_texts/style/buttons: PostgreSQL → GitHub → локальний файл."""
     import os
+    try:
+        import db as _db
+    except ImportError:
+        _db = None  # type: ignore
+
     targets = [
         ("data/custom_texts.json",   "custom_texts",   load_custom_texts),
         ("data/custom_style.json",   "custom_style",   load_custom_style),
         ("data/custom_buttons.json", "custom_buttons", load_custom_buttons),
     ]
     os.makedirs("data", exist_ok=True)
-    for gh_path, label, loader in targets:
-        local = gh_path  # шлях однаковий
+
+    for local, pg_key, loader in targets:
+        # 1. PostgreSQL
+        if _db and _db.has_pg():
+            data = await _db.db_get(pg_key)
+            if data:
+                import json as _j
+                with open(local, "w", encoding="utf-8") as f:
+                    _j.dump(data, f, ensure_ascii=False)
+                loader()
+                print(f"✅ {pg_key} відновлено з PostgreSQL")
+                continue
+            print(f"⚠️ PostgreSQL: {pg_key} порожній")
+
+        # 2. GitHub fallback
         if os.path.exists(local) and os.path.getsize(local) > 5:
             continue
-        print(f"📥 {label} не знайдено — спроба відновити з GitHub...")
-        raw = await fetch_bot_data_from_github(gh_path)
+        print(f"📥 {pg_key} не знайдено — спроба відновити з GitHub...")
+        raw = await fetch_bot_data_from_github(local)
         if raw:
             with open(local, "wb") as f:
                 f.write(raw)
-            loader()  # одразу завантажуємо в пам'ять
-            print(f"✅ {label} відновлено з GitHub")
+            loader()
+            print(f"✅ {pg_key} відновлено з GitHub")
         else:
-            print(f"⚠️ GitHub не повернув {label}")
+            print(f"⚠️ GitHub не повернув {pg_key}")
+
+
+# Аліас для зворотної сумісності
+restore_brand_from_github = restore_brand
 
 
 async def fetch_bot_data_from_github(path: str = "data/bot_data.json") -> bytes | None:
