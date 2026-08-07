@@ -4,6 +4,7 @@
 При отсутствии пака — текстовые fallback.
 """
 from __future__ import annotations
+import os
 
 _pack_ids: list[str] = []
 _pack_name: str = ""
