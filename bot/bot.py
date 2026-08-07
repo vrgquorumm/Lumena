@@ -2427,11 +2427,11 @@ async def _bank_card(msg: Message):
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🏦 <b>Твой банк</b>\n\n"
-        f"💳 Гаманець: <b>{fmt_lmn(wallet)}</b> {brand.currency()}\n"
+        f"💳 Кошелёк: <b>{fmt_lmn(wallet)}</b> {brand.currency()}\n"
         f"🏦 В банке:  <b>{fmt_lmn(vault)}</b> {brand.currency()}\n"
         f"💰 Всего:    <b>{fmt_lmn(wallet + vault)}</b> {brand.currency()}\n\n"
         f"<i>Деньги в банке <b>нельзя украсть</b> через ограбление</i>\n\n"
-        f"<code>депозит 1000</code> — положить в банк\n"
+        f"<code>сохранить</code> — перевести весь баланс в банк\n"
         f"<code>снять 1000</code> — вывести из банка\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
@@ -2440,20 +2440,12 @@ async def _bank_card(msg: Message):
 async def _bank_deposit(msg: Message, args_text: str = ""):
     uid    = msg.from_user.id
     wallet = get_balance(uid)
-    raw    = args_text.strip().replace(" ", "").replace(",", "").replace(".", "")
-    if not raw or not raw.isdigit():
-        return await msg.reply(
-            f"{brand.hdr()}\n\n🏦 <b>Депозит</b>\n\n"
-            f"💳 Кошелёк: <b>{fmt_lmn(wallet)}</b>\n\n"
-            f"Укажи сумму: <code>депозит 1000</code>\n\n{brand.div()}",
-            parse_mode="HTML",
-        )
-    amount = int(raw)
+    # «сохранить» всегда кладёт в банк весь доступный баланс.
+    # Аргументы игнорируются намеренно — это исключает частичные переводы.
+    amount = wallet
     if amount <= 0:
-        return await msg.reply("❌ Сумма должна быть больше 0.", parse_mode="HTML")
-    if amount > wallet:
         return await msg.reply(
-            f"❌ Недостаточно средств.\n💳 Кошелёк: <b>{fmt_lmn(wallet)}</b>",
+            "❌ В кошельке нет монет, которые можно сохранить.",
             parse_mode="HTML",
         )
     add_balance(uid, -amount)
@@ -2461,8 +2453,8 @@ async def _bank_deposit(msg: Message, args_text: str = ""):
     save_data()
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🏦 <b>Депозит выполнен!</b>\n\n"
-        f"➕ Положено: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
+        f"🏦 <b>Баланс сохранён!</b>\n\n"
+        f"➕ В банк переведено: <b>{fmt_lmn(amount)}</b> {brand.currency()}\n"
         f"💳 Кошелёк: <b>{fmt_lmn(get_balance(uid))}</b>\n"
         f"🏦 В банке:  <b>{fmt_lmn(get_bank(uid))}</b>\n\n"
         f"{brand.div()}",
@@ -2522,11 +2514,11 @@ async def _bank_withdraw(msg: Message, args_text: str = ""):
 async def cmd_bank_slash(msg: Message):
     await _bank_card(msg)
 
-@dp.message(Command("deposit", "депозит"))
+@dp.message(Command("save", "сохранить"))
 async def cmd_deposit_slash(msg: Message, command: CommandObject = None):
-    await _bank_deposit(msg, (command.args or "") if command else "")
+    await _bank_deposit(msg)
 
-@dp.message(Command("withdraw", "зняти", "вивести"))
+@dp.message(Command("withdraw", "снять", "вывести"))
 async def cmd_withdraw_slash(msg: Message, command: CommandObject = None):
     await _bank_withdraw(msg, (command.args or "") if command else "")
 
@@ -4648,10 +4640,9 @@ TEXT_COMMANDS.update({
     "казино": cmd_casino, "слоты": cmd_slots, "слот": cmd_slots,
     "ограбить": cmd_rob, "украсть": cmd_rob,
     "банк": _bank_card, "bank": _bank_card,
-    "депозит": lambda m: _bank_deposit(m, " ".join((m.text or "").split()[1:])),
-    "deposit": lambda m: _bank_deposit(m, " ".join((m.text or "").split()[1:])),
-    "зняти": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
-    "вивести": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
+    "сохранить": _bank_deposit, "save": _bank_deposit,
+    "снять": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
+    "вывести": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
     "дать": cmd_give, "перевести": cmd_give,
     "топбогачей": cmd_richest, "топ богачей": cmd_richest,
     "выдатьадминам": cmd_givetoadmins,
