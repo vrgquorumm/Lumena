@@ -3829,9 +3829,11 @@ async def cmd_version(msg: Message):
 # ═══════════════════════════════════════════════════════
 # ІНФО — опис проекту, команда, розробники
 # ═══════════════════════════════════════════════════════
-@dp.message(Command("info", "інфо", "инфо"))
+@dp.message(Command("info"))
 async def cmd_info(msg: Message):
-    """Показує опис проекту. Текст редагується через /edit → категорія ℹ️ Інфо."""
+    """Показує опис проекту. Текст редагується через /edit → категорія ℹ️ Інфо.
+    Також спрацьовує на текст 'інфо' / 'инфо' через TEXT_COMMANDS.
+    """
     text = brand.get_text("info_project")
     await msg.reply(
         f"{brand.hdr()}\n\n{text}\n\n{brand.div()}",
