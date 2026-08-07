@@ -4660,7 +4660,8 @@ async def cb_ank_accept(cb: CallbackQuery):
 
     # 1. Публікуємо в паблік-чат, зберігаємо msg_id
     pub_chat  = _ank.get_pub_chat()
-    pub_msg_id = None
+    pub_msg_id       = None
+    pub_media_msg_ids: list[int] = []   # IDs альбому (2+ медіа) для видалення
     pub_ok    = False
     media_items = app["answers"].get("media", [])
     # backward compat: old single-media fields
@@ -4697,19 +4698,22 @@ async def cb_ank_accept(cb: CallbackQuery):
                     )
             else:
                 # 2–10 медіа: альбом, потім текст з реакціями
-                await _ank._send_media_group_to_chat(bot, pub_chat, media_items)
+                _media_ids = await _ank._send_media_group_to_chat(bot, pub_chat, media_items)
                 sent_pub = await bot.send_message(
                     pub_chat, pub_text, parse_mode="HTML",
                     reply_markup=_rkb,
                 )
+                pub_media_msg_ids = _media_ids  # зберігаємо для майбутнього видалення
             pub_msg_id = sent_pub.message_id
             pub_ok = True
         except Exception as e:
             print(f"⚠️ pub_chat send error: {e}")
 
-    # 2. Зберігаємо статус approved
+    # 2. Зберігаємо статус approved (з номером анкети і IDs медіа для видалення)
     _ank.set_approved(uid, app["answers"], app["username"], app["full_name"],
-                      pub_msg_id=pub_msg_id, pub_chat_id=pub_chat)
+                      pub_msg_id=pub_msg_id, pub_chat_id=pub_chat,
+                      anketa_num=app.get("anketa_num"),
+                      media_msg_ids=pub_media_msg_ids)
 
     # 3. Уведомление в мод-чат об одобрении
     anketa_num = app.get("anketa_num", "")
@@ -4989,13 +4993,20 @@ async def cb_ank_delete(cb: CallbackQuery):
 
     data = _ank.delete_user_anketa(uid)
 
-    # Удаляем из паблик-чата если есть
-    pub_chat = _ank.get_pub_chat()
-    if pub_chat and data and data.get("pub_msg_id"):
-        try:
-            await bot.delete_message(pub_chat, data["pub_msg_id"])
-        except Exception:
-            pass
+    # Удаляем из паблик-чата если есть (текст + медіа-альбом)
+    pub_chat = data.get("pub_chat_id") if data else None
+    pub_chat = pub_chat or _ank.get_pub_chat()
+    if pub_chat and data:
+        if data.get("pub_msg_id"):
+            try:
+                await bot.delete_message(pub_chat, data["pub_msg_id"])
+            except Exception:
+                pass
+        for _mid in (data.get("media_msg_ids") or []):
+            try:
+                await bot.delete_message(pub_chat, _mid)
+            except Exception:
+                pass
 
     await cb.message.edit_reply_markup(reply_markup=None)
     await _send_custom(
@@ -5012,14 +5023,20 @@ async def cb_ank_user_edit(cb: CallbackQuery):
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
 
-    # Удаляем старую публикацию
+    # Удаляем старую публикацию (текст + медіа-альбом)
     data = _ank.delete_user_anketa(uid)
-    pub_chat = _ank.get_pub_chat()
-    if pub_chat and data and data.get("pub_msg_id"):
-        try:
-            await bot.delete_message(pub_chat, data["pub_msg_id"])
-        except Exception:
-            pass
+    pub_chat = (data.get("pub_chat_id") if data else None) or _ank.get_pub_chat()
+    if pub_chat and data:
+        if data.get("pub_msg_id"):
+            try:
+                await bot.delete_message(pub_chat, data["pub_msg_id"])
+            except Exception:
+                pass
+        for _mid in (data.get("media_msg_ids") or []):
+            try:
+                await bot.delete_message(pub_chat, _mid)
+            except Exception:
+                pass
 
     await cb.message.edit_reply_markup(reply_markup=None)
     _ank._sessions[uid] = {
@@ -6806,14 +6823,23 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
     if not data:
         return await msg.reply("⚠️ Активна анкета у цього юзера не знайдена.")
 
-    # ── Видаляємо пост з паб-чату ─────────────────────────────
-    pub_msg  = data.get("pub_msg_id")
-    pub_chat = data.get("pub_chat_id") or _ank.get_pub_chat()
-    if pub_msg and pub_chat:
-        try:
-            await bot.delete_message(pub_chat, pub_msg)
-        except Exception:
-            pass
+    # ── Видаляємо пост(и) з паб-чату ────────────────────────
+    pub_msg        = data.get("pub_msg_id")
+    pub_chat       = data.get("pub_chat_id") or _ank.get_pub_chat()
+    media_msg_ids  = data.get("media_msg_ids") or []
+    if pub_chat:
+        # Видаляємо текстову картку
+        if pub_msg:
+            try:
+                await bot.delete_message(pub_chat, pub_msg)
+            except Exception:
+                pass
+        # Видаляємо медіа-альбом (якщо був)
+        for _mid in media_msg_ids:
+            try:
+                await bot.delete_message(pub_chat, _mid)
+            except Exception:
+                pass
 
     # ── Повідомляємо автора анкети ────────────────────────────
     name_hint  = data.get("full_name") or data.get("username") or str(target_uid)

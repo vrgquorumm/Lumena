@@ -320,14 +320,18 @@ def set_pending(uid: int):
     save_anketa_settings()
 
 def set_approved(uid: int, answers: dict, username: str, full_name: str,
-                 pub_msg_id: int | None = None, pub_chat_id: int | None = None):
+                 pub_msg_id: int | None = None, pub_chat_id: int | None = None,
+                 anketa_num: int | None = None,
+                 media_msg_ids: list[int] | None = None):
     _user_status[uid] = "approved"
     _approved_data[uid] = {
-        "answers":    answers,
-        "username":   username,
-        "full_name":  full_name,
-        "pub_msg_id": pub_msg_id,
-        "pub_chat_id": pub_chat_id,
+        "answers":       answers,
+        "username":      username,
+        "full_name":     full_name,
+        "pub_msg_id":    pub_msg_id,
+        "pub_chat_id":   pub_chat_id,
+        "anketa_num":    anketa_num,
+        "media_msg_ids": media_msg_ids or [],  # IDs медіа-повідомлень альбому
     }
     save_anketa_settings()
 
@@ -662,15 +666,18 @@ def is_on_photo_step(uid: int) -> bool:
 is_on_media_step = is_on_photo_step  # alias
 
 
-async def _send_media_group_to_chat(bot_obj, chat_id: int, media_items: list) -> None:
-    """Відправляє альбом (2–10 медіа) без підпису та кнопок."""
+async def _send_media_group_to_chat(bot_obj, chat_id: int, media_items: list) -> list[int]:
+    """Відправляє альбом (2–10 медіа) без підпису та кнопок.
+    Повертає список message_id надісланих повідомлень (потрібно для видалення).
+    """
     group = []
     for item in media_items:
         if item["type"] == "photo":
             group.append(InputMediaPhoto(media=item["file_id"]))
         else:
             group.append(InputMediaVideo(media=item["file_id"]))
-    await bot_obj.send_media_group(chat_id, media=group)
+    sent = await bot_obj.send_media_group(chat_id, media=group)
+    return [m.message_id for m in (sent or [])]
 
 
 async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
