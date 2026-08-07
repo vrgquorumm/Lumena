@@ -121,6 +121,7 @@ _PREMIUM_ALWAYS = {"hdrttttttt", "veroniksssxa"}
 
 _BOT_ID: int = 0
 _BOT_USERNAME: str = ""
+_state_save_task: asyncio.Task | None = None
 
 # ═══════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
@@ -180,8 +181,25 @@ def save_data():
         # без копіювання викликів у десятки обробників.
         if _db.has_pg():
             try:
-                asyncio.get_running_loop().create_task(
-                    _db.db_set("bot_data", payload)
+                global _state_save_task
+                # Не допускаем гонку: несколько быстрых команд раньше могли
+                # завершать записи в БД не по порядку и возвращать старый снимок.
+                # Каждый новый save_data пишет актуальный snapshot после
+                # предыдущего задания.
+                previous_task = _state_save_task
+
+                async def _persist_snapshot() -> None:
+                    if previous_task:
+                        try:
+                            await previous_task
+                        except Exception:
+                            pass
+                    ok = await _db.db_set("bot_data", payload)
+                    if not ok:
+                        logging.warning("💾 PostgreSQL не подтвердил сохранение bot_data")
+
+                _state_save_task = asyncio.get_running_loop().create_task(
+                    _persist_snapshot()
                 )
             except RuntimeError:
                 pass
@@ -821,8 +839,8 @@ def _build_entities(entities_data: list[dict]) -> list[MessageEntity]:
             clean = {k: v for k, v in e.items()
                      if v is not None and k != "user"}
             result.append(MessageEntity(**clean))
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.warning("⚠️ Не удалось восстановить entity бренда: %s", exc)
     return result
 
 
@@ -899,6 +917,7 @@ async def reply_t(msg: Message, key: str, parse_mode: str = "HTML", **fmt) -> No
     # Трекаем для reply-редактора
     if key in brand.TEXT_LABELS and sent is not None:
         _tracked_bot_msgs[(sent.chat.id, sent.message_id)] = key
+    return sent
 
 
 async def _edit_custom(message, key: str, fallback_html: str,
@@ -1886,11 +1905,13 @@ async def cmd_balance(msg: Message):
     elif bal >= 100_000:       tier, icon = "Зажиточный", "💸"
     elif bal >= 10_000:        tier, icon = "Середняк", "💵"
     else:                      tier, icon = "Новичок", "🪙"
-    await msg.reply(
-        f"{brand.hdr()}\n\n"
-        + brand.get_text("balance", name=name, icon=icon, balance=fmt_lmn(bal), tier=tier) +
-        f"\n\n{brand.div()}",
-        parse_mode="HTML"
+    await reply_t(
+        msg,
+        "balance",
+        name=name,
+        icon=icon,
+        balance=fmt_lmn(bal),
+        tier=tier,
     )
 
 owner_id_cache: int | None = None  # запоминаем ID владельца при первом взаимодействии
@@ -1920,14 +1941,14 @@ async def cmd_give(msg: Message, command: CommandObject):
         "Пример: <i>дать 1000</i> (в ответ на сообщение)", parse_mode="HTML")
     target = msg.reply_to_message.from_user
     if target.id == msg.from_user.id:
-        return await msg.reply(brand.get_text("give_self"), parse_mode="HTML")
+        return await reply_t(msg, "give_self")
     if target.is_bot:
-        return await msg.reply(brand.get_text("give_bot"), parse_mode="HTML")
+        return await reply_t(msg, "give_bot")
     if not command.args: return await msg.reply("Укажи сумму: <b>дать [сумма]</b>", parse_mode="HTML")
     try: amount = int(command.args.split()[0])
     except: return await msg.reply("❌ Укажи целое число")
     if amount <= 0:
-        return await msg.reply(brand.get_text("give_zero"), parse_mode="HTML")
+        return await reply_t(msg, "give_zero")
     sender_bal = get_balance(msg.from_user.id)
     if sender_bal < amount:
         return await msg.reply(
@@ -1936,13 +1957,13 @@ async def cmd_give(msg: Message, command: CommandObject):
             parse_mode="HTML")
     add_balance(msg.from_user.id, -amount)
     add_balance(target.id, amount)
-    await msg.reply(
-        f"{brand.hdr()}\n\n"
-        + brand.get_text("give",
-            from_name=msg.from_user.full_name, to_name=target.full_name,
-            amount=fmt_lmn(amount), balance=fmt_lmn(get_balance(msg.from_user.id))) +
-        f"\n\n{brand.div()}",
-        parse_mode="HTML"
+    await reply_t(
+        msg,
+        "give",
+        from_name=msg.from_user.full_name,
+        to_name=target.full_name,
+        amount=fmt_lmn(amount),
+        balance=fmt_lmn(get_balance(msg.from_user.id)),
     )
 
 @dp.message(Command("work"))
@@ -2001,15 +2022,12 @@ async def cmd_work(msg: Message):
         "Вышел на смену и", "Поработал на славу —", "Отличная смена!",
         "Трудовые будни:", "Отчёт за смену:",
     ]
-    await msg.reply(
-        f"{brand.hdr()}\n\n"
-        f"{job_icon} <b>Профессия: {job}</b>\n\n"
-        f"{brand.get_text('work', job=job, earned=fmt_lmn(earned), balance=fmt_lmn(new_bal)) or (f'💼 {random.choice(_work_intros)} {job_phrase}')}\n\n"
-        f"💰 Заработано: <b>+{fmt_lmn(earned)} LMN</b>\n"
-        f"💵 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n\n"
-        f"⏳ Следующая смена через <b>1 час</b>\n\n"
-        f"{brand.div()}",
-        parse_mode="HTML",
+    await reply_t(
+        msg,
+        "work",
+        job=job,
+        earned=fmt_lmn(earned),
+        balance=fmt_lmn(new_bal),
     )
 
 @dp.message(Command("fish"))
