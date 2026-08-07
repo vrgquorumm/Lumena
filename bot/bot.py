@@ -82,6 +82,7 @@ reputation = {}
 work_cooldown = {}
 fish_cooldown = {}
 rob_cooldown = {}
+hunt_cooldown = {}
 bank_balances = {}        # {user_id: int} — гроші в банку (захищені від /rob)
 bank_withdraw_cd = {}     # {user_id: datetime} — кулдаун виведення з банку
 chat_rules = {}
