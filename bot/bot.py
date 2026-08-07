@@ -3840,6 +3840,25 @@ async def cmd_info(msg: Message):
         parse_mode="HTML",
     )
 
+
+@dp.message(Command("editinfo"), F.chat.type == "private",
+            F.func(lambda m: is_owner(m)))
+async def cmd_edit_info(msg: Message):
+    """Швидке редагування тексту команди /info для фаундера."""
+    _edit_sessions[msg.from_user.id] = "info_project"
+    current_text = html.escape(brand.get_current_text("info_project"))
+    cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="❌ Відміна", callback_data="reply_edit_cancel"),
+    ]])
+    await msg.answer(
+        "✏️ <b>Редагування тексту /info</b>\n\n"
+        f"Поточний текст:\n<blockquote>{current_text}</blockquote>\n\n"
+        "Надішли новий текст одним повідомленням. Форматування та Premium Emoji "
+        "будуть збережені.",
+        parse_mode="HTML",
+        reply_markup=cancel_kb,
+    )
+
 # ═══════════════════════════════════════════════════════
 # УТИЛИТЫ
 # ═══════════════════════════════════════════════════════
