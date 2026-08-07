@@ -7343,6 +7343,8 @@ async def universal_handler(msg: Message):
     # Здесь НЕ перехватываем, чтобы не глотать сообщения до нужных хэндлеров
 
     # Проверка на оскорбление верхушки (до остального)
+    if await _check_chat_insult(msg):
+        return
     if await _check_admin_insult(msg):
         return
 
