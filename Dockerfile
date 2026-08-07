@@ -9,7 +9,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Увесь код бота
 COPY bot/ .
 
-# Railway встановлює $PORT автоматично
-ENV PORT=8080
-
-CMD ["bash", "start.sh"]
+# Telegram-бот працює через long polling і не потребує HTTP-порту.
+CMD ["python", "bot.py"]
