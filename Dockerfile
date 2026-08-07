@@ -1,15 +1,15 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends gcc \
-    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/bot
 
-WORKDIR /app
-
-COPY requirements.txt .
+# Залежності з bot/requirements.txt
+COPY bot/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Увесь код бота
+COPY bot/ .
 
-RUN mkdir -p data
+# Railway встановлює $PORT автоматично
+ENV PORT=8080
 
-CMD ["python", "bot.py"]
+CMD ["bash", "start.sh"]
