@@ -4531,8 +4531,8 @@ TEXT_COMMANDS.update({
     "забрать500м": cmd_ownerclaim, "ownerclaim": cmd_ownerclaim,
     # Репутация
     "репутация": cmd_rep, "реп": cmd_rep,
-    "+1": cmd_upvote, "плюс": cmd_upvote,
-    "-1": cmd_downvote, "минус": cmd_downvote,
+    "+": cmd_upvote, "плюс": cmd_upvote,
+    "-": cmd_downvote, "минус": cmd_downvote,
     "топрепутации": cmd_toprep, "топ репутации": cmd_toprep,
     "аура": cmd_aura, "ауру": cmd_aura, "моя аура": cmd_aura,
     "топауры": cmd_topaura, "топ ауры": cmd_topaura,
