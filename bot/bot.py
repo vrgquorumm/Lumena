@@ -7350,12 +7350,13 @@ async def universal_handler(msg: Message):
             except TypeError: await handler(msg)
             return
 
-        # ── Лумена ИИ: відключено
-        # if msg.chat.type == "private":
-        #     await _lumena_ai_private(msg)
-        # else:
-        #     await _lumena_ai_group(msg)
-        pass
+        # ── Лумена AI ───────────────────────────────────────
+        # Виконується після команд: у групах відповідає лише на reply,
+        # @mention або звернення «Лумена / лумка».
+        if msg.chat.type == "private":
+            await _lumena_ai_private(msg)
+        else:
+            await _lumena_ai_group(msg)
 
 # ═══════════════════════════════════════════════════════
 # АВТОПІДКАЗКА КОЛИ БОТ ВХОДИТЬ У НОВИЙ ЧАТ
