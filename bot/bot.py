@@ -3179,10 +3179,14 @@ async def cmd_horoscope(msg: Message, command: CommandObject = None):
     normalized = re.sub(r"[^\w\s-]", " ", raw.casefold().replace("ё", "е"))
     normalized = re.sub(r"\s+", " ", normalized).strip()
     sign = ZODIAC_ALIASES.get(normalized)
+    # Совместимость со старой версией обработчика: она заменяла кириллическую
+    # «д» в аргументах на латинскую «d», поэтому Railway мог передать «воdолей».
+    if not sign and normalized:
+        sign = ZODIAC_ALIASES.get(normalized.replace("d", "д"))
     if not sign and normalized:
         matches = [
             value for key, value in ZODIAC_ALIASES.items()
-            if key.startswith(normalized)
+            if key.startswith(normalized) or key.startswith(normalized.replace("d", "д"))
         ]
         if len(matches) == 1:
             sign = matches[0]
