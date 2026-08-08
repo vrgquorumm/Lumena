@@ -30,6 +30,8 @@ _chat_link:     list        = [None]   # [0] — посилання на чат 
 _user_status:   dict        = {}       # uid → "pending"|"approved"|"rejected"
 _approved_data: dict        = {}       # uid → dict з даними анкети
 _sessions:      dict        = {}       # uid → незавершена анкета в поточному діалозі
+_pending:       dict[str, dict] = {}    # app_id → заявка, що очікує модерації
+_reactions:     dict[int, dict] = {}    # uid → реакції під опублікованою анкетою
 
 
 def _md_to_html(s: str) -> str:
@@ -401,9 +403,13 @@ def get_uid_by_pub_msg(msg_id: int, chat_id: int | None = None) -> int | None:
 
 
 def delete_user_anketa(uid: int) -> dict | None:
-    """Видаляє анкету, повертає дані (pub_msg_id тощо)."""
+    """Видаляє анкету або заявку, повертає дані для очищення повідомлень."""
+    pending = _pending.pop(_app_id(uid), None)
     _user_status.pop(uid, None)
-    data = _approved_data.pop(uid, None)
+    approved = _approved_data.pop(uid, None)
+    data = approved or pending
+    _sessions.pop(uid, None)
+    _reactions.pop(uid, None)
     save_anketa_settings()
     _schedule_anketa_save()
     return data
@@ -605,6 +611,26 @@ def make_my_anketa_kb(uid: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def make_pending_anketa_kb(uid: int) -> InlineKeyboardMarkup:
+    """Кнопка удаления заявки, пока она ожидает модерации."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="🗑 Удалить заявку",
+            callback_data=f"ank_del:{uid}",
+        ),
+    ]])
+
+
+def make_new_anketa_kb(uid: int) -> InlineKeyboardMarkup:
+    """Кнопка запуска новой анкеты после удаления старой."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="📝 Создать новую анкету",
+            callback_data=f"ank_start:{uid}",
+        ),
+    ]])
+
+
 def _app_id(user_id: int) -> str:
     return f"app_{user_id}"
 
@@ -751,6 +777,7 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
 
     try:
         n = len(media_items)
+        mod_media_msg_ids: list[int] = []
         if n == 0:
             # Без медіа — тільки текст
             sent = await bot_obj.send_message(
@@ -774,7 +801,9 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
                 )
         else:
             # 2–10 медіа: спочатку альбом, потім картка з кнопками
-            await _send_media_group_to_chat(bot_obj, mod_chat, media_items)
+            mod_media_msg_ids = await _send_media_group_to_chat(
+                bot_obj, mod_chat, media_items
+            )
             sent = await bot_obj.send_message(
                 mod_chat, card,
                 parse_mode="HTML",
@@ -789,6 +818,7 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
             "mod_msg_id":  sent.message_id,
             "mod_chat_id": mod_chat,
             "media_count": n,
+            "media_msg_ids": mod_media_msg_ids,
             "anketa_num":  anketa_num,
         }
         set_pending(uid)
@@ -797,7 +827,8 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
             f"{brand.hdr()}\n\n"
             f"{brand.acc()} <b>Анкета №{anketa_num} отправлена!</b>\n\n"
             "Администраторы рассмотрят её и уведомят тебя.\n\n"
-            f"{brand.div()}"
+            f"{brand.div()}",
+            reply_markup=make_pending_anketa_kb(uid),
         )
     except Exception as e:
         await bot_obj.send_message(uid, f"❌ Помилка надсилання: {e}")

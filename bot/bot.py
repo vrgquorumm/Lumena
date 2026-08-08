@@ -3104,6 +3104,14 @@ HOROSCOPES: dict[str, list[str]] = {
                   "Сострадание привлечёт к тебе людей, которым нужна поддержка. Ты справишься.",
                   "Граница между реальностью и фантазией размыта — это источник вдохновения, а не слабость."],
 }
+
+ZODIAC_SIGNS: tuple[str, ...] = (
+    "Овен", "Телец", "Близнецы", "Рак", "Лев", "Дева",
+    "Весы", "Скорпион", "Стрелец", "Козерог", "Водолей", "Рыбы",
+)
+ZODIAC_ALIASES: dict[str, str] = {
+    sign.casefold(): sign for sign in ZODIAC_SIGNS
+}
 SUPERPOWERS = ["🦸 Телепатия — читать мысли","⚡ Молния — управлять электричеством","🔥 Пирокинез — управлять огнём","❄️ Криокинез — управлять льдом","🌀 Телепортация","💨 Полёт","🛡️ Неуязвимость","🔮 Предвидение будущего","👻 Невидимость","🧲 Управление металлом","⏱️ Остановка времени","🌊 Управление водой"]
 PROFESSIONS = ["👨‍💻 Программист","🎨 Художник","🎵 Музыкант","🧑‍🍳 Шеф-повар","✈️ Пилот","🧑‍⚕️ Врач","🏗️ Архитектор","📸 Фотограф","🎭 Актёр","📝 Писатель","🔬 Учёный","🌿 Фермер","🧑‍🏫 Учитель","🕵️ Детектив","🚀 Астронавт","🎮 Геймдизайнер","⚽ Спортсмен","🎪 Иллюзионист"]
 ANIMALS = ["🦁 Лев — царь зверей","🐬 Дельфин — интеллект моря","🦅 Орёл — символ свободы","🐼 Панда — редкость природы","🐺 Волк — дух стаи","🦋 Бабочка — символ преображения","🐢 Черепаха — долгожитель","🦊 Лиса — хитрость и ум","🐧 Пингвин — верность паре","🦋 Осьминог — мастер маскировки"]
@@ -3164,27 +3172,23 @@ async def cmd_tarot(msg: Message):
         )
 
 async def cmd_horoscope(msg: Message, command: CommandObject = None):
-    signs = list(HOROSCOPES.keys())
-    raw = (command.args or "").strip().lower()
-    normalized = raw.replace("ё", "е")
-    sign_aliases = {
-        "овен": "Овен", "телец": "Телец", "близнецы": "Близнецы",
-        "рак": "Рак", "лев": "Лев", "дева": "Дева", "весы": "Весы",
-        "скорпион": "Скорпион", "стрелец": "Стрелец", "козерог": "Козерог",
-        "водолей": "Водолей", "рыбы": "Рыбы",
-    }
-    sign = sign_aliases.get(normalized)
+    raw = (command.args if command else "").strip()
+    normalized = re.sub(r"\s+", " ", raw.casefold().replace("ё", "е"))
+    sign = ZODIAC_ALIASES.get(normalized)
     if not sign and normalized:
-        matches = [value for key, value in sign_aliases.items() if key.startswith(normalized)]
+        matches = [
+            value for key, value in ZODIAC_ALIASES.items()
+            if key.startswith(normalized)
+        ]
         if len(matches) == 1:
             sign = matches[0]
     if not sign:
-        if raw:
+        if normalized:
             return await msg.reply(
                 "Не узнала знак зодиака. Напиши, например: <code>гороскоп козерог</code>.",
                 parse_mode="HTML",
             )
-        sign = random.choice(signs)
+        sign = random.choice(ZODIAC_SIGNS)
     text = random.choice(HOROSCOPES[sign])
     if not await reply_t(msg, "horoscope_result", sign=sign, text=text):
         await msg.reply(
@@ -5331,7 +5335,14 @@ async def cb_ank_mycard_private(cb: CallbackQuery):
         else:
             await bot.send_message(uid, "Анкета не найдена.", reply_markup=_anketa_kb(uid))
     elif status == "pending":
-        await cb.answer("⏳ Анкета на проверке — жди решения", show_alert=True)
+        await bot.send_message(
+            uid,
+            "⏳ <b>Твоя анкета сейчас на проверке.</b>\n\n"
+            "Если хочешь отменить её и заполнить новую, нажми кнопку ниже.",
+            parse_mode="HTML",
+            reply_markup=_ank.make_pending_anketa_kb(uid),
+        )
+        await cb.answer()
         return
     elif status == "rejected":
         await bot.send_message(uid, "❌ Анкета отклонена. Заполни новую 👇",
@@ -5350,26 +5361,40 @@ async def cb_ank_delete(cb: CallbackQuery):
 
     data = _ank.delete_user_anketa(uid)
 
-    # Удаляем из паблик-чата если есть (текст + медіа-альбом)
-    pub_chat = data.get("pub_chat_id") if data else None
-    pub_chat = pub_chat or _ank.get_pub_chat()
-    if pub_chat and data:
-        if data.get("pub_msg_id"):
+    # Удаляем карточку из чата модерации, если заявка была ещё pending.
+    if data and data.get("mod_chat_id"):
+        mod_chat = data["mod_chat_id"]
+        if data.get("mod_msg_id"):
             try:
-                await bot.delete_message(pub_chat, data["pub_msg_id"])
+                await bot.delete_message(mod_chat, data["mod_msg_id"])
             except Exception:
                 pass
         for _mid in (data.get("media_msg_ids") or []):
             try:
-                await bot.delete_message(pub_chat, _mid)
+                await bot.delete_message(mod_chat, _mid)
             except Exception:
                 pass
+    else:
+        # Удаляем опубликованную карточку (текст + медиа-альбом).
+        pub_chat = data.get("pub_chat_id") if data else None
+        pub_chat = pub_chat or _ank.get_pub_chat()
+        if pub_chat and data:
+            if data.get("pub_msg_id"):
+                try:
+                    await bot.delete_message(pub_chat, data["pub_msg_id"])
+                except Exception:
+                    pass
+            for _mid in (data.get("media_msg_ids") or []):
+                try:
+                    await bot.delete_message(pub_chat, _mid)
+                except Exception:
+                    pass
 
     await cb.message.edit_reply_markup(reply_markup=None)
     await _send_custom(
         uid, "anketa_delete",
         f"🗑 <b>Твоя анкета удалена.</b>\n\nХочешь подать новую — нажми кнопку ниже.",
-        reply_markup=_anketa_kb(uid)
+        reply_markup=_ank.make_new_anketa_kb(uid)
     )
     await cb.answer("Анкета удалена", show_alert=True)
 
