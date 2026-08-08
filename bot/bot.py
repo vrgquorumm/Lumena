@@ -7663,8 +7663,12 @@ async def universal_handler(msg: Message):
             else:
                 args_str = " ".join(parts[1:]) if len(parts) > 1 else ""
 
-            # Конвертируем временные суффиксы
-            args_converted = args_str.replace("м","m").replace("ч","h").replace("д","d")
+            # Не меняем кириллицу в аргументах: например, знак "водолей"
+            # содержит букву "д" и раньше превращался в "водолей" с
+            # латинской буквой, из-за чего гороскоп не находил знак.
+            # parse_time_and_reason сам нормализует суффиксы времени там,
+            # где они действительно нужны.
+            args_converted = args_str
 
             class FakeCmd2:
                 args = args_converted or None
