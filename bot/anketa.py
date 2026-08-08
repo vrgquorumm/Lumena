@@ -195,6 +195,8 @@ async def load_anketa_from_db() -> None:
             _user_status[int(k)] = v
         for k, v in users.get("approved", {}).items():
             _approved_data[int(k)] = v
+        for k, v in users.get("pending", {}).items():
+            _pending[str(k)] = v
         print("✅ anketa_users завантажено з PostgreSQL")
 async def restore_anketa() -> None:
     """При старті відновлює anketa_users і anketa_settings: PostgreSQL → GitHub → локальний файл."""
@@ -254,6 +256,8 @@ def load_anketa_settings():
                 _user_status[int(k)] = v
             for k, v in d.get("approved", {}).items():
                 _approved_data[int(k)] = v
+            for k, v in d.get("pending", {}).items():
+                _pending[str(k)] = v
         except Exception:
             pass
 
@@ -268,6 +272,9 @@ def _build_anketa_payloads() -> tuple[dict, dict]:
     users_payload = {
         "status":   {str(k): v for k, v in _user_status.items()},
         "approved": {str(k): v for k, v in _approved_data.items()},
+        # Заявки зберігаємо також: після перезапуску користувач повинен
+        # мати змогу скасувати pending-анкету, а не отримувати "вічне" очікування.
+        "pending":  dict(_pending),
     }
     return settings_payload, users_payload
 
@@ -405,9 +412,12 @@ def get_uid_by_pub_msg(msg_id: int, chat_id: int | None = None) -> int | None:
 def delete_user_anketa(uid: int) -> dict | None:
     """Видаляє анкету або заявку, повертає дані для очищення повідомлень."""
     pending = _pending.pop(_app_id(uid), None)
-    _user_status.pop(uid, None)
+    old_status = _user_status.pop(uid, None)
     approved = _approved_data.pop(uid, None)
-    data = approved or pending
+    # Якщо бот був перезапущений до відновлення старого pending-повідомлення,
+    # статус усе одно треба видалити. Порожній словник дає виклику змогу
+    # коректно завершити видалення без падіння.
+    data = approved or pending or ({"user_id": uid} if old_status == "pending" else None)
     _sessions.pop(uid, None)
     _reactions.pop(uid, None)
     save_anketa_settings()

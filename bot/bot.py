@@ -3173,7 +3173,11 @@ async def cmd_tarot(msg: Message):
 
 async def cmd_horoscope(msg: Message, command: CommandObject = None):
     raw = (command.args if command else "").strip()
-    normalized = re.sub(r"\s+", " ", raw.casefold().replace("ё", "е"))
+    # У текстовій команді аргументи приходять через FakeCmd2, а в slash-команді
+    # через CommandObject. Нормалізуємо обидва варіанти однаково і прибираємо
+    # пунктуацію, щоб працювали "гороскоп: водолей" та "гороскоп водолей!".
+    normalized = re.sub(r"[^\w\s-]", " ", raw.casefold().replace("ё", "е"))
+    normalized = re.sub(r"\s+", " ", normalized).strip()
     sign = ZODIAC_ALIASES.get(normalized)
     if not sign and normalized:
         matches = [
@@ -3185,7 +3189,7 @@ async def cmd_horoscope(msg: Message, command: CommandObject = None):
     if not sign:
         if normalized:
             return await msg.reply(
-                "Не узнала знак зодиака. Напиши, например: <code>гороскоп козерог</code>.",
+                "Не узнала знак зодиака. Напиши, например: <code>гороскоп водолей</code>.",
                 parse_mode="HTML",
             )
         sign = random.choice(ZODIAC_SIGNS)
@@ -4769,6 +4773,7 @@ for slash_name, func in [
     # ─── Кириллические слэш-алиасы ───────────────────────
     # Теперь /баланс, /брак, /чекин и др. работают со слешем
     ("брак", cmd_marry), ("развод", cmd_divorce), ("браки", cmd_marriages),
+    ("гороскоп", cmd_horoscope),
     ("баланс", cmd_balance), ("работа", cmd_work), ("рыбалка", cmd_fish), ("hunt", cmd_hunt),
     ("казино", cmd_casino), ("слоты", cmd_slots), ("ограбить", cmd_rob),
     ("дать", cmd_give),
@@ -5067,6 +5072,18 @@ async def cb_ank_accept(cb: CallbackQuery):
                 pub_media_msg_ids = _media_ids  # зберігаємо для майбутнього видалення
             pub_msg_id = sent_pub.message_id
             pub_ok = True
+            # Публікуємо анкету й одразу закріплюємо саме картку з реакціями.
+            # Помилка прав Telegram не повинна скасовувати схвалення анкети:
+            # у такому випадку вона лишається опублікованою, а причина потрапляє
+            # в лог Railway.
+            try:
+                await bot.pin_chat_message(
+                    pub_chat,
+                    pub_msg_id,
+                    disable_notification=True,
+                )
+            except Exception as pin_error:
+                print(f"⚠️ Не вдалося закріпити анкету {pub_msg_id} у {pub_chat}: {pin_error}")
         except Exception as e:
             print(f"⚠️ pub_chat send error: {e}")
 
