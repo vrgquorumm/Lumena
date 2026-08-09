@@ -479,48 +479,42 @@ def fmt_mod_card(answers: dict, user_id: int, username: str, full_name: str,
 
 def fmt_pub_card(answers: dict, username: str = "", full_name: str = "",
                  is_premium: bool = False) -> str:
-    """Публічна картка — стиль як на фото."""
-    cr   = brand.crown()
-    bul  = brand.bul()
-    header   = f"{cr} <b>VIP-ANKETA</b>" if is_premium else f"{brand.acc()} <b>Нова анкета</b>"
-    vip_note = f"\n\n{cr} <b>VIP-анкета — приоритетная публикация</b>" if is_premium else ""
-    tags     = "#анкетазнакомства #VIP" if is_premium else "#анкетазнакомства"
+    """Публічна картка — V6 стиль."""
+    vip_badge = f"⭐ VIP\n\n" if is_premium else "⭐ New\n\n"
+    tags      = "#анкетазнакомства #VIP" if is_premium else "#анкетазнакомства"
     return (
-        f"{header}\n\n"
-        f"{bul} <b>Имя:</b> {_h(answers.get('name', '—'))}\n"
-        f"{bul} <b>Возраст:</b> {_h(answers.get('age', '—'))}\n"
-        f"{bul} <b>Район:</b> {_h(answers.get('district', '—'))}\n\n"
-        f"{bul} <b>Цель:</b> {_h(answers.get('goal', '—'))}\n"
-        f"{bul} <b>Ищу:</b> {_h(answers.get('looking_for', '—'))}\n"
-        f"{bul} <b>Курение:</b> {_h(answers.get('smoking', '—'))}\n"
-        f"{bul} <b>Дети:</b> {_h(answers.get('kids', '—'))}\n\n"
-        f"{bul} <b>О себе:</b>\n{_h(answers.get('about', '—'))}"
-        f"{vip_note}\n\n"
+        f"{vip_badge}"
+        f"👤 <b>Имя:</b> {_h(answers.get('name', '—'))}\n"
+        f"🎂 <b>Возраст:</b> {_h(answers.get('age', '—'))}\n"
+        f"📍 <b>Район:</b> {_h(answers.get('district', '—'))}\n\n"
+        f"🎯 <b>Цель:</b> {_h(answers.get('goal', '—'))}\n"
+        f"💘 <b>Ищу:</b> {_h(answers.get('looking_for', '—'))}\n\n"
+        f"🚬 <b>Курение:</b> {_h(answers.get('smoking', '—'))}\n"
+        f"👶 <b>Дети:</b> {_h(answers.get('kids', '—'))}\n\n"
+        f"📝 <b>О себе:</b>\n{_h(answers.get('about', '—'))}\n\n"
+        f"⭐ НАШ ЧАТ | СОЗДАТЬ АНКЕТУ\n\n"
         f"{tags}"
     )
 
 
 def fmt_my_card(answers: dict, username: str, full_name: str,
                 is_premium: bool = False) -> str:
-    """Текст картки для перегляду юзером."""
-    tag      = f"@{_h(username)}" if username else _h(full_name)
-    cr       = brand.crown()
-    bul      = brand.bul()
-    header   = f"{cr} <b>VIP-ANKETA</b>" if is_premium else f"{brand.acc()} <b>Твоя анкета</b>"
-    vip_note = f"\n\n{cr} <b>VIP-анкета — приоритетная публикация</b>" if is_premium else ""
+    """Текст картки для перегляду юзером — V6 стиль."""
+    tag       = f"@{_h(username)}" if username else _h(full_name)
+    vip_badge = "⭐ VIP\n\n" if is_premium else "⭐ New\n\n"
     return (
         f"{brand.hdr()}\n\n"
-        f"{header}\n\n"
         f"{brand.div()}\n"
-        f"{bul} <b>Имя:</b> {_h(answers.get('name', '—'))}\n"
-        f"{bul} <b>Возраст:</b> {_h(answers.get('age', '—'))}\n"
-        f"{bul} <b>Район:</b> {_h(answers.get('district', '—'))}\n\n"
-        f"{bul} <b>Цель:</b> {_h(answers.get('goal', '—'))}\n"
-        f"{bul} <b>Ищу:</b> {_h(answers.get('looking_for', '—'))}\n"
-        f"{bul} <b>Курение:</b> {_h(answers.get('smoking', '—'))}\n"
-        f"{bul} <b>Дети:</b> {_h(answers.get('kids', '—'))}\n\n"
-        f"{bul} <b>О себе:</b>\n{_h(answers.get('about', '—'))}"
-        f"{vip_note}\n\n"
+        f"{vip_badge}"
+        f"👤 <b>Имя:</b> {_h(answers.get('name', '—'))}\n"
+        f"🎂 <b>Возраст:</b> {_h(answers.get('age', '—'))}\n"
+        f"📍 <b>Район:</b> {_h(answers.get('district', '—'))}\n\n"
+        f"🎯 <b>Цель:</b> {_h(answers.get('goal', '—'))}\n"
+        f"💘 <b>Ищу:</b> {_h(answers.get('looking_for', '—'))}\n\n"
+        f"🚬 <b>Курение:</b> {_h(answers.get('smoking', '—'))}\n"
+        f"👶 <b>Дети:</b> {_h(answers.get('kids', '—'))}\n\n"
+        f"📝 <b>О себе:</b>\n{_h(answers.get('about', '—'))}\n\n"
+        f"⭐ НАШ ЧАТ | СОЗДАТЬ АНКЕТУ\n\n"
         f"{brand.div()}\n"
         f"🔗 {tag}"
     )

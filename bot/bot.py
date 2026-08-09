@@ -1,6 +1,6 @@
 """
 Лумена Бот — полнофункциональный Telegram бот
-Версия 5.0
+Версия 6.0
 """
 import asyncio
 import html
@@ -60,7 +60,7 @@ if not BOT_TOKEN:
 OWNER_USERNAME = "hdrttttttt"
 OWNER_ID       = 8655306548
 SUPER_IDS      = {OWNER_ID}
-BOT_VERSION = "5.0"
+BOT_VERSION = "6.0"
 DATA_FILE = "data/bot_data.json"
 
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
@@ -122,6 +122,7 @@ ROLE_NAMES: dict[str, str] = {
     "co_admin":    "Co-Admin",
     "admin":       "Admin",
     "moderator":   "Moderator",
+    "vip":         "VIP",
 }
 ROLE_HIERARCHY = ["lead_admin", "co_admin", "admin", "moderator"]
 _ROLE_USERNAMES: dict[str, str] = {
@@ -135,6 +136,106 @@ _state_save_task: asyncio.Task | None = None
 _save_update_sent: bool = False
 lmn_balance_reset_version = 0
 lmn_transfer_version = 0
+
+# ── V6 хранилища ──────────────────────────────────────
+user_xp:           dict[int, int]  = {}   # uid → XP
+user_messages:     dict[int, dict] = {}   # chat_id → {uid: count}
+daily_cooldown:    dict[int, str]  = {}   # uid → ISO-дата последнего дейли
+user_achievements: dict[int, list] = {}   # uid → [achievement_id, ...]
+mod_logs:          dict[int, list] = {}   # chat_id → [{action,uid,by,ts}]
+reports_db:        dict[int, list] = {}   # chat_id → [{from_uid,target_uid,reason,ts}]
+referrals:         dict[int, int]  = {}   # uid → referrer_uid
+referral_counts:   dict[int, int]  = {}   # uid → кол-во приглашённых
+raid_mode:         dict[int, bool] = {}   # chat_id → bool
+antispam_mode:     dict[int, bool] = {}   # chat_id → bool
+antispam_tracker:  dict[int, dict] = {}   # chat_id → {uid: {text,count,last_ts}}
+_games_played:     dict[int, int]  = {}   # uid → кол-во игр
+_games_won:        dict[int, int]  = {}   # uid → кол-во побед
+v6_announced:      bool            = False
+bonus_weekly_cd:   dict[int, str]  = {}   # uid → "YYYY-Www" (ISO week claim)
+_crash_games:      dict[int, dict] = {}   # uid → crash game state
+_bj_games:         dict[int, dict] = {}   # uid → blackjack state
+_mines_games:      dict[int, dict] = {}   # uid → mines state
+
+# ── XP / уровни ───────────────────────────────────────
+XP_LEVELS = [
+    (0,    "🆕 Новичок"),
+    (100,  "📗 Участник"),
+    (500,  "⚡ Активный"),
+    (1500, "🔥 Опытный"),
+    (3500, "💎 Ветеран"),
+    (7000, "👑 Легенда"),
+]
+
+def get_xp_level(xp: int) -> tuple[str, int, int]:
+    """(название_уровня, старт_текущего, старт_следующего)."""
+    level_name, prev, nxt = XP_LEVELS[0][1], 0, XP_LEVELS[1][0]
+    for i, (thr, name) in enumerate(XP_LEVELS):
+        if xp >= thr:
+            level_name = name
+            prev = thr
+            nxt = XP_LEVELS[i + 1][0] if i + 1 < len(XP_LEVELS) else thr
+    return level_name, prev, nxt
+
+def xp_bar(xp: int) -> str:
+    _, start, end = get_xp_level(xp)
+    if end <= start:
+        return "██████████ MAX"
+    pct = min(1.0, (xp - start) / (end - start))
+    filled = int(pct * 10)
+    return "█" * filled + "░" * (10 - filled) + f" {int(pct*100)}%"
+
+def award_xp(uid: int, amount: int) -> bool:
+    """Начисляет XP. Возвращает True если уровень повысился."""
+    before_name = get_xp_level(user_xp.get(uid, 0))[0]
+    user_xp[uid] = user_xp.get(uid, 0) + amount
+    after_name = get_xp_level(user_xp[uid])[0]
+    _check_achievements(uid)
+    return before_name != after_name
+
+def _check_achievements(uid: int):
+    earned = set(user_achievements.get(uid, []))
+    xp  = user_xp.get(uid, 0)
+    bal = lmn_balances.get(uid, 0) + bank_balances.get(uid, 0)
+    played = _games_played.get(uid, 0)
+    won    = _games_won.get(uid, 0)
+    checks = {
+        "first_100xp": xp >= 100,
+        "xp_1500":     xp >= 1500,
+        "legend":      xp >= 7000,
+        "rich_1m":     bal >= 1_000_000,
+        "rich_1b":     bal >= 1_000_000_000,
+        "gambler":     played >= 1,
+        "winner":      won >= 5,
+    }
+    for ach_id, cond in checks.items():
+        if cond:
+            earned.add(ach_id)
+    user_achievements[uid] = list(earned)
+
+ACHIEVEMENT_INFO: dict[str, tuple[str, str, str]] = {
+    "first_message": ("💬", "Первое слово",      "Написал первое сообщение в чате"),
+    "first_100xp":   ("⚡", "Искра",             "Набрал 100 XP"),
+    "xp_1500":       ("🔥", "Опытный боец",      "Набрал 1500 XP"),
+    "legend":        ("👑", "Легенда",            "Достиг 7000 XP — максимальный уровень"),
+    "streak_7":      ("🗓", "Неделя подряд",     "Стрик 7 дней"),
+    "streak_30":     ("📅", "Месяц подряд",      "Стрик 30 дней"),
+    "married":       ("💍", "Женаты!",           "Вступил в брак"),
+    "rich_1m":       ("💸", "Миллионер",         "Накопил 1 000 000 LMN"),
+    "rich_1b":       ("💎", "Миллиардер",        "Накопил 1 000 000 000 LMN"),
+    "gambler":       ("🎰", "Игрок",             "Сыграл первую игру"),
+    "winner":        ("🏆", "Победитель",        "Выиграл 5 игр"),
+}
+
+def _log_mod(chat_id: int, action: str, uid: int, by: int):
+    """Записывает действие модерации в лог чата."""
+    mod_logs.setdefault(chat_id, [])
+    mod_logs[chat_id].append({
+        "action": action, "uid": uid, "by": by,
+        "ts": now_kyiv().strftime("%d.%m %H:%M"),
+    })
+    if len(mod_logs[chat_id]) > 100:
+        mod_logs[chat_id] = mod_logs[chat_id][-100:]
 
 # ═══════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
@@ -205,6 +306,21 @@ def _build_main_payload() -> dict:
             }
             for k, v in marriage_proposals.items()
         ],
+        # V6
+        "user_xp":           {str(u): v for u, v in user_xp.items()},
+        "user_messages":     {str(c): {str(u): v for u, v in m.items()} for c, m in user_messages.items()},
+        "daily_cooldown":    {str(u): v for u, v in daily_cooldown.items()},
+        "user_achievements": {str(u): list(v) for u, v in user_achievements.items()},
+        "mod_logs":          {str(c): v for c, v in mod_logs.items()},
+        "reports_db":        {str(c): v for c, v in reports_db.items()},
+        "referrals":         {str(u): v for u, v in referrals.items()},
+        "referral_counts":   {str(u): v for u, v in referral_counts.items()},
+        "raid_mode":         {str(c): v for c, v in raid_mode.items()},
+        "antispam_mode":     {str(c): v for c, v in antispam_mode.items()},
+        "games_played":      {str(u): v for u, v in _games_played.items()},
+        "games_won":         {str(u): v for u, v in _games_won.items()},
+        "v6_announced":      v6_announced,
+        "bonus_weekly_cd":   {str(u): v for u, v in bonus_weekly_cd.items()},
     }
 
 
@@ -1569,6 +1685,7 @@ async def cmd_mute(msg: Message, command: CommandObject):
     try:
         await bot.restrict_chat_member(msg.chat.id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
+        _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(f"Мут до {until.strftime('%d.%m %H:%M')}", user, reason=reason),
             parse_mode="HTML")
@@ -1583,6 +1700,7 @@ async def cmd_unmute(msg: Message, command: CommandObject):
         await bot.restrict_chat_member(msg.chat.id, user.id,
             permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True,
                 can_send_other_messages=True, can_add_web_page_previews=True))
+        _log_mod(msg.chat.id, "unmute", user.id, msg.from_user.id)
         await msg.reply(mod_card("Размучен 🔊", user), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1596,6 +1714,7 @@ async def cmd_ban(msg: Message, command: CommandObject):
     _, reason = parse_time_and_reason(command.args or "")
     try:
         await bot.ban_chat_member(msg.chat.id, user.id)
+        _log_mod(msg.chat.id, "ban", user.id, msg.from_user.id)
         await msg.reply(mod_card("Бан 🚫", user, reason=reason), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1613,6 +1732,7 @@ async def cmd_forceban(msg: Message, command: CommandObject):
     _, reason = parse_time_and_reason(command.args or "")
     try:
         await bot.ban_chat_member(msg.chat.id, user.id)
+        _log_mod(msg.chat.id, "ban", user.id, msg.from_user.id)
         await msg.reply(
             mod_card("Принудительный бан 🔨", user, extra="⚠️ Права сняты", reason=reason),
             parse_mode="HTML")
@@ -1634,6 +1754,7 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     try:
         await bot.restrict_chat_member(msg.chat.id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
+        _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(f"Принудительный мут до {until.strftime('%d.%m %H:%M')} 🔇", user,
                      extra="⚠️ Права сняты", reason=reason),
@@ -1647,6 +1768,7 @@ async def cmd_unban(msg: Message, command: CommandObject):
     if not user: return await msg.reply("Укажи ID")
     try:
         await bot.unban_chat_member(msg.chat.id, user.id)
+        _log_mod(msg.chat.id, "unban", user.id, msg.from_user.id)
         await msg.reply(mod_card("Разбанен ✅", user), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1659,6 +1781,7 @@ async def cmd_kick(msg: Message, command: CommandObject):
     try:
         await bot.ban_chat_member(msg.chat.id, user.id)
         await bot.unban_chat_member(msg.chat.id, user.id)
+        _log_mod(msg.chat.id, "kick", user.id, msg.from_user.id)
         await msg.reply(mod_card("Кик 👢", user, reason=reason), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1674,11 +1797,13 @@ async def cmd_warn(msg: Message, command: CommandObject):
     _, reason = parse_time_and_reason(command.args or "")
     if count >= 3:
         await bot.ban_chat_member(chat_id, uid)
+        _log_mod(chat_id, "ban", uid, msg.from_user.id)
         warnings_db[chat_id][uid] = 0
         await msg.reply(
             mod_card("Бан 🚫 (3 варна)", user, extra="⚠️ Достигнут лимит предупреждений", reason=reason),
             parse_mode="HTML")
     else:
+        _log_mod(chat_id, "warn", uid, msg.from_user.id)
         await msg.reply(
             mod_card(f"Варн ⚠️ ({count}/3)", user, reason=reason),
             parse_mode="HTML")
@@ -4735,6 +4860,1264 @@ def is_lumena_addressed(msg: Message) -> bool:
     return first_word in LUMENA_NAMES
 
 # ═══════════════════════════════════════════════════════
+# V6 — XP / УРОВНИ / ДОСТИЖЕНИЯ
+# ═══════════════════════════════════════════════════════
+async def cmd_level(msg: Message):
+    uid  = msg.from_user.id
+    name = html.escape(msg.from_user.first_name or "—")
+    xp   = user_xp.get(uid, 0)
+    lvl, start, end = get_xp_level(xp)
+    bar  = xp_bar(xp)
+    need = max(0, end - xp)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"⚡ <b>Уровень · {name}</b>\n\n"
+        f"{brand.div()}\n"
+        f"🏷 Уровень: <b>{lvl}</b>\n"
+        f"✨ XP: <b>{xp:,}</b>\n"
+        f"📊 {bar}\n"
+        + (f"⬆️ До следующего: <b>{need:,} XP</b>\n" if need > 0 and end > start else "🏆 <b>Максимальный уровень!</b>\n")
+        + f"\n{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_rank(msg: Message):
+    if msg.chat.type == "private":
+        return await msg.reply("Команда работает только в групповых чатах")
+    cid  = msg.chat.id
+    uid  = msg.from_user.id
+    name = html.escape(msg.from_user.first_name or "—")
+    members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(econ_cid(cid), {}).keys())
+    ranked  = sorted(members, key=lambda u: user_xp.get(u, 0), reverse=True)
+    pos     = next((i + 1 for i, u in enumerate(ranked) if u == uid), None)
+    xp      = user_xp.get(uid, 0)
+    lvl     = get_xp_level(xp)[0]
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🏆 <b>Ранг · {name}</b>\n\n"
+        f"{brand.div()}\n"
+        f"📍 Место: <b>#{pos or '?'}</b> из {len(ranked)}\n"
+        f"✨ XP: <b>{xp:,}</b>\n"
+        f"🏷 Уровень: <b>{lvl}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_top_xp(msg: Message):
+    if msg.chat.type == "private":
+        members = set(user_xp.keys())
+        title   = "🌍 Глобальный топ XP"
+    else:
+        cid     = msg.chat.id
+        members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(econ_cid(cid), {}).keys())
+        title   = f"🏆 Топ XP · {html.escape(msg.chat.title or 'чат')}"
+    top = sorted(members, key=lambda u: user_xp.get(u, 0), reverse=True)[:10]
+    if not top:
+        return await msg.reply("📊 Пока нет данных XP")
+    medals = ["🥇","🥈","🥉"] + [f"{i}." for i in range(4, 11)]
+    lines  = [f"{brand.hdr()}\n\n{title}\n\n{brand.div()}"]
+    for i, uid in enumerate(top):
+        name = html.escape(
+            chat_members.get(msg.chat.id, {}).get(uid) or
+            chat_members.get(econ_cid(msg.chat.id), {}).get(uid) or
+            next((m.get(uid) for m in chat_members.values() if uid in m), None) or
+            f"ID {uid}"
+        )
+        lvl = get_xp_level(user_xp.get(uid, 0))[0]
+        lines.append(f"{medals[i]} <b>{name}</b> — {user_xp.get(uid, 0):,} XP · {lvl}")
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+async def cmd_achievements(msg: Message):
+    uid    = msg.from_user.id
+    name   = html.escape(msg.from_user.first_name or "—")
+    _check_achievements(uid)
+    earned = set(user_achievements.get(uid, []))
+    lines  = [f"{brand.hdr()}\n\n🏆 <b>Достижения · {name}</b>\n\n{brand.div()}"]
+    for ach_id, (icon, title_, desc) in ACHIEVEMENT_INFO.items():
+        check = "✅" if ach_id in earned else "🔒"
+        style = f"<b>{title_}</b>" if ach_id in earned else f"<i>{title_}</i>"
+        lines.append(f"{check} {icon} {style} — {desc}")
+    lines.append(f"\n{brand.div()}\n✅ Получено: <b>{len(earned)}/{len(ACHIEVEMENT_INFO)}</b>")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+async def cmd_messages(msg: Message):
+    uid   = msg.from_user.id
+    name  = html.escape(msg.from_user.first_name or "—")
+    total = sum(m.get(uid, 0) for m in user_messages.values())
+    xp    = user_xp.get(uid, 0)
+    lvl   = get_xp_level(xp)[0]
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💬 <b>Сообщения · {name}</b>\n\n"
+        f"{brand.div()}\n"
+        f"📨 Всего сообщений: <b>{total:,}</b>\n"
+        f"✨ XP заработано: <b>{xp:,}</b>\n"
+        f"🏷 Уровень: <b>{lvl}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_activity(msg: Message):
+    uid       = msg.from_user.id
+    name      = html.escape(msg.from_user.first_name or "—")
+    xp        = user_xp.get(uid, 0)
+    lvl       = get_xp_level(xp)[0]
+    total_msg = sum(m.get(uid, 0) for m in user_messages.values())
+    cid_s     = econ_cid(msg.chat.id) if msg.chat.type != "private" else 0
+    streak_v  = max((streaks.get(c, {}).get(uid, {}).get("count", 0) for c in streaks), default=0)
+    bal       = get_balance(uid) + bank_balances.get(uid, 0)
+    ach_cnt   = len(user_achievements.get(uid, []))
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"📊 <b>Активность · {name}</b>\n\n"
+        f"{brand.div()}\n"
+        f"🏷 Уровень: <b>{lvl}</b>  ✨ XP: <b>{xp:,}</b>\n"
+        f"💬 Сообщений: <b>{total_msg:,}</b>\n"
+        f"🔥 Стрик: <b>{streak_v} дн.</b>\n"
+        f"💰 Баланс (кош.+банк): <b>{fmt_lmn(bal)}</b>\n"
+        f"🏆 Достижений: <b>{ach_cnt}/{len(ACHIEVEMENT_INFO)}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+# ═══════════════════════════════════════════════════════
+# V6 — ЕЖЕДНЕВНЫЕ НАГРАДЫ
+# ═══════════════════════════════════════════════════════
+async def cmd_daily(msg: Message):
+    uid      = msg.from_user.id
+    name     = html.escape(msg.from_user.first_name or "—")
+    today    = today_kyiv().isoformat()
+    if daily_cooldown.get(uid) == today:
+        return await msg.reply(
+            f"⏳ <b>Дейли уже получен!</b>\n\n"
+            f"Возвращайся завтра 🌅",
+            parse_mode="HTML"
+        )
+    reward = random.randint(500, 2000)
+    add_balance(uid, reward)
+    xp_got   = 50
+    lvl_up   = award_xp(uid, xp_got)
+    daily_cooldown[uid] = today
+    schedule_state_save("дейли")
+    lvl = get_xp_level(user_xp.get(uid, 0))[0]
+    up_text = f"\n🆙 <b>Новый уровень: {lvl}!</b>" if lvl_up else ""
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎁 <b>Ежедневная награда · {name}</b>\n\n"
+        f"{brand.div()}\n"
+        f"💰 +<b>{fmt_lmn(reward)} LMN</b>\n"
+        f"✨ +<b>{xp_got} XP</b>{up_text}\n\n"
+        f"📅 Возвращайся завтра!\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+def _this_week() -> str:
+    """ISO year-week string, e.g. '2026-W32'."""
+    d   = today_kyiv()
+    iso = d.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+async def cmd_bonus(msg: Message):
+    uid      = msg.from_user.id
+    name     = html.escape(msg.from_user.first_name or "—")
+    week_key = _this_week()
+    # Один раз в неделю
+    if bonus_weekly_cd.get(uid) == week_key:
+        return await msg.reply(
+            f"⏳ <b>Недельный бонус уже получен!</b>\n\n"
+            f"📅 Возвращайся на следующей неделе",
+            parse_mode="HTML"
+        )
+    st = max((streaks.get(c, {}).get(uid, {}).get("count", 0) for c in streaks), default=0)
+    if st < 7:
+        return await msg.reply(
+            f"🎯 <b>Недельный бонус за стрик</b>\n\n"
+            f"Твой стрик: <b>{st}/7 дн.</b>\n"
+            f"Чекинь каждый день!",
+            parse_mode="HTML"
+        )
+    reward = 5000
+    add_balance(uid, reward)
+    award_xp(uid, 100)
+    bonus_weekly_cd[uid] = week_key
+    schedule_state_save("бонус за стрик")
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎊 <b>Недельный бонус · {name}</b>\n\n"
+        f"{brand.div()}\n"
+        f"🔥 Стрик: <b>{st} дн.</b>\n"
+        f"💰 +<b>{fmt_lmn(reward)} LMN</b>\n"
+        f"✨ +<b>100 XP</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_tasks(msg: Message):
+    uid       = msg.from_user.id
+    today_str = today_kyiv().isoformat()
+    msgs_cnt  = sum(m.get(uid, 0) for m in user_messages.values())
+    did_daily = daily_cooldown.get(uid) == today_str
+    played    = _games_played.get(uid, 0) > 0
+    streak_v  = max((streaks.get(c, {}).get(uid, {}).get("count", 0) for c in streaks), default=0)
+    task_list = [
+        ("💬", "Написать 10 сообщений",   min(msgs_cnt, 10), 10, msgs_cnt >= 10),
+        ("📅", "Получить дейли",           1 if did_daily else 0, 1, did_daily),
+        ("🎰", "Сыграть в игру",           1 if played else 0, 1, played),
+        ("🔥", "Поддержать стрик 3+ дня",  min(streak_v, 3), 3, streak_v >= 3),
+    ]
+    done = sum(1 for *_, ok in task_list if ok)
+    lines = [f"{brand.hdr()}\n\n📋 <b>Задания дня</b>\n\n{brand.div()}"]
+    for icon, tname, cur, mx, ok in task_list:
+        chk = "✅" if ok else "⬜"
+        lines.append(f"{chk} {icon} {tname} ({cur}/{mx})")
+    lines.append(f"\n{brand.div()}\n📊 Выполнено: <b>{done}/{len(task_list)}</b>")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+async def cmd_rewards(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🎁 <b>Доступные награды</b>\n\n"
+        f"{brand.div()}\n"
+        f"📅 <b>Дейли</b> — 500–2000 LMN + 50 XP каждые 24ч\n"
+        f"🔥 <b>Бонус за стрик 7 дн.</b> — 5000 LMN + 100 XP\n"
+        f"💍 <b>Брак</b> — 500 LMN каждому партнёру\n"
+        f"🌧 <b>Дождь монет</b> — случайный бонус в чате\n"
+        f"🔗 <b>Реферал</b> — 1000 LMN + 100 XP за приглашённого\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_leaderboard(msg: Message):
+    all_uids = set(user_xp.keys())
+    top      = sorted(all_uids, key=lambda u: user_xp.get(u, 0), reverse=True)[:10]
+    if not top:
+        return await msg.reply("📊 Пока нет данных")
+    medals = ["🥇","🥈","🥉"] + [f"{i}." for i in range(4, 11)]
+    lines  = [f"{brand.hdr()}\n\n🌍 <b>Глобальный лидерборд XP</b>\n\n{brand.div()}"]
+    for i, uid in enumerate(top):
+        name = html.escape(
+            next((m.get(uid) for m in chat_members.values() if uid in m), None) or f"ID {uid}"
+        )
+        lines.append(f"{medals[i]} <b>{name}</b> — {user_xp.get(uid, 0):,} XP")
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+# ═══════════════════════════════════════════════════════
+# V6 — НОВЫЕ ИГРЫ
+# ═══════════════════════════════════════════════════════
+def _game_result(uid: int, won: bool):
+    _games_played[uid] = _games_played.get(uid, 0) + 1
+    if won:
+        _games_won[uid] = _games_won.get(uid, 0) + 1
+    _check_achievements(uid)
+
+async def _priv_check(msg: Message) -> bool:
+    if msg.chat.type != "private":
+        await msg.reply("🎰 Игры доступны только в личном чате с ботом")
+        return False
+    return True
+
+@dp.message(Command("орёл", "coinflip"))
+async def cmd_coinflip(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>орёл [сумма]</b>", parse_mode="HTML")
+    try:
+        bet = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число")
+    uid = msg.from_user.id
+    if bet <= 0 or get_balance(uid) < bet:
+        return await msg.reply("❌ Недостаточно LMN или сумма некорректна")
+    won = random.random() < 0.5
+    result = "🦅 Орёл" if won else "🪙 Решка"
+    _game_result(uid, won)
+    if won:
+        add_balance(uid, bet)
+        award_xp(uid, 10)
+        out = f"✅ <b>Победа! +{fmt_lmn(bet)} LMN</b>"
+    else:
+        add_balance(uid, -bet)
+        out = f"❌ <b>Проигрыш! -{fmt_lmn(bet)} LMN</b>"
+    schedule_state_save("coinflip")
+    await msg.reply(
+        f"🪙 <b>Монетка</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+        f"Выпало: <b>{result}</b>\n\n{out}",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("плинко", "plinko"))
+async def cmd_plinko(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>плинко [сумма]</b>", parse_mode="HTML")
+    try:
+        bet = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число")
+    uid = msg.from_user.id
+    if bet <= 0 or get_balance(uid) < bet:
+        return await msg.reply("❌ Недостаточно LMN")
+    mults   = [0.2, 0.5, 0.5, 1.0, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0]
+    weights = [5, 10, 10, 20, 20, 15, 10, 5, 4, 1]
+    mult    = random.choices(mults, weights=weights, k=1)[0]
+    winnings = int(bet * mult)
+    diff     = winnings - bet
+    add_balance(uid, diff)
+    _game_result(uid, diff >= 0)
+    award_xp(uid, random.randint(5, 20))
+    schedule_state_save("plinko")
+    emoji = "✅" if diff >= 0 else "❌"
+    sign  = "+" if diff >= 0 else ""
+    await msg.reply(
+        f"🎯 <b>Плинко</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+        f"🎰  ● ● ● ● ●\n"
+        f"    ● ● ● ● ●\n"
+        f"      ● ● ● ●\n\n"
+        f"💥 Множитель: <b>{mult}×</b>\n"
+        f"{emoji} Результат: <b>{fmt_lmn(winnings)} LMN</b> ({sign}{fmt_lmn(diff)})",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("лимбо", "limbo"))
+async def cmd_limbo(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    usage = "Использование: <b>лимбо [сумма] [цель ×]</b>\nПример: лимбо 1000 2.0"
+    if not command or not command.args:
+        return await msg.reply(usage, parse_mode="HTML")
+    parts = command.args.split()
+    if len(parts) < 2:
+        return await msg.reply(usage, parse_mode="HTML")
+    try:
+        bet    = int(parts[0])
+        target = float(parts[1])
+    except ValueError:
+        return await msg.reply("❌ Укажи число и дробное цель")
+    uid = msg.from_user.id
+    if bet <= 0 or get_balance(uid) < bet:
+        return await msg.reply("❌ Недостаточно LMN")
+    if not 1.01 <= target <= 100:
+        return await msg.reply("❌ Цель от 1.01 до 100")
+    win_prob = min(0.97 / target, 0.97)
+    won      = random.random() < win_prob
+    roll     = round(random.uniform(target, target * 2) if won else random.uniform(1.0, target - 0.01), 2)
+    if won:
+        winnings = int(bet * target)
+        add_balance(uid, winnings - bet)
+        _game_result(uid, True)
+        award_xp(uid, 20)
+        result_text = f"✅ <b>Победа! +{fmt_lmn(winnings - bet)} LMN</b>"
+    else:
+        add_balance(uid, -bet)
+        _game_result(uid, False)
+        result_text = f"❌ <b>Проигрыш! -{fmt_lmn(bet)} LMN</b>"
+    schedule_state_save("limbo")
+    await msg.reply(
+        f"🚀 <b>Лимбо</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+        f"🎯 Цель: <b>{target}×</b>\n"
+        f"🎲 Выпало: <b>{roll:.2f}×</b>\n\n"
+        f"{result_text}",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("краш", "crash"))
+async def cmd_crash(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>краш [сумма]</b>", parse_mode="HTML")
+    try:
+        bet = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число")
+    uid = msg.from_user.id
+    if bet <= 0 or get_balance(uid) < bet:
+        return await msg.reply("❌ Недостаточно LMN")
+    if uid in _crash_games:
+        return await msg.reply("⚡ У тебя уже активная игра краш! Нажми Забрать.")
+    add_balance(uid, -bet)
+    crash_at = round(random.choices(
+        [round(random.uniform(1.0, 1.5), 2), round(random.uniform(1.5, 4.0), 2),
+         round(random.uniform(4.0, 10.0), 2), round(random.uniform(10.0, 20.0), 2)],
+        weights=[40, 35, 20, 5], k=1
+    )[0], 2)
+    _crash_games[uid] = {"bet": bet, "multiplier": 1.0, "crash_at": crash_at, "active": True}
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="💰 Забрать", callback_data=f"crash:out:{uid}:{bet}")
+    ]])
+    sent = await msg.reply(
+        f"🚀 <b>КРАШ</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+        f"📈 Множитель: <b>1.00×</b>\n"
+        f"⚡ Нажми Забрать пока не поздно!",
+        parse_mode="HTML", reply_markup=kb
+    )
+    _crash_games[uid]["msg_id"]  = sent.message_id
+    _crash_games[uid]["chat_id"] = msg.chat.id
+
+    async def crash_tick():
+        mult = 1.0
+        while True:
+            await asyncio.sleep(1.5)
+            if uid not in _crash_games or not _crash_games[uid].get("active"):
+                break
+            mult = round(mult + random.uniform(0.05, 0.25), 2)
+            _crash_games[uid]["multiplier"] = mult
+            if mult >= crash_at:
+                _crash_games.pop(uid, None)
+                _game_result(uid, False)
+                try:
+                    await bot.edit_message_text(
+                        f"💥 <b>КРАШ!</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+                        f"📉 Упал на <b>{mult:.2f}×</b>\n"
+                        f"❌ Ты потерял <b>{fmt_lmn(bet)} LMN</b>",
+                        chat_id=msg.chat.id, message_id=sent.message_id, parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+                break
+            try:
+                await bot.edit_message_text(
+                    f"🚀 <b>КРАШ</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+                    f"📈 Множитель: <b>{mult:.2f}×</b>\n"
+                    f"⚡ Нажми Забрать пока не поздно!",
+                    chat_id=msg.chat.id, message_id=sent.message_id,
+                    parse_mode="HTML", reply_markup=kb
+                )
+            except Exception:
+                break
+    asyncio.create_task(crash_tick())
+
+@dp.callback_query(F.data.startswith("crash:out:"))
+async def cb_crash_out(cb: CallbackQuery):
+    parts = cb.data.split(":")
+    uid   = int(parts[2])
+    bet   = int(parts[3])
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоя игра!", show_alert=True)
+    game = _crash_games.pop(uid, None)
+    if not game:
+        return await cb.answer("Игра уже закончилась!", show_alert=True)
+    game["active"] = False
+    mult     = game.get("multiplier", 1.0)
+    winnings = int(bet * mult)
+    add_balance(uid, winnings)
+    _game_result(uid, True)
+    award_xp(uid, int(mult * 5))
+    schedule_state_save("crash cashout")
+    await cb.message.edit_text(
+        f"✅ <b>Забрал!</b>\n\n"
+        f"📈 Множитель: <b>{mult:.2f}×</b>\n"
+        f"💰 +<b>{fmt_lmn(winnings)} LMN</b>\n"
+        f"✨ +{int(mult*5)} XP",
+        parse_mode="HTML"
+    )
+    await cb.answer(f"✅ +{fmt_lmn(winnings)} LMN!")
+
+# ── Блэкджек ───────────────────────────────────────────
+_BJ_VALUES = [2,3,4,5,6,7,8,9,10,10,10,10,11] * 4
+
+def _bj_val(hand: list) -> int:
+    v = sum(hand); a = hand.count(11)
+    while v > 21 and a:
+        v -= 10; a -= 1
+    return v
+
+def _bj_names(hand: list) -> str:
+    suits = ["♠","♥","♦","♣"]
+    nm    = {11:"A",10:"10",9:"9",8:"8",7:"7",6:"6",5:"5",4:"4",3:"3",2:"2"}
+    return " ".join(f"{nm.get(c,'?')}{random.choice(suits)}" for c in hand)
+
+@dp.message(Command("блэкджек", "blackjack"))
+async def cmd_blackjack(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>блэкджек [сумма]</b>", parse_mode="HTML")
+    try:
+        bet = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число")
+    uid = msg.from_user.id
+    if bet <= 0 or get_balance(uid) < bet:
+        return await msg.reply("❌ Недостаточно LMN")
+    if uid in _bj_games:
+        return await msg.reply("⚡ У тебя уже активная игра блэкджек!")
+    deck  = _BJ_VALUES.copy(); random.shuffle(deck)
+    ph    = [deck.pop(), deck.pop()]
+    dh    = [deck.pop(), deck.pop()]
+    _bj_games[uid] = {"bet": bet, "player": ph, "dealer": dh, "deck": deck}
+    add_balance(uid, -bet)
+    pv = _bj_val(ph)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🃏 Взять", callback_data=f"bj:hit:{uid}"),
+        InlineKeyboardButton(text="✋ Стоп",  callback_data=f"bj:stand:{uid}"),
+    ]])
+    if pv == 21:
+        _bj_games.pop(uid, None)
+        wins = int(bet * 2.5)
+        add_balance(uid, wins)
+        _game_result(uid, True)
+        award_xp(uid, 30)
+        schedule_state_save("blackjack")
+        return await msg.reply(
+            f"🃏 <b>Блэкджек!</b>\n\n"
+            f"Твои карты: {_bj_names(ph)} = <b>21</b>\n\n"
+            f"✅ <b>БЛЭКДЖЕК! +{fmt_lmn(wins - bet)} LMN</b>",
+            parse_mode="HTML"
+        )
+    await msg.reply(
+        f"🃏 <b>Блэкджек</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+        f"Твои карты: {_bj_names(ph)} = <b>{pv}</b>\n"
+        f"Дилер: {_bj_names([dh[0]])} + 🂠\n\n"
+        f"Что делаешь?",
+        parse_mode="HTML", reply_markup=kb
+    )
+
+@dp.callback_query(F.data.startswith("bj:"))
+async def cb_bj(cb: CallbackQuery):
+    parts  = cb.data.split(":")
+    action = parts[1]; uid = int(parts[2])
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоя игра!", show_alert=True)
+    game = _bj_games.get(uid)
+    if not game:
+        return await cb.answer("Игра не найдена!", show_alert=True)
+    bet = game["bet"]; ph = game["player"]; dh = game["dealer"]; deck = game["deck"]
+    if action == "hit":
+        ph.append(deck.pop() if deck else random.choice(_BJ_VALUES))
+        pv = _bj_val(ph)
+        if pv > 21:
+            _bj_games.pop(uid, None)
+            _game_result(uid, False)
+            schedule_state_save("blackjack")
+            await cb.message.edit_text(
+                f"🃏 <b>Блэкджек</b>\n\nТвои: {_bj_names(ph)} = <b>{pv}</b>\n\n"
+                f"❌ <b>Перебор! -{fmt_lmn(bet)} LMN</b>", parse_mode="HTML"
+            )
+            return await cb.answer("❌ Перебор!")
+        if pv == 21:
+            action = "stand"
+        else:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🃏 Взять", callback_data=f"bj:hit:{uid}"),
+                InlineKeyboardButton(text="✋ Стоп",  callback_data=f"bj:stand:{uid}"),
+            ]])
+            await cb.message.edit_text(
+                f"🃏 <b>Блэкджек</b>\n\nТвои: {_bj_names(ph)} = <b>{pv}</b>\n"
+                f"Дилер: {_bj_names([dh[0]])} + 🂠\n\nЧто делаешь?",
+                parse_mode="HTML", reply_markup=kb
+            )
+            return await cb.answer()
+    if action == "stand":
+        _bj_games.pop(uid, None)
+        pv = _bj_val(ph)
+        while _bj_val(dh) < 17:
+            dh.append(deck.pop() if deck else random.choice(_BJ_VALUES))
+        dv = _bj_val(dh)
+        if dv > 21 or pv > dv:
+            add_balance(uid, bet * 2); _game_result(uid, True); award_xp(uid, 15)
+            res = f"✅ <b>Победа! +{fmt_lmn(bet)} LMN</b>"
+        elif pv == dv:
+            add_balance(uid, bet); _game_result(uid, False)
+            res = "🤝 <b>Ничья! Ставка возвращена</b>"
+        else:
+            _game_result(uid, False)
+            res = f"❌ <b>Проигрыш! -{fmt_lmn(bet)} LMN</b>"
+        schedule_state_save("blackjack")
+        await cb.message.edit_text(
+            f"🃏 <b>Блэкджек</b>\n\nТвои: {_bj_names(ph)} = <b>{pv}</b>\n"
+            f"Дилер: {_bj_names(dh)} = <b>{dv}</b>\n\n{res}", parse_mode="HTML"
+        )
+        await cb.answer()
+
+# ── Мины ───────────────────────────────────────────────
+_MINES_SIZE = 5; _MINES_COUNT = 5
+
+def _mines_kb(uid: int, revealed: set) -> InlineKeyboardMarkup:
+    rows = []
+    for r in range(_MINES_SIZE):
+        row = []
+        for c in range(_MINES_SIZE):
+            idx = r * _MINES_SIZE + c
+            txt = "💎" if idx in revealed else "⬜"
+            cb_ = "mines:noop" if idx in revealed else f"mines:click:{uid}:{idx}"
+            row.append(InlineKeyboardButton(text=txt, callback_data=cb_))
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="💰 Забрать", callback_data=f"mines:cashout:{uid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+@dp.message(Command("мины", "mines"))
+async def cmd_mines(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>мины [сумма]</b>", parse_mode="HTML")
+    try:
+        bet = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число")
+    uid = msg.from_user.id
+    if bet <= 0 or get_balance(uid) < bet:
+        return await msg.reply("❌ Недостаточно LMN")
+    if uid in _mines_games:
+        return await msg.reply("⚡ У тебя уже активная игра мины!")
+    total_cells = _MINES_SIZE * _MINES_SIZE
+    mines_cells = set(random.sample(range(total_cells), _MINES_COUNT))
+    add_balance(uid, -bet)
+    _mines_games[uid] = {"bet": bet, "mines": mines_cells, "revealed": set(), "mult": 1.0}
+    await msg.reply(
+        f"💣 <b>Мины</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+        f"Открывай клетки, избегай мин ({_MINES_COUNT} мин)\n"
+        f"📈 Множитель: <b>1.00×</b>",
+        parse_mode="HTML", reply_markup=_mines_kb(uid, set())
+    )
+
+@dp.callback_query(F.data.startswith("mines:"))
+async def cb_mines(cb: CallbackQuery):
+    parts  = cb.data.split(":")
+    action = parts[1]
+    if action == "noop":
+        return await cb.answer()
+    uid = int(parts[2])
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоя игра!", show_alert=True)
+    game = _mines_games.get(uid)
+    if not game:
+        return await cb.answer("Игра не найдена!", show_alert=True)
+    bet = game["bet"]; mines = game["mines"]; revealed = game["revealed"]
+    if action == "cashout":
+        _mines_games.pop(uid, None)
+        mult = game["mult"]; winnings = int(bet * mult)
+        add_balance(uid, winnings); _game_result(uid, True); award_xp(uid, int(mult * 5))
+        schedule_state_save("mines")
+        await cb.message.edit_text(
+            f"💰 <b>Забрал!</b>\n\n"
+            f"💎 Открыто: {len(revealed)} клеток\n"
+            f"📈 Множитель: <b>{mult:.2f}×</b>\n"
+            f"✅ +<b>{fmt_lmn(winnings)} LMN</b>",
+            parse_mode="HTML"
+        )
+        return await cb.answer(f"+{fmt_lmn(winnings)}!")
+    if action == "click":
+        idx = int(parts[3])
+        if idx in mines:
+            _mines_games.pop(uid, None); _game_result(uid, False)
+            schedule_state_save("mines boom")
+            show_rows = []
+            for r in range(_MINES_SIZE):
+                row = []
+                for c in range(_MINES_SIZE):
+                    i = r * _MINES_SIZE + c
+                    txt = "💥" if i == idx else ("💣" if i in mines else ("💎" if i in revealed else "⬜"))
+                    row.append(InlineKeyboardButton(text=txt, callback_data="mines:noop"))
+                show_rows.append(row)
+            await cb.message.edit_text(
+                f"💥 <b>МИНА!</b>\n\n❌ Потерял <b>{fmt_lmn(bet)} LMN</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=show_rows)
+            )
+            return await cb.answer("💥 Бум!")
+        revealed.add(idx)
+        safe  = len(revealed)
+        total_safe = _MINES_SIZE * _MINES_SIZE - _MINES_COUNT
+        mult  = round(1.0 + safe * (_MINES_COUNT / max(total_safe - safe + 1, 1) * 0.3), 2)
+        game["mult"] = mult
+        await cb.message.edit_text(
+            f"💣 <b>Мины</b> — ставка {fmt_lmn(bet)} LMN\n\n"
+            f"💎 Открыто: {safe} | 📈 Множитель: <b>{mult:.2f}×</b>\n"
+            f"Потенциальный выигрыш: {fmt_lmn(int(bet*mult))}",
+            parse_mode="HTML", reply_markup=_mines_kb(uid, revealed)
+        )
+        await cb.answer(f"💎 ×{mult:.2f}")
+
+@dp.message(Command("ставка", "bet"))
+async def cmd_bet_game(msg: Message, command: CommandObject = None):
+    if not await _priv_check(msg): return
+    usage = "Использование: <b>ставка [сумма] [число 0-36]</b>"
+    if not command or not command.args: return await msg.reply(usage, parse_mode="HTML")
+    parts = command.args.split()
+    if len(parts) < 2: return await msg.reply(usage, parse_mode="HTML")
+    try:
+        bet = int(parts[0]); number = int(parts[1])
+    except ValueError:
+        return await msg.reply("❌ Укажи целые числа")
+    uid = msg.from_user.id
+    if not 0 <= number <= 36: return await msg.reply("❌ Число от 0 до 36")
+    if bet <= 0 or get_balance(uid) < bet: return await msg.reply("❌ Недостаточно LMN")
+    result = random.randint(0, 36)
+    add_balance(uid, -bet)
+    if result == number:
+        wins = bet * 36; add_balance(uid, wins); _game_result(uid, True); award_xp(uid, 50)
+        res  = f"✅ <b>ДЖЕКПОТ! +{fmt_lmn(wins)} LMN</b>"
+    else:
+        _game_result(uid, False); res = f"❌ <b>Проигрыш! -{fmt_lmn(bet)} LMN</b>"
+    schedule_state_save("ставка")
+    await msg.reply(
+        f"🎡 <b>Ставка</b> — {fmt_lmn(bet)} LMN на {number}\n\n"
+        f"🎲 Выпало: <b>{result}</b>\n\n{res}",
+        parse_mode="HTML"
+    )
+
+# ═══════════════════════════════════════════════════════
+# V6 — АДМИНИСТРИРОВАНИЕ
+# ═══════════════════════════════════════════════════════
+async def cmd_mod_logs(msg: Message):
+    if msg.chat.type not in ("group", "supergroup"):
+        return await msg.reply("Команда работает в групповых чатах")
+    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
+        return await msg.reply("⛔ Только для администраторов")
+    cid  = msg.chat.id
+    logs = mod_logs.get(cid, [])[-20:]
+    if not logs:
+        return await msg.reply("📋 Журнал модерации пуст")
+    act_ru = {"ban":"🚫 Бан","mute":"🔇 Мут","warn":"⚠️ Варн","kick":"👢 Кик","unban":"✅ Разбан","unmute":"🔊 Размут"}
+    lines  = [f"{brand.hdr()}\n\n📋 <b>Журнал модерации</b>\n\n{brand.div()}"]
+    for e in reversed(logs):
+        a   = act_ru.get(e.get("action",""), e.get("action","?"))
+        un  = html.escape(chat_members.get(cid, {}).get(e.get("uid",0)) or f"ID {e.get('uid',0)}")
+        bn  = html.escape(chat_members.get(cid, {}).get(e.get("by",0)) or f"ID {e.get('by',0)}")
+        lines.append(f"[{e.get('ts','')}] {a}: <b>{un}</b> ← {bn}")
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+@dp.message(Command("жалоба", "report"))
+async def cmd_report(msg: Message, command: CommandObject = None):
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply("Ответь на сообщение: <b>жалоба [причина]</b>", parse_mode="HTML")
+    target = msg.reply_to_message.from_user
+    reason = (command.args or "Не указана").strip() if command else "Не указана"
+    cid    = msg.chat.id
+    reports_db.setdefault(cid, []).append({
+        "report_id":   uuid.uuid4().hex[:8],  # стабильный ID для кнопок
+        "from_uid":    msg.from_user.id,
+        "target_uid":  target.id,
+        "from_name":   msg.from_user.full_name,
+        "target_name": target.full_name,
+        "reason":      reason,
+        "ts":          now_kyiv().strftime("%d.%m %H:%M"),
+    })
+    if len(reports_db[cid]) > 50:
+        reports_db[cid] = reports_db[cid][-50:]
+    schedule_state_save("жалоба")
+    await msg.reply(
+        f"✅ Жалоба на <b>{html.escape(target.full_name)}</b> принята\n"
+        f"📝 Причина: {html.escape(reason)}\n\n"
+        f"<i>Администрация рассмотрит её в ближайшее время</i>",
+        parse_mode="HTML"
+    )
+
+async def cmd_reports_list(msg: Message):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
+        return await msg.reply("⛔ Только для администраторов")
+    cid      = msg.chat.id
+    all_reps = reports_db.get(cid, [])
+    # Показываем только открытые жалобы
+    open_reps = [r for r in all_reps if r.get("status", "open") == "open"]
+    if not open_reps:
+        return await msg.reply(
+            f"📋 Открытых жалоб нет\n"
+            f"<i>Всего в базе: {len(all_reps)}</i>",
+            parse_mode="HTML"
+        )
+    # Отправляем каждую открытую жалобу отдельным сообщением.
+    # Кнопки используют неизменяемый report_id — позиция в списке значения не имеет.
+    # У старых жалоб без report_id генерируем и сохраняем ID на месте.
+    open_reps_with_id = []
+    for r in all_reps:
+        if r.get("status", "open") != "open":
+            continue
+        if not r.get("report_id"):
+            r["report_id"] = uuid.uuid4().hex[:8]
+        open_reps_with_id.append(r)
+    total = len(open_reps_with_id)
+    for r in open_reps_with_id[-5:]:
+        rid = r["report_id"]
+        kb  = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Закрыть",  callback_data=f"rep:close:{cid}:{rid}"),
+            InlineKeyboardButton(text="🔇 Замутить", callback_data=f"rep:mute:{cid}:{rid}"),
+            InlineKeyboardButton(text="🚫 Забанить", callback_data=f"rep:ban:{cid}:{rid}"),
+        ]])
+        text = (
+            f"🔴 <b>Жалоба {rid}</b>\n"
+            f"👤 От: <b>{html.escape(r.get('from_name', '?'))}</b>\n"
+            f"🎯 На: <b>{html.escape(r.get('target_name', '?'))}</b>\n"
+            f"📝 {html.escape(r.get('reason', '—'))}\n"
+            f"🕐 {r.get('ts', '—')}"
+        )
+        await msg.reply(text, parse_mode="HTML", reply_markup=kb)
+    if total > 5:
+        await msg.reply(f"<i>… и ещё {total - 5} открытых жалоб</i>", parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("rep:"))
+async def cb_report_action(cb: CallbackQuery):
+    if not (is_owner(cb) or has_role(cb.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
+        return await cb.answer("⛔ Только для администраторов", show_alert=True)
+    parts  = cb.data.split(":")
+    action = parts[1]
+    cid    = int(parts[2])
+    rid    = parts[3]  # неизменяемый report_id
+
+    # Верификация: чат колбэка должен совпадать с чатом в данных
+    if cb.message.chat.id != cid:
+        return await cb.answer("⛔ Чат не совпадает", show_alert=True)
+
+    # Находим жалобу по stable report_id, независимо от позиции в списке
+    report = next(
+        (r for r in reports_db.get(cid, []) if r.get("report_id") == rid),
+        None
+    )
+    if report is None:
+        return await cb.answer("Жалоба не найдена", show_alert=True)
+    if report.get("status") == "closed":
+        return await cb.answer("Жалоба уже закрыта", show_alert=True)
+
+    # target_uid всегда берётся из жалобы на сервере, а не из колбэка
+    target_uid = report.get("target_uid", 0)
+
+    if action == "close":
+        report["status"]    = "closed"
+        report["closed_by"] = cb.from_user.id
+        report["closed_ts"] = now_kyiv().strftime("%d.%m %H:%M")
+        _log_mod(cid, "report_closed", target_uid, cb.from_user.id)
+        schedule_state_save("жалоба закрыта")
+        await cb.message.edit_reply_markup(reply_markup=None)
+        await cb.answer("✅ Жалоба закрыта")
+    elif action == "mute":
+        try:
+            until = datetime.now(UTC) + timedelta(hours=1)
+            await bot.restrict_chat_member(
+                cid, target_uid,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=until,
+            )
+            # Telegram действие успешно — только теперь закрываем и логируем
+            report["status"]    = "closed"
+            report["closed_by"] = cb.from_user.id
+            report["closed_ts"] = now_kyiv().strftime("%d.%m %H:%M")
+            _log_mod(cid, "mute", target_uid, cb.from_user.id)
+            schedule_state_save("жалоба: мут")
+            await cb.message.edit_reply_markup(reply_markup=None)
+            await cb.answer("🔇 Замучен на 1 час")
+        except Exception as e:
+            # Жалоба остаётся открытой — можно повторить
+            await cb.answer(f"❌ {e}", show_alert=True)
+    elif action == "ban":
+        try:
+            await bot.ban_chat_member(cid, target_uid)
+            # Telegram действие успешно — только теперь закрываем и логируем
+            report["status"]    = "closed"
+            report["closed_by"] = cb.from_user.id
+            report["closed_ts"] = now_kyiv().strftime("%d.%m %H:%M")
+            _log_mod(cid, "ban", target_uid, cb.from_user.id)
+            schedule_state_save("жалоба: бан")
+            await cb.message.edit_reply_markup(reply_markup=None)
+            await cb.answer("🚫 Забанен")
+        except Exception as e:
+            # Жалоба остаётся открытой — можно повторить
+            await cb.answer(f"❌ {e}", show_alert=True)
+
+async def cmd_raid_toggle(msg: Message):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin")):
+        return await msg.reply("⛔ Только для администраторов")
+    cid = msg.chat.id
+    raid_mode[cid] = not raid_mode.get(cid, False)
+    status = "🟢 ВКЛЮЧЁН" if raid_mode[cid] else "🔴 ВЫКЛЮЧЕН"
+    schedule_state_save("рейд")
+    await msg.reply(
+        f"🛡 <b>Рейд-мод: {status}</b>\n\n"
+        + ("⚡ Новые участники мутируются на 10 минут" if raid_mode[cid] else "✅ Защита от рейда выключена"),
+        parse_mode="HTML"
+    )
+
+async def cmd_antispam_toggle(msg: Message):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin")):
+        return await msg.reply("⛔ Только для администраторов")
+    cid = msg.chat.id
+    antispam_mode[cid] = not antispam_mode.get(cid, False)
+    status = "🟢 ВКЛЮЧЁН" if antispam_mode[cid] else "🔴 ВЫКЛЮЧЕН"
+    schedule_state_save("антиспам")
+    await msg.reply(
+        f"🤖 <b>Антиспам: {status}</b>\n\n"
+        + ("⚡ Повторяющиеся сообщения будут удаляться" if antispam_mode[cid] else "✅ Антиспам выключен"),
+        parse_mode="HTML"
+    )
+
+async def cmd_filters_list(msg: Message):
+    cid = msg.chat.id
+    lg  = _link_guard.get(cid, False)
+    as_ = antispam_mode.get(cid, False)
+    rm  = raid_mode.get(cid, False)
+    wl  = _link_whitelist.get(cid, [])
+    await msg.reply(
+        f"{brand.hdr()}\n\n⚙️ <b>Фильтры чата</b>\n\n{brand.div()}\n"
+        f"{'🟢' if lg else '🔴'} Антилинк: {'включён' if lg else 'выключен'}\n"
+        f"{'🟢' if as_ else '🔴'} Антиспам: {'включён' if as_ else 'выключен'}\n"
+        f"{'🟢' if rm else '🔴'} Рейд-мод: {'включён' if rm else 'выключен'}\n"
+        f"🟢 Автомод пропаганды: включён\n"
+        + (f"✅ Белый список: {len(wl)} ссылок\n" if wl else "")
+        + f"\n{brand.div()}",
+        parse_mode="HTML"
+    )
+
+# ═══════════════════════════════════════════════════════
+# V6 — СТАТИСТИКА ЧАТА
+# ═══════════════════════════════════════════════════════
+async def cmd_chatstats(msg: Message):
+    import html as _html
+    cid = msg.chat.id; can = econ_cid(cid)
+    all_m = set(chat_members.get(cid,{}).keys()) | set(chat_members.get(can,{}).keys())
+    try:
+        tg_cnt = await bot.get_chat_member_count(cid)
+    except Exception:
+        tg_cnt = len(all_m)
+    msgs_cnt  = sum(user_messages.get(cid, {}).values())
+    top_act   = sorted(user_messages.get(cid,{}).items(), key=lambda x: x[1], reverse=True)[:3]
+    marr_cnt  = len({frozenset([u,p]) for u,p in {**marriages.get(cid,{}),**marriages.get(can,{})}.items() if marriages.get(cid,{}).get(p)==u or marriages.get(can,{}).get(p)==u})
+    rich       = max(((lmn_balances.get(u,0)+bank_balances.get(u,0), u) for u in all_m), default=(0, 0))
+    rich_line  = ""
+    if rich[0] > 0:
+        rn = _html.escape(chat_members.get(cid,{}).get(rich[1]) or f"ID {rich[1]}")
+        rich_line = f"\n💰 Богатейший: <b>{rn}</b> · {fmt_lmn(rich[0])}"
+    top_lines = []
+    for uid, cnt in top_act:
+        nm = _html.escape(chat_members.get(cid,{}).get(uid) or f"ID {uid}")
+        top_lines.append(f"  👤 <b>{nm}</b> — {cnt} сообщ.")
+    lines = [
+        f"{brand.hdr()}\n\n📊 <b>Статистика · {_html.escape(msg.chat.title or 'чат')}</b>\n\n{brand.div()}",
+        f"👥 Участников: <b>{tg_cnt}</b>",
+        f"💬 Сообщений (сессия): <b>{msgs_cnt:,}</b>",
+        f"💍 Браков: <b>{marr_cnt}</b>",
+    ]
+    if top_lines:
+        lines.append("\n🏆 Топ активных:")
+        lines.extend(top_lines)
+    lines.append(rich_line)
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+async def cmd_online(msg: Message):
+    if msg.chat.type == "private":
+        return await msg.reply("Команда работает в групповых чатах")
+    cid  = msg.chat.id
+    msgs = user_messages.get(cid, {})
+    if not msgs:
+        return await msg.reply("📊 Нет данных об активности")
+    top   = sorted(msgs.items(), key=lambda x: x[1], reverse=True)[:15]
+    lines = [f"{brand.hdr()}\n\n🟢 <b>Активные участники</b>\n\n{brand.div()}"]
+    for uid, cnt in top:
+        nm  = html.escape(chat_members.get(cid, {}).get(uid) or f"ID {uid}")
+        bar = "█" * min(cnt, 10)
+        lines.append(f"👤 <b>{nm}</b> — {cnt} сообщ. {bar}")
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+async def cmd_analytics(msg: Message):
+    if msg.chat.type != "private":
+        cid   = msg.chat.id
+        title = f"Аналитика · {html.escape(msg.chat.title or 'чат')}"
+        total_msgs = sum(user_messages.get(cid, {}).values())
+    else:
+        title      = "Глобальная аналитика"
+        total_msgs = sum(sum(m.values()) for m in user_messages.values())
+    total_xp  = sum(user_xp.values())
+    total_ach = sum(len(v) for v in user_achievements.values())
+    total_lmn = sum(lmn_balances.values()) + sum(bank_balances.values())
+    await msg.reply(
+        f"{brand.hdr()}\n\n📊 <b>{title}</b>\n\n{brand.div()}\n"
+        f"💬 Сообщений (сессия): <b>{total_msgs:,}</b>\n"
+        f"✨ XP в системе: <b>{total_xp:,}</b>\n"
+        f"🏆 Достижений: <b>{total_ach}</b>\n"
+        f"💰 LMN в обороте: <b>{fmt_lmn(total_lmn)}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_growth(msg: Message):
+    total = len({uid for m in chat_members.values() for uid in m})
+    await msg.reply(
+        f"{brand.hdr()}\n\n📈 <b>Рост участников</b>\n\n{brand.div()}\n"
+        f"👥 Всего известных: <b>{total}</b>\n"
+        f"💬 Чатов в базе: <b>{len(chat_members)}</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
+# ═══════════════════════════════════════════════════════
+# V6 — ПАНЕЛЬ ФАУНДЕРА
+# ═══════════════════════════════════════════════════════
+_OWNER_KB = InlineKeyboardMarkup(inline_keyboard=[
+    [InlineKeyboardButton(text="👥 Пользователи", callback_data="owner:users"),
+     InlineKeyboardButton(text="💰 Экономика",    callback_data="owner:eco")],
+    [InlineKeyboardButton(text="📢 Рассылка",     callback_data="owner:broadcast"),
+     InlineKeyboardButton(text="📊 Статистика",   callback_data="owner:stats")],
+    [InlineKeyboardButton(text="🛠 Редактор",     callback_data="editor:menu")],
+])
+
+async def cmd_owner_panel(msg: Message):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    total_u   = len({uid for m in chat_members.values() for uid in m})
+    total_lmn = sum(lmn_balances.values()) + sum(bank_balances.values())
+    total_xp_ = sum(user_xp.values())
+    await msg.reply(
+        f"{brand.hdr()}\n\n👑 <b>Панель фаундера</b>\n\n{brand.div()}\n"
+        f"👥 Пользователей: <b>{total_u}</b>\n"
+        f"💰 LMN в системе: <b>{fmt_lmn(total_lmn)}</b>\n"
+        f"✨ XP: <b>{total_xp_:,}</b>\n"
+        f"💬 Чатов: <b>{len(chat_members)}</b>\n\n{brand.div()}",
+        parse_mode="HTML", reply_markup=_OWNER_KB
+    )
+
+@dp.callback_query(F.data.startswith("owner:"))
+async def cb_owner(cb: CallbackQuery):
+    if not is_owner(cb): return await cb.answer("⛔ Только фаундер", show_alert=True)
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="owner:back")]])
+    sec = cb.data.split(":", 1)[1]
+    if sec == "users":
+        total = len({uid for m in chat_members.values() for uid in m})
+        vips  = len([uid for uid, r in ROLES.items() if r == "vip"])
+        await cb.message.edit_text(
+            f"👥 <b>Пользователи</b>\n\nВсего: <b>{total}</b>\nVIP: <b>{vips}</b>\n"
+            f"Верифицированных: <b>{len(_verified_users)}</b>\n\n"
+            f"Команды: /юзеринфо · /сетвип · /снятьвип",
+            parse_mode="HTML", reply_markup=back_kb
+        )
+    elif sec == "eco":
+        total_lmn = sum(lmn_balances.values()) + sum(bank_balances.values())
+        await cb.message.edit_text(
+            f"💰 <b>Экономика</b>\n\nКошельки: <b>{fmt_lmn(sum(lmn_balances.values()))}</b>\n"
+            f"Банки: <b>{fmt_lmn(sum(bank_balances.values()))}</b>\n"
+            f"Итого: <b>{fmt_lmn(total_lmn)}</b>\n\nКоманды: /дать · /забрать",
+            parse_mode="HTML", reply_markup=back_kb
+        )
+    elif sec == "broadcast":
+        await cb.message.edit_text(
+            "📢 <b>Рассылка</b>\n\nИспользуй: <code>/рассылка [текст]</code>\n"
+            "Будет отправлено во все активные чаты.",
+            parse_mode="HTML", reply_markup=back_kb
+        )
+    elif sec == "stats":
+        total_msgs = sum(sum(m.values()) for m in user_messages.values())
+        await cb.message.edit_text(
+            f"📊 <b>Статистика</b>\n\nСообщений (сессия): <b>{total_msgs:,}</b>\n"
+            f"XP: <b>{sum(user_xp.values()):,}</b>\n"
+            f"Достижений: <b>{sum(len(v) for v in user_achievements.values())}</b>\n"
+            f"Рефералов: <b>{len(referrals)}</b>",
+            parse_mode="HTML", reply_markup=back_kb
+        )
+    elif sec == "back":
+        total_u = len({uid for m in chat_members.values() for uid in m})
+        total_lmn = sum(lmn_balances.values()) + sum(bank_balances.values())
+        await cb.message.edit_text(
+            f"{brand.hdr()}\n\n👑 <b>Панель фаундера</b>\n\n{brand.div()}\n"
+            f"👥 Пользователей: <b>{total_u}</b>\n"
+            f"💰 LMN: <b>{fmt_lmn(total_lmn)}</b>\n\n{brand.div()}",
+            parse_mode="HTML", reply_markup=_OWNER_KB
+        )
+    await cb.answer()
+
+@dp.message(Command("рассылка", "broadcast"))
+async def cmd_broadcast(msg: Message, command: CommandObject = None):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    text = (command.args or "").strip() if command else ""
+    if not text: return await msg.reply("Использование: <b>рассылка [текст]</b>", parse_mode="HTML")
+    active  = [c for c in chat_members if c < 0]
+    sent_ok = 0
+    for cid in active:
+        try:
+            await bot.send_message(
+                cid,
+                f"{brand.hdr()}\n\n📢 <b>Объявление</b>\n\n{brand.div()}\n{html.escape(text)}\n\n{brand.div()}",
+                parse_mode="HTML"
+            )
+            sent_ok += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    await msg.reply(f"✅ Рассылка отправлена в <b>{sent_ok}</b> чатов", parse_mode="HTML")
+
+@dp.message(Command("юзеринфо", "userinfo"))
+async def cmd_userinfo(msg: Message):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
+    uid    = target.id
+    xp     = user_xp.get(uid, 0); lvl = get_xp_level(xp)[0]
+    bal    = get_balance(uid); bank = bank_balances.get(uid, 0)
+    role   = get_role_display(uid) or "—"
+    warns  = max((warnings_db.get(c, {}).get(uid, 0) for c in warnings_db), default=0)
+    stk    = max((streaks.get(c, {}).get(uid, {}).get("count", 0) for c in streaks), default=0)
+    ach    = len(user_achievements.get(uid, []))
+    msgs_  = sum(m.get(uid, 0) for m in user_messages.values())
+    refs   = referral_counts.get(uid, 0)
+    await msg.reply(
+        f"{brand.hdr()}\n\n🔍 <b>Инфо: {html.escape(target.full_name)}</b>\n\n{brand.div()}\n"
+        f"🆔 ID: <code>{uid}</code>\n@{target.username or '—'}\n\n"
+        f"💰 Кошелёк: <b>{fmt_lmn(bal)}</b>\n🏦 Банк: <b>{fmt_lmn(bank)}</b>\n"
+        f"✨ XP: <b>{xp:,}</b> ({lvl})\n🔥 Стрик: <b>{stk} дн.</b>\n"
+        f"⚠️ Варны: <b>{warns}</b>\n🏅 Роль: <b>{role}</b>\n"
+        f"🏆 Достижений: <b>{ach}/{len(ACHIEVEMENT_INFO)}</b>\n"
+        f"💬 Сообщений: <b>{msgs_:,}</b>\n🔗 Рефералов: <b>{refs}</b>\n\n{brand.div()}",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("забрать", "take"))
+async def cmd_take(msg: Message, command: CommandObject = None):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply("Ответь на сообщение и укажи сумму")
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>забрать [сумма]</b> (ответом)", parse_mode="HTML")
+    try:
+        amount = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число")
+    target = msg.reply_to_message.from_user
+    actual = min(amount, get_balance(target.id))
+    add_balance(target.id, -actual)
+    schedule_state_save("забрать")
+    await msg.reply(
+        f"✅ Забрал <b>{fmt_lmn(actual)} LMN</b> у {html.escape(target.full_name)}\n"
+        f"Новый баланс: <b>{fmt_lmn(get_balance(target.id))} LMN</b>",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("сетвип", "setvip"))
+async def cmd_setvip_v6(msg: Message):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply("Ответь на сообщение пользователя")
+    target = msg.reply_to_message.from_user
+    set_role(target.id, "vip", target.username or "")
+    schedule_state_save("setvip")
+    await msg.reply(f"⭐ <b>{html.escape(target.full_name)}</b> теперь VIP!", parse_mode="HTML")
+
+@dp.message(Command("снятьвип", "removevip"))
+async def cmd_removevip_v6(msg: Message):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply("Ответь на сообщение пользователя")
+    target = msg.reply_to_message.from_user
+    remove_role(target.id, target.username or "")
+    schedule_state_save("removevip")
+    await msg.reply(f"✅ VIP снят с <b>{html.escape(target.full_name)}</b>", parse_mode="HTML")
+
+@dp.message(Command("сетлевел", "setlevel"))
+async def cmd_setlevel(msg: Message, command: CommandObject = None):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply("Ответь на сообщение пользователя")
+    if not command or not command.args:
+        return await msg.reply("Использование: <b>сетлевел [xp]</b> (ответом)", parse_mode="HTML")
+    try:
+        xp_val = int(command.args.split()[0])
+    except ValueError:
+        return await msg.reply("❌ Укажи целое число XP")
+    target = msg.reply_to_message.from_user
+    user_xp[target.id] = max(0, xp_val)
+    _check_achievements(target.id)
+    schedule_state_save("setlevel")
+    lvl = get_xp_level(xp_val)[0]
+    await msg.reply(
+        f"✅ XP: <b>{xp_val:,}</b> ({lvl}) → {html.escape(target.full_name)}",
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("разбанвсех", "unbanall"))
+async def cmd_unbanall(msg: Message):
+    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
+    if msg.chat.type not in ("group", "supergroup"):
+        return await msg.reply("Команда работает в групповых чатах")
+    cid   = msg.chat.id
+    count = 0
+    for uid in list(warnings_db.get(cid, {}).keys()):
+        try:
+            await bot.unban_chat_member(cid, uid, only_if_banned=True)
+            count += 1
+        except Exception:
+            pass
+    schedule_state_save("разбанвсех")
+    await msg.reply(f"✅ Попытка разбана для <b>{count}</b> пользователей", parse_mode="HTML")
+
+# ═══════════════════════════════════════════════════════
+# V6 — РЕФЕРАЛЫ
+# ═══════════════════════════════════════════════════════
+async def cmd_invite(msg: Message):
+    uid   = msg.from_user.id
+    link  = f"https://t.me/LumenarAi_Bot?start=ref_{uid}"
+    count = referral_counts.get(uid, 0)
+    await msg.reply(
+        f"{brand.hdr()}\n\n🔗 <b>Реферальная ссылка</b>\n\n{brand.div()}\n"
+        f"<code>{link}</code>\n\n"
+        f"👥 Приглашено: <b>{count}</b>\n"
+        f"🎁 Бонус за каждого: +1000 LMN + 100 XP\n\n{brand.div()}",
+        parse_mode="HTML"
+    )
+
+async def cmd_referrals_list(msg: Message):
+    uid   = msg.from_user.id
+    name  = html.escape(msg.from_user.first_name or "—")
+    count = referral_counts.get(uid, 0)
+    my_refs = [u for u, ref in referrals.items() if ref == uid]
+    lines = [
+        f"{brand.hdr()}\n\n🔗 <b>Мои рефералы · {name}</b>\n\n{brand.div()}\n"
+        f"👥 Всего приглашено: <b>{count}</b>\n"
+    ]
+    if my_refs:
+        lines.append("\n<b>Список:</b>")
+        for ru in my_refs[:20]:
+            rn = html.escape(next((m.get(ru) for m in chat_members.values() if ru in m), f"ID {ru}"))
+            lines.append(f"  👤 {rn}")
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+async def cmd_invites_stats(msg: Message):
+    uid   = msg.from_user.id
+    name  = html.escape(msg.from_user.first_name or "—")
+    count = referral_counts.get(uid, 0)
+    await msg.reply(
+        f"{brand.hdr()}\n\n📊 <b>Статистика инвайтов · {name}</b>\n\n{brand.div()}\n"
+        f"🔗 Приглашено: <b>{count}</b>\n"
+        f"💰 Заработано: <b>{fmt_lmn(count * 1000)} LMN</b>\n"
+        f"✨ XP за рефералов: <b>{count * 100}</b>\n\n{brand.div()}",
+        parse_mode="HTML"
+    )
+
+# ── Объявление V6 (фаундер) ────────────────────────────
+@dp.message(Command("объявить_в6", "announce_v6"))
+async def cmd_announce_v6(msg: Message):
+    if not is_owner(msg): return await msg.reply("⛔ Только фаундер")
+    await _send_v6_announcement()
+    await msg.reply("✅ V6-объявление отправлено!")
+
+async def _send_v6_announcement():
+    global v6_announced
+    pub_chat = _ank.get_pub_chat()
+    if not pub_chat:
+        return
+    v6_text = (
+        f"{brand.hdr()}\n\n"
+        f"🚀 <b>ОБНОВЛЕНИЕ V6</b>\n\n"
+        f"{brand.div()}\n"
+        f"📋 Что нового:\n"
+        f"• ⚡ XP и система уровней (6 уровней)\n"
+        f"• 🎮 Новые игры: орёл, плинко, лимбо, краш, блэкджек, мины\n"
+        f"• 🎁 Ежедневные награды и задания\n"
+        f"• 🏆 Система достижений\n"
+        f"• 🔗 Реферальная система\n"
+        f"• 🛡 Панель администратора (логи, жалобы, рейд, антиспам)\n"
+        f"• 👑 Расширенная панель фаундера\n"
+        f"• 📊 Детальная статистика чата\n"
+        f"• ✨ Новое оформление анкет\n"
+        f"• 📖 Кнопка правил при приветствии\n\n"
+        f"{brand.div()}\n"
+        f"🤖 v{BOT_VERSION}"
+    )
+    try:
+        await bot.send_message(pub_chat, v6_text, parse_mode="HTML")
+        v6_announced = True
+        save_data()
+    except Exception as e:
+        logging.warning("V6 announcement failed: %s", e)
+
+# ═══════════════════════════════════════════════════════
 # ПОМОЩЬ
 # ═══════════════════════════════════════════════════════
 _HELP_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
@@ -4749,6 +6132,14 @@ _HELP_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
     [
         InlineKeyboardButton(text="🔮 Предсказания",   callback_data="help:fortune"),
         InlineKeyboardButton(text="👤 Профиль",        callback_data="help:profile"),
+    ],
+    [
+        InlineKeyboardButton(text="⚡ XP / Уровни",   callback_data="help:xp"),
+        InlineKeyboardButton(text="🏆 Достижения",     callback_data="help:ach"),
+    ],
+    [
+        InlineKeyboardButton(text="📊 Статистика",     callback_data="help:stats"),
+        InlineKeyboardButton(text="🔗 Рефералы",       callback_data="help:ref"),
     ],
     [
         InlineKeyboardButton(text="✦ 💬 Наш чат ✦",  url="https://t.me/+_K2SJRYIhq9hYjFi"),
@@ -4915,6 +6306,70 @@ _HELP_SECTIONS = {
         "🔢 Математика, анализ, код\n"
         "🤝 Помню весь разговор сессии\n\n"
         "⚡ ИИ: <b>Groq Llama 3.3 70B</b> + резерв Gemini\n\n"
+        f"{brand.div()}"
+    ),
+    # ── V6 секции ─────────────────────────────────────
+    "xp": (
+        f"{brand.hdr()}\n\n"
+        "⚡ XP и уровни — V6\n\n"
+        f"{brand.div()}\n"
+        "📊 <b>Статус:</b>\n"
+        "<code>уровень</code> — твой XP и прогресс\n"
+        "<code>ранг</code> — место в чате по XP\n"
+        "<code>топ</code> — топ-10 по XP\n"
+        "<code>активность</code> — сводка по тебе\n"
+        "<code>сообщения</code> — счётчик сообщений\n\n"
+        "🏅 <b>Уровни:</b>\n"
+        "🆕 Новичок (0) → 📗 Участник (100)\n"
+        "⚡ Активный (500) → 🔥 Опытный (1500)\n"
+        "💎 Ветеран (3500) → 👑 Легенда (7000)\n\n"
+        "💡 XP начисляется за каждое сообщение (+1-5)\n\n"
+        f"{brand.div()}"
+    ),
+    "ach": (
+        f"{brand.hdr()}\n\n"
+        "🏆 Достижения — V6\n\n"
+        f"{brand.div()}\n"
+        "📋 <b>Просмотр:</b>\n"
+        "<code>достижения</code> — все твои достижения\n"
+        "<code>лидерборд</code> — глобальный топ XP\n\n"
+        "🎁 <b>Ежедневное:</b>\n"
+        "<code>дейли</code> — 500-2000 LMN + 50 XP (раз в день)\n"
+        "<code>бонус</code> — 5000 LMN за стрик 7 дней\n"
+        "<code>задания</code> — ежедневные задачи\n"
+        "<code>награды</code> — все доступные бонусы\n\n"
+        f"{brand.div()}"
+    ),
+    "stats": (
+        f"{brand.hdr()}\n\n"
+        "📊 Статистика чата — V6\n\n"
+        f"{brand.div()}\n"
+        "<code>статчата</code> — детальная статистика\n"
+        "<code>онлайн</code> — активные участники\n"
+        "<code>аналитика</code> — данные системы\n"
+        "<code>рост</code> — участники по чатам\n\n"
+        "🎮 <b>Игры (только в ЛС бота):</b>\n"
+        "<code>/орёл [сумма]</code> — монетка\n"
+        "<code>/плинко [сумма]</code> — плинко\n"
+        "<code>/лимбо [сумма] [цель×]</code> — лимбо\n"
+        "<code>/краш [сумма]</code> — краш 🚀\n"
+        "<code>/блэкджек [сумма]</code> — блэкджек 🃏\n"
+        "<code>/мины [сумма]</code> — мины 💣\n"
+        "<code>/ставка [сумма] [0-36]</code> — рулетка\n\n"
+        f"{brand.div()}"
+    ),
+    "ref": (
+        f"{brand.hdr()}\n\n"
+        "🔗 Рефералы — V6\n\n"
+        f"{brand.div()}\n"
+        "📨 <b>Команды:</b>\n"
+        "<code>инвайт</code> — твоя реферальная ссылка\n"
+        "<code>рефералы</code> — список приглашённых\n"
+        "<code>инвайты</code> — статистика инвайтов\n\n"
+        "🎁 <b>Бонус за реферала:</b>\n"
+        "• +1000 LMN тебе\n"
+        "• +100 XP тебе\n\n"
+        "💡 Поделись ссылкой с друзьями!\n\n"
         f"{brand.div()}"
     ),
 }
@@ -5367,7 +6822,33 @@ class PropagandaMiddleware(BaseMiddleware):
                 and event.from_user
                 and not event.from_user.is_bot
                 and event.chat.type != "private"):
-            chat_members.setdefault(event.chat.id, {})[event.from_user.id] = event.from_user.full_name
+            _uid_mw = event.from_user.id
+            _cid_mw = event.chat.id
+            chat_members.setdefault(_cid_mw, {})[_uid_mw] = event.from_user.full_name
+            # V6: XP + счётчик сообщений
+            user_messages.setdefault(_cid_mw, {})
+            user_messages[_cid_mw][_uid_mw] = user_messages[_cid_mw].get(_uid_mw, 0) + 1
+            if "first_message" not in user_achievements.get(_uid_mw, []):
+                user_achievements.setdefault(_uid_mw, []).append("first_message")
+            award_xp(_uid_mw, random.randint(1, 5))
+            # Антиспам
+            if antispam_mode.get(_cid_mw) and event.text:
+                import time as _t
+                _txt = (event.text or "")[:80]
+                _asp = antispam_tracker.setdefault(_cid_mw, {})
+                _usr = _asp.setdefault(_uid_mw, {"text": "", "count": 0, "ts": 0.0})
+                _now_ts = _t.time()
+                if _txt == _usr["text"] and _now_ts - _usr["ts"] < 30:
+                    _usr["count"] += 1
+                    if _usr["count"] >= 3:
+                        try:
+                            await event.delete()
+                        except Exception:
+                            pass
+                        _asp[_uid_mw] = {"text": "", "count": 0, "ts": 0.0}
+                        return  # Спам удалён — дальше не обрабатываем
+                else:
+                    _asp[_uid_mw] = {"text": _txt, "count": 1, "ts": _now_ts}
 
         if isinstance(event, Message):
             # Антилинк — до пропаганды, чтобы оба не мешали друг другу
@@ -5919,12 +7400,34 @@ def build_main_kb() -> InlineKeyboardMarkup:
 
 
 @dp.message(Command("start"), F.chat.type == "private")
-async def cmd_start_private(msg: Message):
+async def cmd_start_private(msg: Message, command: CommandObject = None):
     uid  = msg.from_user.id
-    name = html.escape(msg.from_user.first_name or "друг")
-
     raw_name = msg.from_user.first_name or "друг"
     name     = html.escape(raw_name)
+
+    # V6: обработка реферального кода ?start=ref_UID
+    if command and command.args and command.args.startswith("ref_"):
+        try:
+            referrer_uid = int(command.args[4:])
+            if referrer_uid != uid and uid not in referrals:
+                referrals[uid] = referrer_uid
+                referral_counts[referrer_uid] = referral_counts.get(referrer_uid, 0) + 1
+                add_balance(referrer_uid, 1000)
+                award_xp(referrer_uid, 100)
+                schedule_state_save("реферал")
+                try:
+                    ref_name_esc = html.escape(msg.from_user.full_name)
+                    await bot.send_message(
+                        referrer_uid,
+                        f"🎉 <b>Новый реферал!</b>\n\n"
+                        f"👤 <b>{ref_name_esc}</b> зарегистрировался по твоей ссылке\n"
+                        f"💰 +1000 LMN · ✨ +100 XP",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+        except (ValueError, IndexError):
+            pass
 
     if is_verified(uid):
         kb = build_main_kb()
@@ -7336,6 +8839,40 @@ TEXT_COMMANDS.update({
     "whitelist":    cmd_whitelist,
 })
 
+# ── V6 команды ─────────────────────────────────────────
+TEXT_COMMANDS.update({
+    # XP / уровни
+    "уровень":       cmd_level,
+    "ранг":          cmd_rank,
+    "топ":           cmd_top_xp,
+    "достижения":    cmd_achievements,
+    "сообщения":     cmd_messages,
+    "активность":    cmd_activity,
+    # Ежедневные
+    "дейли":         cmd_daily,
+    "бонус":         cmd_bonus,
+    "задания":       cmd_tasks,
+    "награды":       cmd_rewards,
+    "лидерборд":     cmd_leaderboard,
+    # Статистика чата
+    "статчата":      cmd_chatstats,
+    "онлайн":        cmd_online,
+    "аналитика":     cmd_analytics,
+    "рост":          cmd_growth,
+    # Администрирование
+    "логи":          cmd_mod_logs,
+    "жалобы":        cmd_reports_list,
+    "рейд":          cmd_raid_toggle,
+    "антиспам":      cmd_antispam_toggle,
+    "фильтры":       cmd_filters_list,
+    # Фаундер
+    "овнер":         cmd_owner_panel,
+    # Рефералы
+    "инвайт":        cmd_invite,
+    "рефералы":      cmd_referrals_list,
+    "инвайты":       cmd_invites_stats,
+})
+
 
 @dp.message(Command("sendlaunch"))
 async def cmd_sendlaunch(msg: Message):
@@ -8143,6 +9680,18 @@ async def on_new_chat_member(msg: Message):
             continue
         name = user.first_name or user.full_name or "друг"
 
+        # V6: рейд-мод — мутируем новых участников на 10 минут
+        if raid_mode.get(msg.chat.id):
+            try:
+                until = datetime.now(UTC) + timedelta(minutes=10)
+                await bot.restrict_chat_member(
+                    msg.chat.id, user.id,
+                    ChatPermissions(can_send_messages=False),
+                    until_date=until,
+                )
+            except Exception:
+                pass
+
         # ── Текст кнопки (кастомный или дефолтный) ───────
         btn_ct   = brand.get_custom_text("welcome_btn")
         btn_text = btn_ct[0].strip() if btn_ct else "📝 Создать анкету"
@@ -8152,6 +9701,12 @@ async def on_new_chat_member(msg: Message):
                 url="https://t.me/LumenarAi_Bot?start=anketa",
             ),
         ]]
+        welcome_rows.append([
+            InlineKeyboardButton(
+                text="📖 Правила чата",
+                url="https://teletype.in/@lumenaoff/eoHmmuUNnxP",
+            ),
+        ])
         if LUMENA_SITE_URL:
             welcome_rows.append([
                 InlineKeyboardButton(text="🌐 Сайт Лумены", url=LUMENA_SITE_URL),
@@ -8265,6 +9820,10 @@ async def main():
 
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
+
+    # V6: одноразовое объявление об обновлении
+    if not v6_announced:
+        asyncio.create_task(_send_v6_announcement())
 
     # ── Синхронизация экономики связанных чатов ──────────
     # pub_chat и mod_chat используют единую базу (canonical = pub_chat)
@@ -8452,6 +10011,35 @@ def _apply_data(data: dict) -> None:
             }
         except (KeyError, TypeError, ValueError):
             pass
+    # V6
+    global v6_announced
+    v6_announced = bool(data.get("v6_announced", False))
+    for u, v in data.get("user_xp", {}).items():
+        user_xp[int(u)] = int(v)
+    for c, m in data.get("user_messages", {}).items():
+        user_messages[int(c)] = {int(u): int(cnt) for u, cnt in m.items()}
+    for u, v in data.get("daily_cooldown", {}).items():
+        daily_cooldown[int(u)] = str(v)
+    for u, v in data.get("user_achievements", {}).items():
+        user_achievements[int(u)] = list(v)
+    for c, v in data.get("mod_logs", {}).items():
+        mod_logs[int(c)] = list(v)
+    for c, v in data.get("reports_db", {}).items():
+        reports_db[int(c)] = list(v)
+    for u, v in data.get("referrals", {}).items():
+        referrals[int(u)] = int(v)
+    for u, v in data.get("referral_counts", {}).items():
+        referral_counts[int(u)] = int(v)
+    for c, v in data.get("raid_mode", {}).items():
+        raid_mode[int(c)] = bool(v)
+    for c, v in data.get("antispam_mode", {}).items():
+        antispam_mode[int(c)] = bool(v)
+    for u, v in data.get("games_played", {}).items():
+        _games_played[int(u)] = int(v)
+    for u, v in data.get("games_won", {}).items():
+        _games_won[int(u)] = int(v)
+    for u, v in data.get("bonus_weekly_cd", {}).items():
+        bonus_weekly_cd[int(u)] = str(v)
 
 
 if __name__ == "__main__":

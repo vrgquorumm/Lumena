@@ -375,5 +375,19 @@
   "team_alchemy_runs": {},
   "save_update_sent": false,
   "pending_notifications": [],
-  "marriage_proposals": []
+  "marriage_proposals": [],
+  "user_xp": {},
+  "user_messages": {},
+  "daily_cooldown": {},
+  "user_achievements": {},
+  "mod_logs": {},
+  "reports_db": {},
+  "referrals": {},
+  "referral_counts": {},
+  "raid_mode": {},
+  "antispam_mode": {},
+  "games_played": {},
+  "games_won": {},
+  "v6_announced": true,
+  "bonus_weekly_cd": {}
 }
