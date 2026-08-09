@@ -37,8 +37,8 @@ const COMMAND_CATEGORIES = [
       { cmd: "/balance",  desc: "Переглянути баланс LMN" },
       { cmd: "/work",     desc: "Попрацювати та заробити LMN (кд 1 год)" },
       { cmd: "/fish",     desc: "Порибалити за LMN (кд 2 год)" },
-      { cmd: "/casino",   desc: "Поставити LMN у казино" },
-      { cmd: "/slots",    desc: "Зіграти в слоти" },
+      { cmd: "/casino",   desc: "Казино тільки в особистому чаті з ботом" },
+      { cmd: "/slots",    desc: "Слоти тільки в особистому чаті з ботом" },
       { cmd: "/rob",      desc: "Пограбувати учасника (ризик)" },
       { cmd: "/give",     desc: "Подарувати LMN іншому" },
       { cmd: "/richest",  desc: "Топ багатіїв чату" },
@@ -323,7 +323,7 @@ export default function Home() {
             <FeatureCard 
               icon={<Coins className="text-accent" />}
               title="Економіка"
-              description="Заробляй LMN, працюй, рибаль, грай у казино або грабуй. Кожні 6 годин — грошовий дощ у чаті."
+              description="Заробляй LMN, працюй, рибаль або грабуй у спільноті. Казино та слоти доступні тільки в особистому чаті з ботом."
               commands={['/balance', '/work', '/casino', '/rob']}
             />
             <FeatureCard 

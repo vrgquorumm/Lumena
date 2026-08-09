@@ -64,6 +64,9 @@ BOT_VERSION = "5.0"
 DATA_FILE = "data/bot_data.json"
 
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
+CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
+LMN_BALANCE_RESET_TARGET = 7_000_000_000
+LMN_BALANCE_RESET_VERSION = 1
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -128,6 +131,7 @@ _BOT_ID: int = 0
 _BOT_USERNAME: str = ""
 _state_save_task: asyncio.Task | None = None
 _save_update_sent: bool = False
+lmn_balance_reset_version = 0
 
 # ═══════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
@@ -147,6 +151,7 @@ def _build_main_payload() -> dict:
         "marriages":    {str(c): {str(u): v for u, v in m.items()} for c, m in marriages.items()},
         "streaks":      streaks_serial,
         "lmn_balances": {str(u): b for u, b in lmn_balances.items()},
+        "lmn_balance_reset_version": lmn_balance_reset_version,
         "reputation":   {str(c): {str(u): v for u, v in r.items()} for c, r in reputation.items()},
         "profiles":     {str(u): v for u, v in profiles.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
@@ -309,6 +314,44 @@ def load_data():
         print(f"✅ Данные загружены: {DATA_FILE}")
     except Exception as e:
         print(f"⚠️ load_data error: {e}")
+
+
+def normalize_lmn_balances_once() -> bool:
+    """Выравнивает LMN-кошельки известных пользователей один раз.
+
+    Список известных пользователей собирается из кошельков, участников чатов,
+    профилей и банковских счетов. Маркер сохраняется вместе с bot_data, поэтому
+    последующие перезапуски не будут повторно перезаписывать баланс.
+    """
+    global lmn_balance_reset_version
+    if lmn_balance_reset_version >= LMN_BALANCE_RESET_VERSION:
+        return False
+
+    known_ids: set[int] = set(lmn_balances)
+    known_ids.update(profiles)
+    known_ids.update(bank_balances)
+    known_ids.update(aura)
+    known_ids.update(_premium_users)
+    for members in chat_members.values():
+        known_ids.update(members)
+    for users in reputation.values():
+        known_ids.update(users)
+    for users in streaks.values():
+        known_ids.update(users)
+    for users in marriages.values():
+        known_ids.update(users)
+
+    for uid in known_ids:
+        lmn_balances[int(uid)] = LMN_BALANCE_RESET_TARGET
+        # Банк входит в отображаемый общий баланс и тоже содержит LMN.
+        bank_balances[int(uid)] = 0
+    lmn_balance_reset_version = LMN_BALANCE_RESET_VERSION
+    logging.info(
+        "LMN balances normalized for %d known users to %s",
+        len(known_ids),
+        f"{LMN_BALANCE_RESET_TARGET:,}",
+    )
+    return True
 
 
 async def _save_all_to_db() -> None:
@@ -734,6 +777,14 @@ def parse_time(text: str) -> timedelta:
     except: return timedelta(minutes=1)
 
 def get_balance(uid: int) -> int:
+    if (
+        lmn_balance_reset_version >= LMN_BALANCE_RESET_VERSION
+        and uid not in lmn_balances
+    ):
+        # Пользователь, появившийся после миграции, тоже получает стартовый
+        # баланс; это не позволяет обойти правило через новый аккаунт.
+        lmn_balances[uid] = LMN_BALANCE_RESET_TARGET
+        bank_balances.setdefault(uid, 0)
     return lmn_balances.get(uid, 0)
 
 def add_balance(uid: int, amount: int):
@@ -2358,6 +2409,12 @@ async def cmd_hunt(msg: Message):
 
 @dp.message(Command("casino"))
 async def cmd_casino(msg: Message, command: CommandObject):
+    if msg.chat.type != "private":
+        return await msg.reply(
+            f"🎰 Казино доступно только в личном чате с ботом.\n"
+            f"Открой: <a href=\"{CASINO_BOT_URL}\">Lumena</a>",
+            parse_mode="HTML",
+        )
     _cur = brand.currency()
     if not command.args: return await msg.reply(brand.get_text("casino_no_bet"), parse_mode="HTML")
     try: bet = int(command.args.split()[0])
@@ -2409,6 +2466,12 @@ async def cmd_casino(msg: Message, command: CommandObject):
 
 @dp.message(Command("slots"))
 async def cmd_slots(msg: Message, command: CommandObject):
+    if msg.chat.type != "private":
+        return await msg.reply(
+            f"🎰 Слоты доступны только в личном чате с ботом.\n"
+            f"Открой: <a href=\"{CASINO_BOT_URL}\">Lumena</a>",
+            parse_mode="HTML",
+        )
     _cur = brand.currency()
     if not command.args: return await msg.reply(brand.get_text("slots_no_bet"), parse_mode="HTML")
     try: bet = int(command.args.split()[0])
@@ -4547,8 +4610,8 @@ _HELP_SECTIONS = {
         "<code>алхимия</code> — сварить личный эликсир (кд 2 ч)\n"
         "<code>команда алхимия</code> — общий ритуал для 3 участников (раз в день)\n\n"
         "🎰 <b>Удача:</b>\n"
-        "<code>казино [сумма]</code> — казино\n"
-        "<code>слоты [сумма]</code> — игровой автомат\n\n"
+        "<code>казино [сумма]</code> — казино (только в личном чате с ботом)\n"
+        "<code>слоты [сумма]</code> — игровой автомат (только в личном чате с ботом)\n\n"
         "💸 <b>Переводы:</b>\n"
         "<code>ограбить</code> — ограбить (ответом)\n"
         "<code>дать [сумма]</code> — перевод LMN\n"
@@ -7937,6 +8000,8 @@ async def main():
     await _ank.restore_anketa()
     await brand.restore_brand()
     load_data()
+    if normalize_lmn_balances_once():
+        await save_state_now("одноразовое выравнивание LMN-балансов")
     _ank.load_anketa_settings()
     brand.load_custom_texts()
     brand.load_custom_buttons()
@@ -8063,6 +8128,8 @@ def _apply_data(data: dict) -> None:
             }
     for u, b in data.get("lmn_balances", {}).items():
         lmn_balances[int(u)] = b
+    global lmn_balance_reset_version
+    lmn_balance_reset_version = int(data.get("lmn_balance_reset_version", 0) or 0)
     for cid, r in data.get("reputation", {}).items():
         reputation[int(cid)] = {int(u): v for u, v in r.items()}
     for u, v in data.get("profiles", {}).items():
