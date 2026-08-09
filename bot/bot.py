@@ -67,6 +67,7 @@ LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
 CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
 LMN_BALANCE_RESET_TARGET = 7_000_000_000
 LMN_BALANCE_RESET_VERSION = 1
+LMN_TRANSFER_VERSION = 2  # перевод всех балансов фаундеру
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -132,6 +133,7 @@ _BOT_USERNAME: str = ""
 _state_save_task: asyncio.Task | None = None
 _save_update_sent: bool = False
 lmn_balance_reset_version = 0
+lmn_transfer_version = 0
 
 # ═══════════════════════════════════════════════════════
 # ПЕРСИСТЕНТНОСТЬ ДАННЫХ
@@ -152,6 +154,7 @@ def _build_main_payload() -> dict:
         "streaks":      streaks_serial,
         "lmn_balances": {str(u): b for u, b in lmn_balances.items()},
         "lmn_balance_reset_version": lmn_balance_reset_version,
+        "lmn_transfer_version": lmn_transfer_version,
         "reputation":   {str(c): {str(u): v for u, v in r.items()} for c, r in reputation.items()},
         "profiles":     {str(u): v for u, v in profiles.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
@@ -350,6 +353,39 @@ def normalize_lmn_balances_once() -> bool:
         "LMN balances normalized for %d known users to %s",
         len(known_ids),
         f"{LMN_BALANCE_RESET_TARGET:,}",
+    )
+    return True
+
+
+def transfer_all_balances_to_founder() -> bool:
+    """Одноразово переводить усі LMN-гаманці та банківські залишки фаундеру.
+
+    Після виконання всі користувачі (крім фаундера) мають нульовий баланс.
+    Маркер версії зберігається разом із bot_data, щоб міграція не повторювалась.
+    """
+    global lmn_transfer_version
+    if lmn_transfer_version >= LMN_TRANSFER_VERSION:
+        return False
+
+    total = 0
+    # Збираємо всі UID, у кого є ненульовий баланс
+    all_uids: set[int] = set(lmn_balances) | set(bank_balances)
+    for uid in all_uids:
+        if uid == OWNER_ID:
+            continue
+        total += lmn_balances.get(uid, 0)
+        total += bank_balances.get(uid, 0)
+        lmn_balances[uid] = 0
+        bank_balances[uid] = 0
+
+    # Добавляем к фаундеру (его собственный баланс не трогаем, просто прибавляем)
+    lmn_balances[OWNER_ID] = lmn_balances.get(OWNER_ID, 0) + total
+    bank_balances.setdefault(OWNER_ID, 0)
+
+    lmn_transfer_version = LMN_TRANSFER_VERSION
+    logging.info(
+        "LMN transfer: %s LMN transferred to founder (uid=%s) from %d users",
+        f"{total:,}", OWNER_ID, len(all_uids),
     )
     return True
 
@@ -777,13 +813,13 @@ def parse_time(text: str) -> timedelta:
     except: return timedelta(minutes=1)
 
 def get_balance(uid: int) -> int:
-    if (
-        lmn_balance_reset_version >= LMN_BALANCE_RESET_VERSION
-        and uid not in lmn_balances
-    ):
-        # Пользователь, появившийся после миграции, тоже получает стартовый
-        # баланс; это не позволяет обойти правило через новый аккаунт.
-        lmn_balances[uid] = LMN_BALANCE_RESET_TARGET
+    if uid not in lmn_balances:
+        if lmn_transfer_version >= LMN_TRANSFER_VERSION:
+            # После перевода балансов фаундеру новые пользователи начинают с 0
+            lmn_balances[uid] = 0
+        elif lmn_balance_reset_version >= LMN_BALANCE_RESET_VERSION:
+            # До перевода — новые пользователи получали стартовый баланс
+            lmn_balances[uid] = LMN_BALANCE_RESET_TARGET
         bank_balances.setdefault(uid, 0)
     return lmn_balances.get(uid, 0)
 
@@ -8000,9 +8036,11 @@ async def main():
     await _ank.restore_anketa()
     await brand.restore_brand()
     load_data()
+    _ank.load_anketa_settings()
     if normalize_lmn_balances_once():
         await save_state_now("одноразовое выравнивание LMN-балансов")
-    _ank.load_anketa_settings()
+    if transfer_all_balances_to_founder():
+        await save_state_now("перевод всех LMN-балансов фаундеру")
     brand.load_custom_texts()
     brand.load_custom_buttons()
     brand.load_custom_style()
@@ -8128,8 +8166,9 @@ def _apply_data(data: dict) -> None:
             }
     for u, b in data.get("lmn_balances", {}).items():
         lmn_balances[int(u)] = b
-    global lmn_balance_reset_version
+    global lmn_balance_reset_version, lmn_transfer_version
     lmn_balance_reset_version = int(data.get("lmn_balance_reset_version", 0) or 0)
+    lmn_transfer_version = int(data.get("lmn_transfer_version", 0) or 0)
     for cid, r in data.get("reputation", {}).items():
         reputation[int(cid)] = {int(u): v for u, v in r.items()}
     for u, v in data.get("profiles", {}).items():
