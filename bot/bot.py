@@ -196,6 +196,15 @@ def _build_main_payload() -> dict:
         },
         "save_update_sent": _save_update_sent,
         "pending_notifications": list(pending_notifications),
+        "marriage_proposals": [
+            {
+                "chat_id":      k[0],
+                "target_id":    k[1],
+                "proposer_id":  v["proposer_id"],
+                "proposer_full": v["proposer_full"],
+            }
+            for k, v in marriage_proposals.items()
+        ],
     }
 
 
@@ -1759,17 +1768,35 @@ async def cmd_marry(msg: Message):
         return await msg.reply("Ты уже в браке! Сначала разведись: развод")
     if is_married(chat_id, target.id):
         return await msg.reply(f"{target.full_name} уже состоит в браке 💔")
+    # Блокируем повторное предложение от того же пропоузера
+    already_sent = any(
+        v["proposer_id"] == proposer.id
+        for (cid, _), v in marriage_proposals.items()
+        if cid == chat_id
+    )
+    if already_sent:
+        return await msg.reply("Ты уже сделал(а) предложение — дождись ответа 💍")
+    # Блокируем повторное предложение тому же таргету
+    if (chat_id, target.id) in marriage_proposals:
+        existing = marriage_proposals[(chat_id, target.id)]
+        return await msg.reply(
+            f"У <b>{html.escape(target.full_name)}</b> уже есть ожидающее предложение "
+            f"от <b>{html.escape(existing['proposer_full'])}</b> 💔",
+            parse_mode="HTML",
+        )
     marriage_proposals[(chat_id, target.id)] = {
         "proposer_id": proposer.id,
         "proposer_full": proposer.full_name,
     }
+    schedule_state_save("новое предложение брака")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="💍 Принять", callback_data=f"mar_y_{proposer.id}"),
         InlineKeyboardButton(text="❌ Отказать", callback_data=f"mar_n_{proposer.id}"),
     ]])
     await msg.reply(
-        f"💍 <b>{proposer.full_name}</b> делает предложение <b>{target.full_name}</b>!\n\n"
-        f"{target.full_name}, ты принимаешь предложение?",
+        f"💍 <b>{html.escape(proposer.full_name)}</b> делает предложение "
+        f"<b>{html.escape(target.full_name)}</b>!\n\n"
+        f"{html.escape(target.full_name)}, ты принимаешь предложение?",
         parse_mode="HTML", reply_markup=kb
     )
 
@@ -1850,6 +1877,7 @@ async def marry_callback(cb: CallbackQuery):
         await cb.answer("Это предложение не для тебя 😄", show_alert=True)
         return
     del marriage_proposals[(chat_id, target_id)]
+    schedule_state_save("ответ на предложение брака")
     _marry_accept = [
         "💍 Совет да любовь!", "❤️ Они вместе!", "🎊 Это случилось!",
         "💕 Новая пара в чате!", "🥂 Совет да любовь!",
@@ -1865,13 +1893,13 @@ async def marry_callback(cb: CallbackQuery):
         marriages[cid][target_id] = proposer_id
         add_balance(proposer_id, 500)
         add_balance(target_id, 500)
-        save_data()
+        await save_state_now("принятие предложения брака")
         header = random.choice(_marry_accept)
         marry_text = (
             f"{brand.hdr()}\n\n"
             f"{header}\n\n"
-            f"💕 <b>{proposal['proposer_full']}</b>\n"
-            f"❤️ <b>{cb.from_user.full_name}</b>\n\n"
+            f"💕 <b>{html.escape(proposal['proposer_full'])}</b>\n"
+            f"❤️ <b>{html.escape(cb.from_user.full_name)}</b>\n\n"
             f"🎊 +500 LMN каждому в подарок!\n\n"
             f"{brand.div()}"
         )
@@ -1886,9 +1914,9 @@ async def marry_callback(cb: CallbackQuery):
     else:
         header = random.choice(_marry_reject)
         reject_lines = [
-            f"<b>{cb.from_user.full_name}</b> отказал(а) <b>{proposal['proposer_full']}</b>",
-            f"<b>{proposal['proposer_full']}</b> получил(а) отказ от <b>{cb.from_user.full_name}</b>",
-            f"<b>{cb.from_user.full_name}</b> не готов(а)... <b>{proposal['proposer_full']}</b> ждёт",
+            f"<b>{html.escape(cb.from_user.full_name)}</b> отказал(а) <b>{html.escape(proposal['proposer_full'])}</b>",
+            f"<b>{html.escape(proposal['proposer_full'])}</b> получил(а) отказ от <b>{html.escape(cb.from_user.full_name)}</b>",
+            f"<b>{html.escape(cb.from_user.full_name)}</b> не готов(а)... <b>{html.escape(proposal['proposer_full'])}</b> ждёт",
         ]
         await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
@@ -2005,34 +2033,67 @@ async def cmd_divorce(msg: Message):
 
 @dp.message(Command("marriages"))
 async def cmd_marriages(msg: Message):
-    chat_marriages = marriages.get(econ_cid(msg.chat.id), {})
-    valid = {u: p for u, p in chat_marriages.items() if p in chat_marriages}
-    if not valid:
-        return await msg.reply("💍 В этом чате пока нет браков")
-    seen = set()
+    import html as _html
+    cid_raw = msg.chat.id
+    cid_can = econ_cid(cid_raw)
+
+    # Мержим браки из обоих ключей (canonical + raw) чтобы не потерять legacy-данные
+    merged: dict = {}
+    merged.update(marriages.get(cid_can, {}))
+    if cid_raw != cid_can:
+        merged.update(marriages.get(cid_raw, {}))
+
+    # Уникальные подтверждённые пары (оба направления должны присутствовать)
+    seen_pairs: set = set()
     pairs = []
-    for u1, u2 in valid.items():
-        if u1 in seen or u2 in seen: continue
-        seen.add(u1); seen.add(u2)
-        pairs.append((u1, u2))
-    if not pairs:
-        return await msg.reply("💍 В этом чате пока нет браков")
-    lines = [
-        f"{brand.hdr()}\n",
-        f"💍 Браки чата  ({len(pairs)} пар)",
-        f"{brand.div()}",
+    for u1, u2 in merged.items():
+        if merged.get(u2) == u1:          # двустороннее — значит подтверждён
+            pair = frozenset([u1, u2])
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                pairs.append((u1, u2))
+
+    # Ожидающие предложения в этом чате
+    pending = [
+        (v["proposer_id"], tid, v["proposer_full"])
+        for (cid, tid), v in marriage_proposals.items()
+        if cid == cid_raw
     ]
-    for i, (u1, u2) in enumerate(pairs, 1):
-        n1, n2 = f"ID {u1}", f"ID {u2}"
-        try:
-            m1 = await bot.get_chat_member(msg.chat.id, u1)
-            n1 = m1.user.full_name
-        except: pass
-        try:
-            m2 = await bot.get_chat_member(msg.chat.id, u2)
-            n2 = m2.user.full_name
-        except: pass
-        lines.append(f"{i}. 💕 <b>{n1}</b> ❤️ <b>{n2}</b>")
+
+    if not pairs and not pending:
+        return await msg.reply("💍 В этом чате пока нет браков")
+
+    lines = [f"{brand.hdr()}\n"]
+
+    if pairs:
+        lines.append(f"💍 Браки чата  ({len(pairs)} пар)")
+        lines.append(brand.div())
+        for i, (u1, u2) in enumerate(pairs, 1):
+            n1, n2 = f"ID {u1}", f"ID {u2}"
+            try:
+                m1 = await bot.get_chat_member(msg.chat.id, u1)
+                n1 = m1.user.full_name
+            except: pass
+            try:
+                m2 = await bot.get_chat_member(msg.chat.id, u2)
+                n2 = m2.user.full_name
+            except: pass
+            lines.append(f"{i}. 💕 <b>{_html.escape(n1)}</b> ❤️ <b>{_html.escape(n2)}</b>")
+
+    if pending:
+        if pairs:
+            lines.append("")
+        lines.append("⏳ Ожидают ответа:")
+        for prop_id, tgt_id, prop_name in pending:
+            tgt_name = f"ID {tgt_id}"
+            try:
+                tm = await bot.get_chat_member(msg.chat.id, tgt_id)
+                tgt_name = tm.user.full_name
+            except: pass
+            lines.append(
+                f"  💌 <b>{_html.escape(prop_name)}</b> → <b>{_html.escape(tgt_name)}</b>"
+            )
+
     lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
@@ -4221,83 +4282,99 @@ async def cmd_settitle(msg: Message, command: CommandObject = None):
 
 async def cmd_botstats(msg: Message):
     import html as _html
-    cid = msg.chat.id
+
+    def _unique_marriages(*marr_dicts) -> int:
+        """Уникальные пары без дублей A↔B / B↔A."""
+        pairs: set = set()
+        for d in marr_dicts:
+            for uid, pid in d.items():
+                pairs.add(frozenset([uid, pid]))
+        return len(pairs)
+
+    def _best_streaks_per_user(*streak_dicts) -> dict:
+        """По каждому uid берём максимальный streak из нескольких чатов."""
+        result: dict = {}
+        for d in streak_dicts:
+            for uid, sd in d.items():
+                if uid not in result or sd.get("count", 0) > result[uid].get("count", 0):
+                    result[uid] = sd
+        return result
+
+    cid      = msg.chat.id
     is_group = msg.chat.type in ("group", "supergroup")
 
     if is_group:
-        # ── Реальна кількість учасників через Telegram API ───
+        # Кількість учасників через Telegram API
         try:
             tg_member_count = await bot.get_chat_member_count(cid)
         except Exception:
             tg_member_count = None
 
-        # ── Canonical чат (адмін-чат та публічний шерять базу)
+        # Canonical: мод-чат і паблік шерять базу
         canonical = _ECON_CANONICAL.get(cid, cid)
 
-        # Об'єднуємо uid-сети обох чатів для статистики балансів
-        uid_set_cid       = set(chat_members.get(cid, {}).keys())
-        uid_set_canonical = set(chat_members.get(canonical, {}).keys())
-        all_uid_set       = uid_set_cid | uid_set_canonical
+        # Уникальные участники из обоих чатов (без дублей)
+        members_cid = chat_members.get(cid, {})
+        members_can = chat_members.get(canonical, {}) if canonical != cid else {}
+        all_uid_set = set(members_cid) | set(members_can)
 
-        # Кількість відомих учасників (fallback якщо API недоступний)
-        known_users = len(all_uid_set)
-        if tg_member_count is not None:
-            member_display = tg_member_count
-        else:
-            member_display = known_users
+        member_display = tg_member_count if tg_member_count is not None else len(all_uid_set)
 
-        # Шлюби: об'єднуємо обидва чати
-        marr_cid  = marriages.get(cid, {})
-        marr_can  = marriages.get(canonical, {}) if canonical != cid else {}
-        merged_marr = {**marr_can, **marr_cid}
-        total_marriages = len(merged_marr) // 2
+        # Браки — уникальные пары из обоих чатов, без задвоения
+        total_marriages = _unique_marriages(
+            marriages.get(cid, {}),
+            marriages.get(canonical, {}) if canonical != cid else {},
+        )
 
-        # Стріки
-        str_cid = streaks.get(cid, {})
-        str_can = streaks.get(canonical, {}) if canonical != cid else {}
-        merged_str = {**str_can, **str_cid}
+        # Стрики — по uid берём максимальный (не задваиваем одного человека)
+        merged_str  = _best_streaks_per_user(
+            streaks.get(canonical, {}) if canonical != cid else {},
+            streaks.get(cid, {}),
+        )
         total_streaks = sum(1 for d in merged_str.values() if d.get("count", 0) > 0)
         best_streak   = max((d.get("count", 0) for d in merged_str.values()), default=0)
 
-        # Попередження
-        total_warns = (
-            sum(warnings_db.get(cid, {}).values())
-            + (sum(warnings_db.get(canonical, {}).values()) if canonical != cid else 0)
+        # Предупреждения — по uid берём максимум из обоих чатов
+        warns_merged: dict = {}
+        for w in (warnings_db.get(cid, {}),
+                  warnings_db.get(canonical, {}) if canonical != cid else {}):
+            for uid, cnt in w.items():
+                warns_merged[uid] = max(warns_merged.get(uid, 0), cnt)
+        total_warns = sum(warns_merged.values())
+
+        # LMN: гаманець + банк для всех участников
+        total_balance = sum(
+            lmn_balances.get(uid, 0) + bank_balances.get(uid, 0)
+            for uid in all_uid_set
         )
 
-        # Баланс учасників чату
-        total_balance = sum(lmn_balances.get(uid, 0) for uid in all_uid_set)
-
-        # Хто найбагатший
+        # Топ по сумме (гаманець + банк)
         rich_in_chat = sorted(
-            [(lmn_balances.get(uid, 0), uid) for uid in all_uid_set],
+            [(lmn_balances.get(uid, 0) + bank_balances.get(uid, 0), uid)
+             for uid in all_uid_set],
             reverse=True,
         )
         richest_line = ""
         if rich_in_chat and rich_in_chat[0][0] > 0:
             top_bal, top_uid = rich_in_chat[0]
-            top_name = (
-                chat_members.get(cid, {}).get(top_uid)
-                or chat_members.get(canonical, {}).get(top_uid)
-                or f"id{top_uid}"
-            )
+            top_name = members_cid.get(top_uid) or members_can.get(top_uid) or f"id{top_uid}"
             richest_line = (
-                f"\n👑 Топ гаманець: <b>{_html.escape(str(top_name))}</b> "
-                f"· {fmt_lmn(top_bal)}"
+                f"\n👑 Топ баланс: <b>{_html.escape(str(top_name))}</b>"
+                f" · {fmt_lmn(top_bal)} LMN"
             )
 
         chat_title = _html.escape(msg.chat.title or "чат")
-        scope_hdr  = f"📊 Статистика · {chat_title}"
 
         await msg.reply(
             f"{brand.hdr()}\n\n"
-            f"{scope_hdr}\n\n"
+            f"📊 Статистика · {chat_title}\n\n"
             f"👥 Учасників: <b>{member_display}</b>\n"
             f"💍 Шлюбів: <b>{total_marriages}</b>\n"
             f"🔥 Активних стріків: <b>{total_streaks}</b>\n"
             f"🏆 Рекорд стріку: <b>{best_streak} дн.</b>\n"
             f"⚠️ Попереджень: <b>{total_warns}</b>\n"
             f"💰 LMN в обороті: <b>{fmt_lmn(total_balance)}</b>"
+            f" <i>(гаманець + банк)</i>"
             f"{richest_line}\n\n"
             f"{brand.div()}\n"
             f"🤖 v{BOT_VERSION}",
@@ -4305,19 +4382,32 @@ async def cmd_botstats(msg: Message):
         )
 
     else:
-        # ── Приватний чат → глобальна статистика ─────────────
-        total_users     = len({uid for m in chat_members.values() for uid in m})
-        total_marriages = sum(len(v) // 2 for v in marriages.values())
-        total_streaks   = sum(
-            1 for users in streaks.values()
-            for d in users.values() if d.get("count", 0) > 0
+        # Приватний чат → глобальна статистика
+
+        # Уникальные юзеры по всем чатам
+        total_users = len({uid for m in chat_members.values() for uid in m})
+
+        # Браки — уникальные пары без дублей по всем чатам
+        total_marriages = _unique_marriages(*marriages.values()) if marriages else 0
+
+        # Стрики — максимальный per-user по всем чатам
+        all_streaks   = _best_streaks_per_user(*streaks.values()) if streaks else {}
+        total_streaks = sum(1 for d in all_streaks.values() if d.get("count", 0) > 0)
+        best_streak   = max((d.get("count", 0) for d in all_streaks.values()), default=0)
+
+        # Предупреждения — максимум по uid
+        warns_all: dict = {}
+        for w in warnings_db.values():
+            for uid, cnt in w.items():
+                warns_all[uid] = max(warns_all.get(uid, 0), cnt)
+        total_warns = sum(warns_all.values())
+
+        # LMN: гаманець + банк всех известных пользователей
+        all_known     = set(lmn_balances) | set(bank_balances)
+        total_balance = sum(
+            lmn_balances.get(uid, 0) + bank_balances.get(uid, 0)
+            for uid in all_known
         )
-        best_streak  = max(
-            (d.get("count", 0) for users in streaks.values() for d in users.values()),
-            default=0
-        )
-        total_warns   = sum(sum(v.values()) for v in warnings_db.values())
-        total_balance = sum(lmn_balances.values())
 
         await msg.reply(
             f"{brand.hdr()}\n\n"
@@ -4327,7 +4417,8 @@ async def cmd_botstats(msg: Message):
             f"🔥 Активних стріків: <b>{total_streaks}</b>\n"
             f"🏆 Рекорд стріку: <b>{best_streak} дн.</b>\n"
             f"⚠️ Попереджень: <b>{total_warns}</b>\n"
-            f"💰 LMN в обороті: <b>{fmt_lmn(total_balance)}</b>\n\n"
+            f"💰 LMN в обороті: <b>{fmt_lmn(total_balance)}</b>"
+            f" <i>(гаманець + банк)</i>\n\n"
             f"{brand.div()}\n"
             f"🤖 v{BOT_VERSION}",
             parse_mode="HTML",
@@ -8353,6 +8444,15 @@ def _apply_data(data: dict) -> None:
     _save_update_sent = bool(data.get("save_update_sent", False))
     global pending_notifications
     pending_notifications = list(data.get("pending_notifications", []))
+    for _p in data.get("marriage_proposals", []):
+        try:
+            _key = (int(_p["chat_id"]), int(_p["target_id"]))
+            marriage_proposals[_key] = {
+                "proposer_id":  int(_p["proposer_id"]),
+                "proposer_full": str(_p.get("proposer_full", "")),
+            }
+        except (KeyError, TypeError, ValueError):
+            pass
 
 
 if __name__ == "__main__":
