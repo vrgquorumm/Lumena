@@ -103,6 +103,7 @@ _active_rain: dict = {}
 _last_rain_time: float = 0.0
 
 _link_guard:       dict[int, bool]        = {}
+pending_notifications: list[dict] = []  # [{chat_id, text, parse_mode}] — одноразовые сообщения при старте
 _link_guard_warns: dict[int, dict]        = {}
 _link_whitelist:   dict[int, list[str]]   = {}
 _premium_users:  set = set()
@@ -194,6 +195,7 @@ def _build_main_payload() -> dict:
             for cid, run in team_alchemy_runs.items()
         },
         "save_update_sent": _save_update_sent,
+        "pending_notifications": list(pending_notifications),
     }
 
 
@@ -1837,6 +1839,12 @@ async def marry_callback(cb: CallbackQuery):
     proposer_id = int(parts[2])
     chat_id = cb.message.chat.id
     target_id = cb.from_user.id
+
+    # Предложивший не может сам принять/отклонить своё предложение
+    if cb.from_user.id == proposer_id:
+        await cb.answer("Ты сделал(а) предложение — дождись ответа 💍", show_alert=True)
+        return
+
     proposal = marriage_proposals.get((chat_id, target_id))
     if not proposal or proposal["proposer_id"] != proposer_id:
         await cb.answer("Это предложение не для тебя 😄", show_alert=True)
@@ -1890,6 +1898,67 @@ async def marry_callback(cb: CallbackQuery):
             parse_mode="HTML"
         )
     await cb.answer()
+
+@dp.message(Command("fordivorce", "развестифаундер"))
+async def cmd_fordivorce(msg: Message, command: CommandObject = None):
+    """Фаундер разводит двух людей: ответ на сообщение одного + ID второго в аргументе,
+    или только ответ — если они женаты между собой."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер")
+    if msg.chat.type == "private":
+        return await msg.reply("💔 Команда работает в групповом чате.")
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply("ℹ️ Ответь на сообщение одного из участников пары.")
+
+    first = msg.reply_to_message.from_user
+    cid = econ_cid(msg.chat.id)
+
+    # Если второй аргумент не указан — ищем партнёра первого
+    args_text = (command.args or "").strip() if command else ""
+    if args_text:
+        try:
+            second_id = int(args_text.split()[0])
+            second_member = await bot.get_chat_member(msg.chat.id, second_id)
+            second = second_member.user
+        except Exception:
+            return await msg.reply("❌ Не удалось найти второго участника по ID.")
+    else:
+        partner_id = get_partner(msg.chat.id, first.id)
+        if not partner_id:
+            return await msg.reply(f"💍 {first.full_name} не состоит в браке.")
+        try:
+            pm = await bot.get_chat_member(msg.chat.id, partner_id)
+            second = pm.user
+        except Exception:
+            second = None
+            second_id = partner_id
+
+    second_id = second.id if second else partner_id
+    second_name = second.full_name if second else f"ID {second_id}"
+
+    # Удаляем запись из обоих направлений
+    marriages.setdefault(cid, {})
+    marriages[cid].pop(first.id, None)
+    marriages[cid].pop(second_id, None)
+    save_data()
+
+    divorce_text = (
+        f"{brand.hdr()}\n\n"
+        f"✂️ <b>Фаундер разрезал ваши узы</b>\n\n"
+        f"<b>{html.escape(first.full_name)}</b> и <b>{html.escape(second_name)}</b> "
+        f"больше не женаты.\n\n"
+        f"<i>Судьба идёт своим путём 🌙</i>\n\n"
+        f"{brand.div()}"
+    )
+    await msg.reply(divorce_text, parse_mode="HTML")
+
+    pub_chat = _ank.get_pub_chat()
+    if pub_chat and pub_chat != msg.chat.id:
+        try:
+            await bot.send_message(pub_chat, divorce_text, parse_mode="HTML")
+        except Exception:
+            pass
+
 
 @dp.message(Command("divorce"))
 async def cmd_divorce(msg: Message):
@@ -8071,6 +8140,22 @@ async def main():
         await save_state_now("одноразовое выравнивание LMN-балансов")
     if transfer_all_balances_to_founder():
         await save_state_now("перевод всех LMN-балансов фаундеру")
+
+    # ── Одноразовые уведомления (например, развод фаундером) ─────────────────
+    if pending_notifications:
+        to_send = list(pending_notifications)
+        pending_notifications.clear()
+        await save_state_now("отправка отложенных уведомлений")
+        for _notif in to_send:
+            try:
+                await bot.send_message(
+                    chat_id    = _notif["chat_id"],
+                    text       = _notif["text"],
+                    parse_mode = _notif.get("parse_mode", "HTML"),
+                )
+            except Exception as _ex:
+                logging.warning("pending_notification send failed: %s", _ex)
+
     brand.load_custom_texts()
     brand.load_custom_buttons()
     brand.load_custom_style()
@@ -8266,6 +8351,8 @@ def _apply_data(data: dict) -> None:
             logging.warning("⚠️ Некорректный командный ритуал для chat=%s пропущен", cid)
     global _save_update_sent
     _save_update_sent = bool(data.get("save_update_sent", False))
+    global pending_notifications
+    pending_notifications = list(data.get("pending_notifications", []))
 
 
 if __name__ == "__main__":
