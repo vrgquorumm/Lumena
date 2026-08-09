@@ -4141,11 +4141,13 @@ async def cmd_profile(msg: Message):
 async def cmd_setbio(msg: Message, command: CommandObject = None):
     if not (command and command.args): return await msg.reply("Использование: сетбио [текст]")
     profiles.setdefault(msg.from_user.id, {})["bio"] = command.args[:100]
+    schedule_state_save("обновление bio")
     await msg.reply("✅ Bio обновлено!")
 
 async def cmd_settitle(msg: Message, command: CommandObject = None):
     if not (command and command.args): return await msg.reply("Использование: сетзвание [звание]")
     profiles.setdefault(msg.from_user.id, {})["title"] = command.args[:30]
+    schedule_state_save("обновление звания")
     await msg.reply("✅ Звание установлено!")
 
 async def cmd_botstats(msg: Message):
@@ -6381,6 +6383,7 @@ def _editor_main_menu_kb() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🎨 Оформление", callback_data="editor:style"),
+            InlineKeyboardButton(text="ℹ️ О проекте",  callback_data="editor:info_project"),
         ],
     ])
 
@@ -6627,6 +6630,33 @@ async def cb_editor_menu(cb: CallbackQuery):
         "🎨 <b>Оформление</b> — заголовок, разделитель, буллеты",
         parse_mode="HTML",
         reply_markup=_editor_main_menu_kb(),
+    )
+    await cb.answer()
+
+
+@dp.callback_query(F.data == "editor:info_project")
+async def cb_editor_info_project(cb: CallbackQuery):
+    """Прямой переход к редактированию текста «О проекте» из главного меню."""
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    uid = cb.from_user.id
+    _edit_sessions[uid] = "info_project"
+    ct = brand.get_custom_text("info_project")
+    current_note = (
+        f"Текущий текст:\n<blockquote>{html.escape(ct[0])}</blockquote>"
+        if ct else "Сейчас: <i>стандартный текст /info</i>"
+    )
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="◀️ Назад в меню", callback_data="editor:menu"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
+    ]])
+    await cb.message.edit_text(
+        "ℹ️ <b>Описание проекта (/info)</b>\n\n"
+        f"{current_note}\n\n"
+        "Отправь новый текст — форматирование и Premium Emoji сохранятся.\n"
+        "Изменение сразу увидят все участники.",
+        parse_mode="HTML",
+        reply_markup=back_kb,
     )
     await cb.answer()
 
@@ -8165,7 +8195,10 @@ def _apply_data(data: dict) -> None:
                 "last": date.fromisoformat(d["last"]) if d.get("last") else None,
             }
     for u, b in data.get("lmn_balances", {}).items():
-        lmn_balances[int(u)] = b
+        try:
+            lmn_balances[int(u)] = int(b)
+        except (TypeError, ValueError):
+            lmn_balances[int(u)] = 0
     global lmn_balance_reset_version, lmn_transfer_version
     lmn_balance_reset_version = int(data.get("lmn_balance_reset_version", 0) or 0)
     lmn_transfer_version = int(data.get("lmn_transfer_version", 0) or 0)
@@ -8231,6 +8264,8 @@ def _apply_data(data: dict) -> None:
             }
         except (AttributeError, TypeError, ValueError):
             logging.warning("⚠️ Некорректный командный ритуал для chat=%s пропущен", cid)
+    global _save_update_sent
+    _save_update_sent = bool(data.get("save_update_sent", False))
 
 
 if __name__ == "__main__":
