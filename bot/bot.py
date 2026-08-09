@@ -83,6 +83,10 @@ work_cooldown = {}
 fish_cooldown = {}
 rob_cooldown = {}
 hunt_cooldown = {}
+alchemy_cooldown = {}
+# {canonical_chat_id: {"date": "YYYY-MM-DD", "participants": {uid: name},
+#                       "completed": bool}}
+team_alchemy_runs = {}
 bank_balances = {}        # {user_id: int} — гроші в банку (захищені від /rob)
 bank_withdraw_cd = {}     # {user_id: datetime} — кулдаун виведення з банку
 chat_rules = {}
@@ -167,6 +171,19 @@ def _build_main_payload() -> dict:
         },
         "hunt_cooldown": {
             str(u): value.isoformat() for u, value in hunt_cooldown.items()
+        },
+        "alchemy_cooldown": {
+            str(u): value.isoformat() for u, value in alchemy_cooldown.items()
+        },
+        "team_alchemy_runs": {
+            str(cid): {
+                "date": run.get("date"),
+                "participants": {
+                    str(uid): name for uid, name in run.get("participants", {}).items()
+                },
+                "completed": bool(run.get("completed", False)),
+            }
+            for cid, run in team_alchemy_runs.items()
         },
         "save_update_sent": _save_update_sent,
     }
@@ -2108,6 +2125,127 @@ async def cmd_work(msg: Message):
         earned=fmt_lmn(earned),
         balance=fmt_lmn(new_bal),
     )
+
+
+@dp.message(Command("alchemy", "алхимия"))
+async def cmd_alchemy(msg: Message):
+    """Личная алхимия: превращает найденные реагенты в LMN с кулдауном."""
+    uid = msg.from_user.id
+    now = now_kyiv()
+    last = alchemy_cooldown.get(uid)
+    cooldown_minutes = 120
+    if last and (now - last).total_seconds() < cooldown_minutes * 60:
+        mins = cooldown_minutes - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"⚗️ <b>Алхимическая лаборатория ещё работает</b>\n\n"
+            f"Следующая варка будет доступна через <b>{max(1, mins)} мин</b>.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    alchemy_cooldown[uid] = now
+    recipes = [
+        ("🌙", "Лунный эликсир", "собрал(а) росу с ночных цветов", 650, 1150),
+        ("🔥", "Искра феникса", "усмирил(а) жаркое пламя в тигле", 800, 1450),
+        ("💎", "Кристалл удачи", "очистил(а) редкий кристалл от примесей", 950, 1750),
+        ("🌿", "Зелёный катализатор", "вырастил(а) живой катализатор", 500, 1000),
+        ("⚡", "Грозовой раствор", "поймал(а) молнию в алхимическую колбу", 1100, 2100),
+    ]
+    icon, recipe, action, earn_min, earn_max = random.choice(recipes)
+    earned = random.randint(earn_min, earn_max)
+    add_balance(uid, earned)
+    save_data()
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"⚗️ <b>LMN Алхимия</b>\n\n"
+        f"{icon} <b>{recipe}</b>\n"
+        f"<i>Ты {action} и получил(а) чистый результат.</i>\n\n"
+        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+        f"⏳ Следующая варка через <b>2 ч</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("teamalchemy", "команднаяалхимия", "командаалхимия"))
+async def cmd_team_alchemy(msg: Message):
+    """Командная алхимия: три разных участника вместе завершают ритуал."""
+    if msg.chat.type == "private":
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "🧪 <b>Команда Алхимия работает только в групповом чате.</b>\n"
+            "Позови друзей в общий чат и запусти ритуал там.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    uid = msg.from_user.id
+    cid = econ_cid(msg.chat.id)
+    today = today_kyiv().isoformat()
+    run = team_alchemy_runs.get(cid)
+    if not run or run.get("date") != today:
+        run = {"date": today, "participants": {}, "completed": False}
+        team_alchemy_runs[cid] = run
+
+    participants = run.setdefault("participants", {})
+    if run.get("completed"):
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "🧪 <b>Сегодняшний командный эликсир уже готов!</b>\n\n"
+            "Новая команда алхимиков сможет начать ритуал завтра.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    if uid in participants:
+        waiting = max(0, 3 - len(participants))
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "🧪 Ты уже добавил(а) свой ингредиент в общий котёл.\n\n"
+            f"Участников: <b>{len(participants)}/3</b>\n"
+            f"Нужно ещё: <b>{waiting}</b> разных участника(ов).\n"
+            "Пусть следующий алхимик напишет <code>команда алхимия</code>.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    participants[uid] = msg.from_user.full_name
+    contribution = random.randint(220, 420)
+    add_balance(uid, contribution)
+    participant_names = list(participants.values())
+    if len(participants) < 3:
+        save_data()
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "🧪 <b>Команда Алхимия — ингредиент принят!</b>\n\n"
+            f"👤 Алхимиков в ритуале: <b>{len(participants)}/3</b>\n"
+            f"💰 За вклад: <b>+{fmt_lmn(contribution)} LMN</b>\n"
+            f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+            "Позови ещё "
+            f"<b>{3 - len(participants)}</b> разных участника(ов), чтобы завершить эликсир.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    completion_reward = random.randint(900, 1600)
+    run["completed"] = True
+    for participant_id in participants:
+        add_balance(participant_id, completion_reward)
+    save_data()
+    names = ", ".join(html.escape(name) for name in participant_names)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        "🧪 <b>Команда Алхимия завершена!</b>\n\n"
+        f"✨ {names} объединили ингредиенты и создали общий эликсир.\n\n"
+        f"🏆 Командная награда: <b>+{fmt_lmn(completion_reward)} LMN</b> каждому\n"
+        f"💰 Твой вклад: <b>+{fmt_lmn(contribution)} LMN</b>\n"
+        f"💵 Твой баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+        "Новый ритуал откроется завтра.\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
 
 @dp.message(Command("fish"))
 async def cmd_fish(msg: Message):
@@ -4406,6 +4544,8 @@ _HELP_SECTIONS = {
         "<code>баланс</code> — кошелёк\n"
         "<code>работа</code> — заработать (кд 1 ч)\n"
         "<code>рыбалка</code> — рыбачить за LMN (кд 30 мин)\n\n"
+        "<code>алхимия</code> — сварить личный эликсир (кд 2 ч)\n"
+        "<code>команда алхимия</code> — общий ритуал для 3 участников (раз в день)\n\n"
         "🎰 <b>Удача:</b>\n"
         "<code>казино [сумма]</code> — казино\n"
         "<code>слоты [сумма]</code> — игровой автомат\n\n"
@@ -4732,6 +4872,11 @@ TEXT_COMMANDS.update({
     "ферма": _farm_soon, "фарм": _farm_soon, "farm": _farm_soon,
     "магазин": _shop_soon, "крамниця": _shop_soon, "shop": _shop_soon,
     "інвентар": _inventory_soon, "инвентарь": _inventory_soon, "inv": _inventory_soon,
+    # Алхимия
+    "алхимия": cmd_alchemy,
+    "командная алхимия": cmd_team_alchemy,
+    "команда алхимия": cmd_team_alchemy,
+    "teamalchemy": cmd_team_alchemy,
 })
 
 # Slash-команды только для функций БЕЗ @dp.message(Command(...)) декоратора
@@ -4779,6 +4924,8 @@ for slash_name, func in [
     ("брак", cmd_marry), ("развод", cmd_divorce), ("браки", cmd_marriages),
     ("гороскоп", cmd_horoscope),
     ("баланс", cmd_balance), ("работа", cmd_work), ("рыбалка", cmd_fish), ("hunt", cmd_hunt),
+     ("алхимия", cmd_alchemy), ("teamalchemy", cmd_team_alchemy),
+     ("команднаяалхимия", cmd_team_alchemy), ("командаалхимия", cmd_team_alchemy),
     ("казино", cmd_casino), ("слоты", cmd_slots), ("ограбить", cmd_rob),
     ("дать", cmd_give),
     ("чекин", cmd_checkin), ("стрик", cmd_streak),
@@ -7961,6 +8108,23 @@ def _apply_data(data: dict) -> None:
             hunt_cooldown[int(u)] = datetime.fromisoformat(value)
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown охоти для user=%s пропущено", u)
+    for u, value in data.get("alchemy_cooldown", {}).items():
+        try:
+            alchemy_cooldown[int(u)] = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            logging.warning("⚠️ Некоректний cooldown алхимии для user=%s пропущено", u)
+    for cid, run in data.get("team_alchemy_runs", {}).items():
+        try:
+            team_alchemy_runs[int(cid)] = {
+                "date": str(run.get("date", "")),
+                "participants": {
+                    int(uid): str(name)
+                    for uid, name in run.get("participants", {}).items()
+                },
+                "completed": bool(run.get("completed", False)),
+            }
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректный командный ритуал для chat=%s пропущен", cid)
 
 
 if __name__ == "__main__":
