@@ -5042,7 +5042,6 @@ TEXT_COMMANDS.update({
     "размут": cmd_unmute, "разбан": cmd_unban, "кик": cmd_kick,
     "варн": cmd_warn, "снятьварн": cmd_unwarn, "очистить": cmd_purge,
     "ро": cmd_ro, "закрепить": cmd_pin, "открепить": cmd_unpin,
-    "название": cmd_title,
     # Стрики
     "чекин": cmd_checkin, "стрик": cmd_streak,
     "топстриков": cmd_topstreak, "топ стриков": cmd_topstreak,
