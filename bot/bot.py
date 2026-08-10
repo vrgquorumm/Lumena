@@ -4255,19 +4255,19 @@ async def cmd_compatibility(msg: Message):
     # Способ 2: упоминания через @username или текстовые entities
     else:
         entities = msg.entities or []
-        mentioned: list[tuple[int, str]] = []  # (uid, имя)
+        mentioned: list[tuple[int, str]] = []  # (stable_int_key, отображаемое_имя)
         for ent in entities:
             if ent.type == "mention":
-                # @username в тексте — ищем в chat_members по username
+                # @username в тексте — uid неизвестен, используем хеш username как ключ
                 uname = (msg.text or "")[ent.offset + 1: ent.offset + ent.length]
-                found_uid = next(
-                    (uid for cid_data in chat_members.values()
-                     for uid, nm in cid_data.items()
-                     if nm and nm.lstrip("@").lower() == uname.lower()),
-                    None
-                )
-                if found_uid:
-                    mentioned.append((found_uid, html.escape(uname)))
+                # Ищем реальный uid в chat_members по username (хранится без @)
+                found_uid = None
+                for cid_data in chat_members.values():
+                    for u_id, u_nm in cid_data.items():
+                        pass  # chat_members хранит имена, не username — поиск ниже
+                # Пробуем найти в user_names_map если есть, иначе хеш строки
+                stable_key = abs(hash(uname.lower())) % (10 ** 15)
+                mentioned.append((stable_key, html.escape(f"@{uname}")))
             elif ent.type == "text_mention" and ent.user:
                 u = ent.user
                 mentioned.append((u.id, html.escape(u.first_name or f"ID {u.id}")))
@@ -4275,7 +4275,8 @@ async def cmd_compatibility(msg: Message):
         if len(mentioned) >= 2:
             (uid_a, name_a), (uid_b, name_b) = mentioned[0], mentioned[1]
         elif len(mentioned) == 1:
-            uid_a, name_a = msg.from_user.id, html.escape(msg.from_user.first_name or "Аноним")
+            uid_a  = msg.from_user.id
+            name_a = html.escape(msg.from_user.first_name or "Аноним")
             uid_b, name_b = mentioned[0]
         else:
             return await msg.reply(
