@@ -563,12 +563,12 @@ async def _save_all_to_db() -> None:
 
 
 async def auto_save_loop():
-    """Автозбереження кожні 30 сек.
+    """Автозбереження кожні 10 сек.
     save_data() пише лише на диск.
     _save_all_to_db() — єдина точка запису в PostgreSQL / GitHub.
     """
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(10)
         save_data()
         try:
             await _save_all_to_db()
@@ -6830,7 +6830,10 @@ class PropagandaMiddleware(BaseMiddleware):
             chat_members.setdefault(_cid_mw, {})[_uid_mw] = event.from_user.full_name
             # V6: XP + счётчик сообщений
             user_messages.setdefault(_cid_mw, {})
-            user_messages[_cid_mw][_uid_mw] = user_messages[_cid_mw].get(_uid_mw, 0) + 1
+            _new_cnt = user_messages[_cid_mw].get(_uid_mw, 0) + 1
+            user_messages[_cid_mw][_uid_mw] = _new_cnt
+            if _new_cnt % 5 == 0:          # Сохраняем каждые 5 сообщений
+                schedule_state_save("повідомлення")
             if "first_message" not in user_achievements.get(_uid_mw, []):
                 user_achievements.setdefault(_uid_mw, []).append("first_message")
             award_xp(_uid_mw, random.randint(1, 5))

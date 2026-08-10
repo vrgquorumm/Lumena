@@ -377,11 +377,11 @@
   "pending_notifications": [],
   "marriage_proposals": [],
   "user_xp": {
-    "8655306548": 12
+    "8655306548": 17
   },
   "user_messages": {
     "-1004401287309": {
-      "8655306548": 4
+      "8655306548": 6
     }
   },
   "daily_cooldown": {},
@@ -401,5 +401,6 @@
   "games_played": {},
   "games_won": {},
   "v6_announced": true,
-  "bonus_weekly_cd": {}
+  "bonus_weekly_cd": {},
+  "daily_games": {}
 }
