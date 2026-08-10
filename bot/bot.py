@@ -4233,6 +4233,128 @@ async def cmd_serenade(msg: Message):
     serenades = [f"🎵 {msg.from_user.first_name} поёт для {target}:\n«Ты как звезда в ночи — светла и недосягаема...»",f"🎶 {msg.from_user.first_name} поёт серенаду для {target}:\n«В этом мире нет красивее тебя, и глаза твои — как небо в январе...»"]
     await msg.reply(random.choice(serenades))
 
+
+async def cmd_compatibility(msg: Message):
+    """Совместимость двух людей. Работает двумя способами:
+    1. Ответом на сообщение → проверяет тебя и автора сообщения
+    2. совместимость @user1 @user2 → проверяет двух упомянутых
+    """
+    import hashlib
+
+    uid_a: int | None = None
+    uid_b: int | None = None
+    name_a = name_b = None
+
+    # Способ 1: ответ на сообщение
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        uid_a  = msg.from_user.id
+        uid_b  = msg.reply_to_message.from_user.id
+        name_a = html.escape(msg.from_user.first_name or "Аноним")
+        name_b = html.escape(msg.reply_to_message.from_user.first_name or "Аноним")
+
+    # Способ 2: упоминания через @username или текстовые entities
+    else:
+        entities = msg.entities or []
+        mentioned: list[tuple[int, str]] = []  # (uid, имя)
+        for ent in entities:
+            if ent.type == "mention":
+                # @username в тексте — ищем в chat_members по username
+                uname = (msg.text or "")[ent.offset + 1: ent.offset + ent.length]
+                found_uid = next(
+                    (uid for cid_data in chat_members.values()
+                     for uid, nm in cid_data.items()
+                     if nm and nm.lstrip("@").lower() == uname.lower()),
+                    None
+                )
+                if found_uid:
+                    mentioned.append((found_uid, html.escape(uname)))
+            elif ent.type == "text_mention" and ent.user:
+                u = ent.user
+                mentioned.append((u.id, html.escape(u.first_name or f"ID {u.id}")))
+
+        if len(mentioned) >= 2:
+            (uid_a, name_a), (uid_b, name_b) = mentioned[0], mentioned[1]
+        elif len(mentioned) == 1:
+            uid_a, name_a = msg.from_user.id, html.escape(msg.from_user.first_name or "Аноним")
+            uid_b, name_b = mentioned[0]
+        else:
+            return await msg.reply(
+                f"💞 <b>Совместимость</b>\n\n"
+                f"Как использовать:\n"
+                f"• Ответь на сообщение человека\n"
+                f"• <code>совместимость @user1 @user2</code>",
+                parse_mode="HTML"
+            )
+
+    if uid_a == uid_b:
+        return await msg.reply("🪞 Ты проверяешь совместимость сам с собой... 100% нарцисс 😄")
+
+    # Стабильный результат: хеш пары (порядок не важен)
+    pair_key = "_".join(str(u) for u in sorted([uid_a, uid_b]))
+    seed = int(hashlib.md5(pair_key.encode()).hexdigest(), 16)
+    rng  = random.Random(seed)
+
+    # Генерируем 5 категорий
+    cats = [
+        ("❤️", "Романтика"),
+        ("🤝", "Дружба"),
+        ("🔥", "Химия"),
+        ("🧠", "Понимание"),
+        ("⚡", "Энергия"),
+    ]
+    scores = [rng.randint(30, 100) for _ in cats]
+    total  = round(sum(scores) / len(scores))
+
+    # Итоговый вердикт
+    if   total >= 90: verdict = "Идеальная пара — судьба! 💞"
+    elif total >= 75: verdict = "Очень высокая совместимость 🔥"
+    elif total >= 60: verdict = "Хорошая совместимость 💫"
+    elif total >= 45: verdict = "Есть потенциал, нужно время 🌱"
+    elif total >= 30: verdict = "Противоположности... может и притянутся? 🤔"
+    else:             verdict = "Сложное сочетание 💀"
+
+    # Полоска общего результата
+    filled  = total // 10
+    bar     = "💗" * filled + "🖤" * (10 - filled)
+
+    # Строки по категориям
+    cat_lines = []
+    for icon, label in cats:
+        v = rng.randint(30, 100)  # не используем scores, т.к. rng уже сдвинут — пересчитаем
+    # Сброс rng и честный пересчёт
+    rng2 = random.Random(seed)
+    cat_scores = [rng2.randint(30, 100) for _ in cats]
+    total2 = round(sum(cat_scores) / len(cat_scores))
+    # (используем total2 вместо total для точности)
+    filled2 = total2 // 10
+    bar2    = "💗" * filled2 + "🖤" * (10 - filled2)
+
+    cat_lines = []
+    for (icon, label), sc in zip(cats, cat_scores):
+        mini = "▓" * (sc // 20) + "░" * (5 - sc // 20)
+        cat_lines.append(f"{icon} {label}: {mini} <b>{sc}%</b>")
+
+    if   total2 >= 90: verdict = "Идеальная пара — судьба! 💞"
+    elif total2 >= 75: verdict = "Очень высокая совместимость 🔥"
+    elif total2 >= 60: verdict = "Хорошая совместимость 💫"
+    elif total2 >= 45: verdict = "Есть потенциал, нужно время 🌱"
+    elif total2 >= 30: verdict = "Противоположности... может и притянутся? 🤔"
+    else:              verdict = "Сложное сочетание 💀"
+
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💞 <b>Совместимость</b>\n\n"
+        f"{brand.div()}\n"
+        f"👤 <b>{name_a}</b>\n"
+        f"💕\n"
+        f"👤 <b>{name_b}</b>\n\n"
+        f"{bar2}  <b>{total2}%</b>\n\n"
+        f"{chr(10).join(cat_lines)}\n\n"
+        f"✨ {verdict}\n"
+        f"{brand.div()}",
+        parse_mode="HTML"
+    )
+
 # ═══════════════════════════════════════════════════════
 # ИНФОРМАЦИЯ
 # ═══════════════════════════════════════════════════════
@@ -6621,6 +6743,7 @@ TEXT_COMMANDS.update({
     "списокбраков": cmd_marriages, "список браков": cmd_marriages, "браки": cmd_marriages,
     # Отношения
     "корабль": cmd_ship, "шип": cmd_ship,
+    "совместимость": cmd_compatibility, "compatibility": cmd_compatibility,
     "любовь": cmd_love, "дружба": cmd_friend,
     "пара": cmd_couple,
     # Социальные
