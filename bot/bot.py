@@ -149,7 +149,9 @@ referrals:         dict[int, int]  = {}   # uid → referrer_uid
 referral_counts:   dict[int, int]  = {}   # uid → кол-во приглашённых
 raid_mode:         dict[int, bool] = {}   # chat_id → bool
 antispam_mode:     dict[int, bool] = {}   # chat_id → bool
-antispam_tracker:  dict[int, dict] = {}   # chat_id → {uid: {text,count,last_ts}}
+antispam_tracker:  dict[int, dict] = {}   # chat_id → {uid: {hash,count,ts}}
+rep_votes:         dict[tuple, int] = {}  # (chat_id,voter_uid,target_uid) → +1/-1
+report_cooldown:   dict[tuple, str] = {}  # (chat_id,from_uid,target_uid) → ISO date
 _games_played:     dict[int, int]  = {}   # uid → кол-во игр
 _games_won:        dict[int, int]  = {}   # uid → кол-во побед
 v6_announced:      bool            = False
@@ -3454,12 +3456,21 @@ async def cmd_upvote(msg: Message):
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
     target = msg.reply_to_message.from_user
     if target.id == msg.from_user.id: return await msg.reply("Себе нельзя 😄")
-    add_rep(msg.chat.id, target.id, 1)
+    vote_key = (msg.chat.id, msg.from_user.id, target.id)
+    prev = rep_votes.get(vote_key)
+    if prev == 1:
+        return await msg.reply("⚠️ Ты уже поднял репутацию этому пользователю сегодня")
+    delta = 2 if prev == -1 else 1   # отменяем старый минус + добавляем плюс
+    if prev == -1:
+        add_rep(msg.chat.id, target.id, 2)
+    else:
+        add_rep(msg.chat.id, target.id, 1)
+    rep_votes[vote_key] = 1
     total = get_rep(msg.chat.id, target.id)
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"⬆️ +1 репутация\n\n"
-        f"👤 <b>{target.full_name}</b>\n"
+        f"⬆️ +1 репутация{' (голос изменён)' if prev == -1 else ''}\n\n"
+        f"👤 <b>{html.escape(target.full_name)}</b>\n"
         f"📊 Итого: <b>{total:+d}</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML")
@@ -3469,12 +3480,20 @@ async def cmd_downvote(msg: Message):
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
     target = msg.reply_to_message.from_user
     if target.id == msg.from_user.id: return await msg.reply("Себе нельзя 😄")
-    add_rep(msg.chat.id, target.id, -1)
+    vote_key = (msg.chat.id, msg.from_user.id, target.id)
+    prev = rep_votes.get(vote_key)
+    if prev == -1:
+        return await msg.reply("⚠️ Ты уже опустил репутацию этому пользователю сегодня")
+    if prev == 1:
+        add_rep(msg.chat.id, target.id, -2)
+    else:
+        add_rep(msg.chat.id, target.id, -1)
+    rep_votes[vote_key] = -1
     total = get_rep(msg.chat.id, target.id)
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"⬇️ -1 репутация\n\n"
-        f"👤 <b>{target.full_name}</b>\n"
+        f"⬇️ -1 репутация{' (голос изменён)' if prev == 1 else ''}\n\n"
+        f"👤 <b>{html.escape(target.full_name)}</b>\n"
         f"📊 Итого: <b>{total:+d}</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML")
@@ -6264,10 +6283,23 @@ async def cmd_report(msg: Message, command: CommandObject = None):
     if not msg.reply_to_message or not msg.reply_to_message.from_user:
         return await msg.reply("Ответь на сообщение: <b>жалоба [причина]</b>", parse_mode="HTML")
     target = msg.reply_to_message.from_user
+    # Нельзя жаловаться на себя или бота
+    if target.id == msg.from_user.id:
+        return await msg.reply("❌ Нельзя пожаловаться на самого себя")
+    if target.is_bot:
+        return await msg.reply("❌ Нельзя жаловаться на бота")
+    if target.id == OWNER_ID:
+        return await msg.reply("❌ Нельзя жаловаться на фаундера")
+    # Дедупликация: один пользователь → одна жалоба на одну цель в день
+    rc_key = (msg.chat.id, msg.from_user.id, target.id)
+    today_iso = today_kyiv().isoformat()
+    if report_cooldown.get(rc_key) == today_iso:
+        return await msg.reply("⚠️ Ты уже жаловался на этого пользователя сегодня")
+    report_cooldown[rc_key] = today_iso
     reason = (command.args or "Не указана").strip() if command else "Не указана"
     cid    = msg.chat.id
     reports_db.setdefault(cid, []).append({
-        "report_id":   uuid.uuid4().hex[:8],  # стабильный ID для кнопок
+        "report_id":   uuid.uuid4().hex,  # полный UUID — нет коллизий
         "from_uid":    msg.from_user.id,
         "target_uid":  target.id,
         "from_name":   msg.from_user.full_name,
@@ -6331,10 +6363,17 @@ async def cmd_reports_list(msg: Message):
 async def cb_report_action(cb: CallbackQuery):
     if not (is_owner(cb) or has_role(cb.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
         return await cb.answer("⛔ Только для администраторов", show_alert=True)
-    parts  = cb.data.split(":")
+    parts = cb.data.split(":")
+    if len(parts) < 4:
+        return await cb.answer("⛔ Некорректный callback", show_alert=True)
     action = parts[1]
-    cid    = int(parts[2])
-    rid    = parts[3]  # неизменяемый report_id
+    if action not in ("close", "mute", "ban"):
+        return await cb.answer("⛔ Неизвестное действие", show_alert=True)
+    try:
+        cid = int(parts[2])
+    except (ValueError, IndexError):
+        return await cb.answer("⛔ Некорректный чат", show_alert=True)
+    rid = parts[3]  # неизменяемый report_id
 
     # Верификация: чат колбэка должен совпадать с чатом в данных
     if cb.message.chat.id != cid:
@@ -6352,6 +6391,11 @@ async def cb_report_action(cb: CallbackQuery):
 
     # target_uid всегда берётся из жалобы на сервере, а не из колбэка
     target_uid = report.get("target_uid", 0)
+    if not target_uid:
+        return await cb.answer("⛔ Цель жалобы не найдена", show_alert=True)
+    # Нельзя применить действие к фаундеру через жалобу
+    if target_uid == OWNER_ID:
+        return await cb.answer("⛔ Нельзя применить действие к фаундеру", show_alert=True)
 
     if action == "close":
         report["status"]    = "closed"
@@ -7627,21 +7671,36 @@ class PropagandaMiddleware(BaseMiddleware):
             # Антиспам
             if antispam_mode.get(_cid_mw) and event.text:
                 import time as _t
-                _txt = (event.text or "")[:80]
-                _asp = antispam_tracker.setdefault(_cid_mw, {})
-                _usr = _asp.setdefault(_uid_mw, {"text": "", "count": 0, "ts": 0.0})
-                _now_ts = _t.time()
-                if _txt == _usr["text"] and _now_ts - _usr["ts"] < 30:
-                    _usr["count"] += 1
-                    if _usr["count"] >= 3:
-                        try:
-                            await event.delete()
-                        except Exception:
-                            pass
-                        _asp[_uid_mw] = {"text": "", "count": 0, "ts": 0.0}
-                        return  # Спам удалён — дальше не обрабатываем
-                else:
-                    _asp[_uid_mw] = {"text": _txt, "count": 1, "ts": _now_ts}
+                import hashlib as _hl
+                # Пропускаем команды и пользователей с ролями/админов
+                _is_cmd = (event.text or "").startswith("/")
+                _has_role = has_role(_uid_mw, "lead_admin", "co_admin", "admin", "moderator")
+                if not _is_cmd and not _has_role and _uid_mw != OWNER_ID:
+                    # Нормализованный хэш всего текста (не обрезаем — иначе обходится)
+                    _norm = " ".join((event.text or "").lower().split())
+                    _txt_hash = _hl.md5(_norm.encode()).hexdigest()
+                    _asp = antispam_tracker.setdefault(_cid_mw, {})
+                    # TTL-cleanup: удаляем записи старше 60 секунд для экономии памяти
+                    _now_ts = _t.time()
+                    _stale = [u for u, v in _asp.items() if _now_ts - v.get("ts", 0) > 60]
+                    for _su in _stale:
+                        _asp.pop(_su, None)
+                    _usr = _asp.setdefault(_uid_mw, {"hash": "", "count": 0, "ts": 0.0})
+                    if _txt_hash == _usr["hash"] and _now_ts - _usr["ts"] < 30:
+                        _usr["count"] += 1
+                        if _usr["count"] >= 3:
+                            _deleted = False
+                            try:
+                                await event.delete()
+                                _deleted = True
+                            except Exception:
+                                pass
+                            if _deleted:
+                                # Сбрасываем счётчик только при успешном удалении
+                                _asp[_uid_mw] = {"hash": "", "count": 0, "ts": 0.0}
+                                return  # Спам удалён — дальше не обрабатываем
+                    else:
+                        _asp[_uid_mw] = {"hash": _txt_hash, "count": 1, "ts": _now_ts}
 
         if isinstance(event, Message):
             # Антилинк — до пропаганды, чтобы оба не мешали друг другу
@@ -8979,6 +9038,8 @@ def _is_reply_edit(m) -> bool:
 @dp.message(F.func(_is_reply_edit))
 async def cmd_reply_edit(msg: Message):
     """Фаундер ответил на сообщение бота словом «изменить» → начать редактирование."""
+    if not is_owner(msg):
+        return  # тихо игнорируем
     rm = msg.reply_to_message
 
     # Пытаемся найти ключ по трекингу (работает только если бот не перезапускался)
@@ -9069,6 +9130,8 @@ TEXT_COMMANDS.update({
                    and (m.text or "").strip().lower().lstrip("/") in ("изменить", "edit")
                    and not m.reply_to_message))
 async def cmd_editor_ru(msg: Message):
+    if not is_owner(msg):
+        return  # тихо игнорируем — не показываем ошибку
     await _send_editor_menu(msg)
 
 
@@ -10554,15 +10617,26 @@ async def on_new_chat_member(msg: Message):
 
         # V6: рейд-мод — мутируем новых участников на 10 минут
         if raid_mode.get(msg.chat.id):
-            try:
-                until = datetime.now(UTC) + timedelta(minutes=10)
-                await bot.restrict_chat_member(
-                    msg.chat.id, user.id,
-                    ChatPermissions(can_send_messages=False),
-                    until_date=until,
-                )
-            except Exception:
-                pass
+            # Не мутируем фаундера и Telegram-администраторов чата
+            _skip_raid = user.id == OWNER_ID
+            if not _skip_raid:
+                try:
+                    _cm = await bot.get_chat_member(msg.chat.id, user.id)
+                    if _cm.status in ("creator", "administrator"):
+                        _skip_raid = True
+                except Exception:
+                    pass
+            if not _skip_raid:
+                try:
+                    until = datetime.now(UTC) + timedelta(minutes=10)
+                    await bot.restrict_chat_member(
+                        msg.chat.id, user.id,
+                        ChatPermissions(can_send_messages=False),
+                        until_date=until,
+                    )
+                    _log_mod(msg.chat.id, "raid_mute", user.id, 0)
+                except Exception as _re:
+                    pass
 
         # ── Текст кнопки (кастомный или дефолтный) ───────
         btn_ct   = brand.get_custom_text("welcome_btn")
@@ -10852,7 +10926,12 @@ def _apply_data(data: dict) -> None:
         bank_balances[int(u)] = int(b)
     for u, value in data.get("bank_withdraw_cd", {}).items():
         try:
-            bank_withdraw_cd[int(u)] = datetime.fromisoformat(value)
+            _bwcd_dt = datetime.fromisoformat(value)
+            # Нормализуем к aware UTC чтобы не было TypeError при сравнении
+            if _bwcd_dt.tzinfo is None:
+                from datetime import timezone as _tz
+                _bwcd_dt = _bwcd_dt.replace(tzinfo=_tz.utc)
+            bank_withdraw_cd[int(u)] = _bwcd_dt
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown банку для user=%s пропущено", u)
     for u, value in data.get("hunt_cooldown", {}).items():
