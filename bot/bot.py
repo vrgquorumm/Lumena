@@ -80,6 +80,7 @@ warnings_db = {}
 ru_army_warns = {}
 marriages = {}
 marriage_proposals = {}
+marriage_dates: dict[str, str] = {}  # "min_uid_max_uid" → ISO date свадьбы
 streaks = {}
 lmn_balances = {}
 reputation = {}
@@ -327,6 +328,7 @@ def _build_main_payload() -> dict:
         "daily_games":       {str(u): v for u, v in daily_games.items()},
         "daily_msg_cnt":     {str(u): v for u, v in daily_msg_cnt.items()},
         "tasks_bonus_cd":    {str(u): v for u, v in tasks_bonus_cd.items()},
+        "marriage_dates":    dict(marriage_dates),
         "work_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in work_cooldown.items()},
         "fish_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in fish_cooldown.items()},
         "rob_cooldown":      {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in rob_cooldown.items()},
@@ -831,11 +833,11 @@ def role_badge(uid: int, username: str = "") -> str:
 
 
 def is_owner(msg) -> bool:
-    """Работает и для Message, и для CallbackQuery — проверяет по ID и username."""
+    """Работает и для Message, и для CallbackQuery — проверяет ТОЛЬКО по числовому ID."""
     u = getattr(msg, "from_user", None)
     if u is None:
         return False
-    return u.id == OWNER_ID or (u.username or "").lower() == OWNER_USERNAME.lower()
+    return u.id == OWNER_ID  # username может быть угнан — только ID
 
 # Пользователи, которым разрешено редактировать все тексты/кнопки бота
 _EDITOR_USERNAMES = {OWNER_USERNAME.lower(), "veroniksssxa"}
@@ -979,6 +981,20 @@ def add_rep(chat_id: int, uid: int, n: int):
 
 def is_married(chat_id: int, uid: int) -> bool:
     return uid in marriages.get(econ_cid(chat_id), {})
+
+def _marriage_days_str(uid1: int, uid2: int | None) -> str:
+    """Возвращает строку вида ' · 42 дн. вместе 💑' или ''."""
+    if not uid2:
+        return ""
+    pair_key = f"{min(uid1, uid2)}_{max(uid1, uid2)}"
+    wed_str = marriage_dates.get(pair_key)
+    if not wed_str:
+        return ""
+    try:
+        days = (today_kyiv() - date.fromisoformat(wed_str)).days
+        return f" · {days} дн. вместе 💑"
+    except Exception:
+        return ""
 
 def get_partner(chat_id: int, uid: int):
     return marriages.get(econ_cid(chat_id), {}).get(uid)
@@ -1734,6 +1750,10 @@ async def cmd_mute(msg: Message, command: CommandObject):
         "<code>!мут 7д оскорбления</code>\n"
         "<code>!мут навсегда</code>",
         parse_mode="HTML")
+    if user.id == OWNER_ID:
+        return await msg.reply("⛔ Нельзя замутить фаундера")
+    if user.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя замутить себя")
     if is_owner(msg):
         await _demote_if_needed(msg.chat.id, user.id)
     delta, reason = parse_time_and_reason(command.args or "")
@@ -1774,6 +1794,10 @@ async def cmd_ban(msg: Message, command: CommandObject):
         "<code>!бан спам</code>\n"
         "<code>!бан нарушение правил</code>",
         parse_mode="HTML")
+    if user.id == OWNER_ID:
+        return await msg.reply("⛔ Нельзя забанить фаундера")
+    if user.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя забанить себя")
     if is_super(msg):
         await _demote_if_needed(msg.chat.id, user.id)
     _, reason = parse_time_and_reason(command.args or "")
@@ -1845,6 +1869,10 @@ async def cmd_kick(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     user = await get_user(msg, command)
     if not user: return await msg.reply("ℹ️ Ответь на сообщение пользователя")
+    if user.id == OWNER_ID:
+        return await msg.reply("⛔ Нельзя кикнуть фаундера")
+    if user.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя кикнуть себя")
     _, reason = parse_time_and_reason(command.args or "")
     try:
         await bot.ban_chat_member(msg.chat.id, user.id)
@@ -1858,18 +1886,27 @@ async def cmd_warn(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
+    if user.id == OWNER_ID:
+        return await msg.reply("⛔ Нельзя предупредить фаундера")
+    if user.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя предупредить себя")
     chat_id, uid = msg.chat.id, user.id
     warnings_db.setdefault(chat_id, {})
     warnings_db[chat_id][uid] = warnings_db[chat_id].get(uid, 0) + 1
     count = warnings_db[chat_id][uid]
     _, reason = parse_time_and_reason(command.args or "")
     if count >= 3:
-        await bot.ban_chat_member(chat_id, uid)
-        _log_mod(chat_id, "ban", uid, msg.from_user.id)
-        warnings_db[chat_id][uid] = 0
-        await msg.reply(
-            mod_card("Бан 🚫 (3 варна)", user, extra="⚠️ Достигнут лимит предупреждений", reason=reason),
-            parse_mode="HTML")
+        try:
+            await bot.ban_chat_member(chat_id, uid)
+            _log_mod(chat_id, "ban", uid, msg.from_user.id)
+            warnings_db[chat_id][uid] = 0
+            await msg.reply(
+                mod_card("Бан 🚫 (3 варна)", user, extra="⚠️ Достигнут лимит предупреждений", reason=reason),
+                parse_mode="HTML")
+        except Exception as e:
+            # бан не прошёл — откатываем варн чтобы не было рассинхронизации
+            warnings_db[chat_id][uid] = max(0, count - 1)
+            await msg.reply(f"❌ Не удалось забанить: {e}")
     else:
         _log_mod(chat_id, "warn", uid, msg.from_user.id)
         await msg.reply(
@@ -1885,6 +1922,7 @@ async def cmd_unwarn(msg: Message, command: CommandObject):
     if chat_id in warnings_db and uid in warnings_db[chat_id] and warnings_db[chat_id][uid] > 0:
         warnings_db[chat_id][uid] -= 1
         remaining = warnings_db[chat_id][uid]
+        _log_mod(chat_id, "unwarn", uid, msg.from_user.id)
         await msg.reply(
             mod_card("Варн снят ✅", user, extra=f"📊 Осталось предупреждений: {remaining}/3"),
             parse_mode="HTML")
@@ -2084,6 +2122,9 @@ async def marry_callback(cb: CallbackQuery):
         marriages.setdefault(cid, {})
         marriages[cid][proposer_id] = target_id
         marriages[cid][target_id] = proposer_id
+        # Записываем дату свадьбы
+        pair_key = f"{min(proposer_id, target_id)}_{max(proposer_id, target_id)}"
+        marriage_dates[pair_key] = today_kyiv().isoformat()
         add_balance(proposer_id, 500)
         add_balance(target_id, 500)
         await save_state_now("принятие предложения брака")
@@ -2271,7 +2312,17 @@ async def cmd_marriages(msg: Message):
                 m2 = await bot.get_chat_member(msg.chat.id, u2)
                 n2 = m2.user.full_name
             except: pass
-            lines.append(f"{i}. 💕 <b>{_html.escape(n1)}</b> ❤️ <b>{_html.escape(n2)}</b>")
+            pair_key = f"{min(u1, u2)}_{max(u1, u2)}"
+            wed_date_str = marriage_dates.get(pair_key)
+            days_str = ""
+            if wed_date_str:
+                try:
+                    wed = date.fromisoformat(wed_date_str)
+                    days_together = (today_kyiv() - wed).days
+                    days_str = f" · {days_together} дн. вместе 💑"
+                except Exception:
+                    pass
+            lines.append(f"{i}. 💕 <b>{_html.escape(n1)}</b> ❤️ <b>{_html.escape(n2)}</b>{days_str}")
 
     if pending:
         if pairs:
@@ -2449,6 +2500,7 @@ async def cmd_give(msg: Message, command: CommandObject):
             parse_mode="HTML")
     add_balance(msg.from_user.id, -amount)
     add_balance(target.id, amount)
+    schedule_state_save("перевод LMN")
     await reply_t(
         msg,
         "give",
@@ -3087,30 +3139,33 @@ async def cmd_withdraw_slash(msg: Message, command: CommandObject = None):
 async def cmd_richest(msg: Message):
     _cur = brand.currency()
     empty_msg = brand.get_text("richest_empty")
-    if not lmn_balances: return await msg.reply(empty_msg, parse_mode="HTML")
-    # Фильтруем только участников текущего чата
+    # Объединяем кошельки + банк для полного богатства
+    all_uids = set(lmn_balances) | set(bank_balances)
+    if not all_uids: return await msg.reply(empty_msg, parse_mode="HTML")
     chat_uids = chat_members.get(msg.chat.id, set())
     if chat_uids:
-        filtered = {uid: bal for uid, bal in lmn_balances.items() if uid in chat_uids}
-    else:
-        filtered = lmn_balances
-    if not filtered:
+        all_uids = all_uids & chat_uids
+    if not all_uids:
         return await msg.reply(empty_msg, parse_mode="HTML")
-    top = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:10]
+    totals = {uid: lmn_balances.get(uid, 0) + bank_balances.get(uid, 0) for uid in all_uids}
+    top = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
     lines = [
         f"{brand.hdr()}\n",
         brand.get_text("richest_header"),
         f"{brand.div()}",
     ]
-    for i, (uid, bal) in enumerate(top):
+    for i, (uid, total) in enumerate(top):
         try:
             m = await bot.get_chat_member(msg.chat.id, uid)
-            name = m.user.full_name
+            name = html.escape(m.user.full_name)
         except: name = f"ID {uid}"
-        lines.append(f"{medals[i]} <b>{html.escape(name)}</b>  —  {fmt_lmn(bal)} {_cur}")
+        wallet = lmn_balances.get(uid, 0)
+        bank   = bank_balances.get(uid, 0)
+        detail = f" (🏦{fmt_lmn(bank)})" if bank > 0 else ""
+        lines.append(f"{medals[i]} <b>{name}</b>  —  {fmt_lmn(wallet)} {_cur}{detail}")
     lines.append(f"\n{brand.div()}")
-    lines.append(brand.get_text("richest_total", total=fmt_lmn(sum(filtered.values())), cur=_cur))
+    lines.append(brand.get_text("richest_total", total=fmt_lmn(sum(totals.values())), cur=_cur))
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 @dp.message(Command("givetoadmins"))
@@ -3373,7 +3428,7 @@ async def cmd_topaura(msg: Message):
     for i, (uid, pct) in enumerate(top):
         try:
             m = await bot.get_chat_member(msg.chat.id, uid)
-            name = m.user.full_name
+            name = html.escape(m.user.full_name)
         except Exception:
             name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {pct:.2f}%")
@@ -3426,7 +3481,7 @@ async def cmd_downvote(msg: Message):
 
 @dp.message(Command("toprep"))
 async def cmd_toprep(msg: Message):
-    chat_rep = reputation.get(msg.chat.id, {})
+    chat_rep = reputation.get(econ_cid(msg.chat.id), {})
     if not chat_rep: return await msg.reply("Репутация ещё не начислена")
     top = sorted(chat_rep.items(), key=lambda x: x[1], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
@@ -3438,7 +3493,7 @@ async def cmd_toprep(msg: Message):
     for i, (uid, r) in enumerate(top):
         try:
             m = await bot.get_chat_member(msg.chat.id, uid)
-            name = m.user.full_name
+            name = html.escape(m.user.full_name)
         except: name = f"ID {uid}"
         lines.append(f"{medals[i]} <b>{name}</b>  —  {r:+d}")
     lines.append(f"\n{brand.div()}")
@@ -4829,7 +4884,7 @@ async def cmd_profile(msg: Message):
     target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
     uid = target.id
     chat_id = msg.chat.id
-    streak_data = streaks.get(chat_id, {}).get(uid, {"count": 0})
+    streak_data = streaks.get(econ_cid(chat_id), {}).get(uid, {"count": 0})
     bal = get_balance(uid)
     rep_val = get_rep(chat_id, uid)
     married = is_married(chat_id, uid)
@@ -4856,7 +4911,7 @@ async def cmd_profile(msg: Message):
         f"{brand.get_text('profile_balance_label')} <b>{fmt_lmn(bal)} {_cur}</b>",
         f"{brand.get_text('profile_streak_label')} <b>{streak_data['count']} дней</b>",
         f"{brand.get_text('profile_rep_label')} <b>{rep_val:+d}</b>",
-        f"{brand.get_text('profile_marry_label')} {'❤️ ' + html.escape(partner_name) if married else brand.get_text('profile_no_partner') or '—'}",
+        f"{brand.get_text('profile_marry_label')} {('❤️ ' + html.escape(partner_name) + _marriage_days_str(uid, partner_id)) if married else (brand.get_text('profile_no_partner') or '—')}",
         f"{brand.get_text('profile_id_label')} <code>{uid}</code>",
         f"\n{brand.div()}",
     ]
@@ -6780,16 +6835,24 @@ async def cmd_announce_v7(msg: Message):
         "💰 <b>Улучшенная экономика</b>\n"
         "• Дейли показывает стрик и подсказки: <code>дейли</code>\n"
         "• Прогресс-бар стрика: <code>бонус</code>\n"
+        "• Топ богатейших теперь учитывает банк: <code>богатейшие</code>\n"
         "• Все источники наград: <code>награды</code>\n\n"
+        "💍 <b>Браки</b>\n"
+        "• Сколько дней вместе теперь видно в <code>браки</code> и профиле!\n\n"
         "🐛 <b>Исправленные баги</b>\n"
-        "• Краш: ставка теперь берётся из игры, не из кнопки\n"
+        "• Краш: ставка берётся из игры, не из кнопки\n"
         "• Краш: нельзя забрать выигрыш после краша\n"
         "• Мины: повторный клик по открытой клетке заблокирован\n"
-        "• Мины: защита от подделанных кнопок\n"
+        "• Мины: защита от подделанных индексов клеток\n"
         "• Лимбо: защита от NaN/Infinity в цели\n"
-        "• Стрик/топ стриков: правильно читают данные чата\n"
-        "• Бонус за стрик: данные сохраняются сразу после получения\n"
-        "• Кулдауны работы/рыбалки/ограбления теперь не сбрасываются при рестарте\n\n"
+        "• Стрик/топ стриков/профиль/репутация: правильно читают данные чата\n"
+        "• Перевод LMN: теперь сохраняется сразу после операции\n"
+        "• Бонус за стрик: данные сохраняются сразу\n"
+        "• Кулдауны работы/рыбалки/ограбления не сбрасываются при рестарте\n"
+        "• Мут/бан/кик/варн: нельзя применить к фаундеру или себе\n"
+        "• Варн: при неудачном бане откатывает счётчик\n"
+        "• Снятие варна теперь пишется в лог модерации\n"
+        "• Безопасность фаундера: проверка только по ID, не по username\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         "— <b>Команда Lumena</b> 💙\n"
         "#lumena #update #v7"
@@ -10862,6 +10925,8 @@ def _apply_data(data: dict) -> None:
         daily_msg_cnt[int(u)] = dict(v)
     for u, v in data.get("tasks_bonus_cd", {}).items():
         tasks_bonus_cd[int(u)] = str(v)
+    for k, v in data.get("marriage_dates", {}).items():
+        marriage_dates[str(k)] = str(v)
     # кулдауны работы/рыбалки/ограбления (datetime → сохраняем ISO-строкой)
     _tz = ZoneInfo("Europe/Kyiv")
     for u, v in data.get("work_cooldown", {}).items():
