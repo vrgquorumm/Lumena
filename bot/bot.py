@@ -154,6 +154,7 @@ _games_won:        dict[int, int]  = {}   # uid → кол-во побед
 v6_announced:      bool            = False
 bonus_weekly_cd:   dict[int, str]  = {}   # uid → "YYYY-Www" (ISO week claim)
 daily_games:       dict[int, str]  = {}   # uid → ISO date последней сыгранной игры
+daily_msg_cnt:     dict[int, dict] = {}   # uid → {"date": ISO, "count": int} — сообщения за сегодня
 _crash_games:      dict[int, dict] = {}   # uid → crash game state
 _bj_games:         dict[int, dict] = {}   # uid → blackjack state
 _mines_games:      dict[int, dict] = {}   # uid → mines state
@@ -323,6 +324,7 @@ def _build_main_payload() -> dict:
         "v6_announced":      v6_announced,
         "bonus_weekly_cd":   {str(u): v for u, v in bonus_weekly_cd.items()},
         "daily_games":       {str(u): v for u, v in daily_games.items()},
+        "daily_msg_cnt":     {str(u): v for u, v in daily_msg_cnt.items()},
     }
 
 
@@ -5061,11 +5063,13 @@ async def cmd_tasks(msg: Message):
     uid       = msg.from_user.id
     today_str = today_kyiv().isoformat()
     msgs_cnt  = sum(m.get(uid, 0) for m in user_messages.values())
-    did_daily = daily_cooldown.get(uid) == today_str
-    played    = daily_games.get(uid) == today_str   # сыграл хотя бы раз СЕГОДНЯ
+    did_daily   = daily_cooldown.get(uid) == today_str
+    played      = daily_games.get(uid) == today_str   # сыграл хотя бы раз СЕГОДНЯ
+    msgs_today  = (daily_msg_cnt.get(uid) or {}).get("count", 0) \
+                  if (daily_msg_cnt.get(uid) or {}).get("date") == today_str else 0
     streak_v  = max((streaks.get(c, {}).get(uid, {}).get("count", 0) for c in streaks), default=0)
     task_list = [
-        ("💬", "Написать 10 сообщений",   min(msgs_cnt, 10), 10, msgs_cnt >= 10),
+        ("💬", "Написать 10 сообщений",   min(msgs_today, 10), 10, msgs_today >= 10),
         ("📅", "Получить дейли",           1 if did_daily else 0, 1, did_daily),
         ("🎰", "Сыграть в игру",           1 if played else 0, 1, played),
         ("🔥", "Поддержать стрик 3+ дня",  min(streak_v, 3), 3, streak_v >= 3),
@@ -5765,81 +5769,129 @@ async def cmd_filters_list(msg: Message):
 # V6 — СТАТИСТИКА ЧАТА
 # ═══════════════════════════════════════════════════════
 async def cmd_chatstats(msg: Message):
+    if msg.chat.type == "private":
+        return await msg.reply("📊 Команда работает в групповых чатах")
     import html as _html
     cid = msg.chat.id; can = econ_cid(cid)
-    all_m = set(chat_members.get(cid,{}).keys()) | set(chat_members.get(can,{}).keys())
+    # Объединяем данные из обоих связанных чатов
+    all_members = {**chat_members.get(can, {}), **chat_members.get(cid, {})}
+    all_msgs: dict[int, int] = {}
+    for c in (cid, can):
+        for u, cnt in user_messages.get(c, {}).items():
+            all_msgs[u] = all_msgs.get(u, 0) + cnt
     try:
         tg_cnt = await bot.get_chat_member_count(cid)
     except Exception:
-        tg_cnt = len(all_m)
-    msgs_cnt  = sum(user_messages.get(cid, {}).values())
-    top_act   = sorted(user_messages.get(cid,{}).items(), key=lambda x: x[1], reverse=True)[:3]
-    marr_cnt  = len({frozenset([u,p]) for u,p in {**marriages.get(cid,{}),**marriages.get(can,{})}.items() if marriages.get(cid,{}).get(p)==u or marriages.get(can,{}).get(p)==u})
-    rich       = max(((lmn_balances.get(u,0)+bank_balances.get(u,0), u) for u in all_m), default=(0, 0))
-    rich_line  = ""
+        tg_cnt = len(all_members)
+    msgs_cnt  = sum(all_msgs.values())
+    top_act   = sorted(all_msgs.items(), key=lambda x: x[1], reverse=True)[:3]
+    marr_cnt  = len({
+        frozenset([u, p])
+        for c in (cid, can)
+        for u, p in marriages.get(c, {}).items()
+        if marriages.get(c, {}).get(p) == u
+    })
+    rich = max(((lmn_balances.get(u, 0) + bank_balances.get(u, 0), u) for u in all_members), default=(0, 0))
+    rich_line = ""
     if rich[0] > 0:
-        rn = _html.escape(chat_members.get(cid,{}).get(rich[1]) or f"ID {rich[1]}")
+        rn = _html.escape(all_members.get(rich[1]) or f"ID {rich[1]}")
         rich_line = f"\n💰 Богатейший: <b>{rn}</b> · {fmt_lmn(rich[0])}"
     top_lines = []
-    for uid, cnt in top_act:
-        nm = _html.escape(chat_members.get(cid,{}).get(uid) or f"ID {uid}")
-        top_lines.append(f"  👤 <b>{nm}</b> — {cnt} сообщ.")
+    for uid_t, cnt in top_act:
+        nm = _html.escape(all_members.get(uid_t) or f"ID {uid_t}")
+        top_lines.append(f"  👤 <b>{nm}</b> — {cnt:,} сообщ.")
     lines = [
         f"{brand.hdr()}\n\n📊 <b>Статистика · {_html.escape(msg.chat.title or 'чат')}</b>\n\n{brand.div()}",
-        f"👥 Участников: <b>{tg_cnt}</b>",
-        f"💬 Сообщений (сессия): <b>{msgs_cnt:,}</b>",
+        f"👥 Участников: <b>{tg_cnt:,}</b>",
+        f"💬 Сообщений: <b>{msgs_cnt:,}</b>",
+        f"✨ XP в чате: <b>{sum(user_xp.get(u, 0) for u in all_members):,}</b>",
         f"💍 Браков: <b>{marr_cnt}</b>",
     ]
     if top_lines:
         lines.append("\n🏆 Топ активных:")
         lines.extend(top_lines)
-    lines.append(rich_line)
+    if rich_line:
+        lines.append(rich_line)
     lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 async def cmd_online(msg: Message):
     if msg.chat.type == "private":
         return await msg.reply("Команда работает в групповых чатах")
-    cid  = msg.chat.id
-    msgs = user_messages.get(cid, {})
-    if not msgs:
+    cid = msg.chat.id; can = econ_cid(cid)
+    # Объединяем сообщения и участников из обоих чатов
+    all_members = {**chat_members.get(can, {}), **chat_members.get(cid, {})}
+    all_msgs: dict[int, int] = {}
+    for c in (cid, can):
+        for u, cnt in user_messages.get(c, {}).items():
+            all_msgs[u] = all_msgs.get(u, 0) + cnt
+    if not all_msgs:
         return await msg.reply("📊 Нет данных об активности")
-    top   = sorted(msgs.items(), key=lambda x: x[1], reverse=True)[:15]
-    lines = [f"{brand.hdr()}\n\n🟢 <b>Активные участники</b>\n\n{brand.div()}"]
-    for uid, cnt in top:
-        nm  = html.escape(chat_members.get(cid, {}).get(uid) or f"ID {uid}")
-        bar = "█" * min(cnt, 10)
-        lines.append(f"👤 <b>{nm}</b> — {cnt} сообщ. {bar}")
-    lines.append(f"\n{brand.div()}")
+    top   = sorted(all_msgs.items(), key=lambda x: x[1], reverse=True)[:15]
+    total = sum(all_msgs.values())
+    lines = [f"{brand.hdr()}\n\n📊 <b>Топ активных участников</b>\n\n{brand.div()}"]
+    medals = ["🥇", "🥈", "🥉"] + ["👤"] * 12
+    for i, (uid_t, cnt) in enumerate(top):
+        nm  = html.escape(all_members.get(uid_t) or f"ID {uid_t}")
+        pct = cnt / total * 100 if total else 0
+        bar = "█" * min(int(pct / 5), 10)
+        lines.append(f"{medals[i]} <b>{nm}</b> — {cnt:,} ({pct:.0f}%) {bar}")
+    lines.append(f"\n{brand.div()}\n💬 Всего сообщений: <b>{total:,}</b>")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 async def cmd_analytics(msg: Message):
     if msg.chat.type != "private":
-        cid   = msg.chat.id
+        cid   = msg.chat.id; can = econ_cid(cid)
         title = f"Аналитика · {html.escape(msg.chat.title or 'чат')}"
-        total_msgs = sum(user_messages.get(cid, {}).values())
+        all_members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(can, {}).keys())
+        # Только данные чата
+        chat_msgs   = sum(user_messages.get(c, {}).get(u, 0) for c in (cid, can) for u in all_members)
+        chat_xp     = sum(user_xp.get(u, 0) for u in all_members)
+        chat_ach    = sum(len(user_achievements.get(u, [])) for u in all_members)
+        chat_lmn    = sum(lmn_balances.get(u, 0) + bank_balances.get(u, 0) for u in all_members)
+        await msg.reply(
+            f"{brand.hdr()}\n\n📊 <b>{title}</b>\n\n{brand.div()}\n"
+            f"👥 Участников в базе: <b>{len(all_members):,}</b>\n"
+            f"💬 Сообщений: <b>{chat_msgs:,}</b>\n"
+            f"✨ XP участников: <b>{chat_xp:,}</b>\n"
+            f"🏆 Достижений: <b>{chat_ach}</b>\n"
+            f"💰 LMN участников: <b>{fmt_lmn(chat_lmn)}</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML"
+        )
     else:
-        title      = "Глобальная аналитика"
         total_msgs = sum(sum(m.values()) for m in user_messages.values())
-    total_xp  = sum(user_xp.values())
-    total_ach = sum(len(v) for v in user_achievements.values())
-    total_lmn = sum(lmn_balances.values()) + sum(bank_balances.values())
-    await msg.reply(
-        f"{brand.hdr()}\n\n📊 <b>{title}</b>\n\n{brand.div()}\n"
-        f"💬 Сообщений (сессия): <b>{total_msgs:,}</b>\n"
-        f"✨ XP в системе: <b>{total_xp:,}</b>\n"
-        f"🏆 Достижений: <b>{total_ach}</b>\n"
-        f"💰 LMN в обороте: <b>{fmt_lmn(total_lmn)}</b>\n\n"
-        f"{brand.div()}",
-        parse_mode="HTML"
-    )
+        total_xp   = sum(user_xp.values())
+        total_ach  = sum(len(v) for v in user_achievements.values())
+        total_lmn  = sum(lmn_balances.values()) + sum(bank_balances.values())
+        total_u    = len({u for m in chat_members.values() for u in m})
+        await msg.reply(
+            f"{brand.hdr()}\n\n📊 <b>Глобальная аналитика</b>\n\n{brand.div()}\n"
+            f"👥 Всего пользователей: <b>{total_u:,}</b>\n"
+            f"💬 Всего сообщений: <b>{total_msgs:,}</b>\n"
+            f"✨ XP в системе: <b>{total_xp:,}</b>\n"
+            f"🏆 Достижений выдано: <b>{total_ach}</b>\n"
+            f"💰 LMN в обороте: <b>{fmt_lmn(total_lmn)}</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML"
+        )
 
 async def cmd_growth(msg: Message):
-    total = len({uid for m in chat_members.values() for uid in m})
+    total_u    = len({uid for m in chat_members.values() for uid in m})
+    total_msgs = sum(sum(m.values()) for m in user_messages.values())
+    total_xp   = sum(user_xp.values())
+    total_games = sum(_games_played.values())
+    total_refs  = sum(referral_counts.values())
+    total_lmn   = sum(lmn_balances.values()) + sum(bank_balances.values())
     await msg.reply(
-        f"{brand.hdr()}\n\n📈 <b>Рост участников</b>\n\n{brand.div()}\n"
-        f"👥 Всего известных: <b>{total}</b>\n"
-        f"💬 Чатов в базе: <b>{len(chat_members)}</b>\n\n"
+        f"{brand.hdr()}\n\n📈 <b>Обзор системы</b>\n\n{brand.div()}\n"
+        f"👥 Пользователей: <b>{total_u:,}</b>\n"
+        f"💬 Чатов: <b>{len(chat_members)}</b>\n"
+        f"📨 Сообщений: <b>{total_msgs:,}</b>\n"
+        f"✨ XP в системе: <b>{total_xp:,}</b>\n"
+        f"🎮 Игр сыграно: <b>{total_games:,}</b>\n"
+        f"🔗 Рефералов: <b>{total_refs:,}</b>\n"
+        f"💰 LMN в обороте: <b>{fmt_lmn(total_lmn)}</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML"
     )
@@ -6832,6 +6884,12 @@ class PropagandaMiddleware(BaseMiddleware):
             user_messages.setdefault(_cid_mw, {})
             _new_cnt = user_messages[_cid_mw].get(_uid_mw, 0) + 1
             user_messages[_cid_mw][_uid_mw] = _new_cnt
+            # Ежедневный счётчик сообщений (для задания дня)
+            _today_mw = today_kyiv().isoformat()
+            _dmc = daily_msg_cnt.setdefault(_uid_mw, {"date": _today_mw, "count": 0})
+            if _dmc.get("date") != _today_mw:
+                _dmc["date"] = _today_mw; _dmc["count"] = 0
+            _dmc["count"] += 1
             if _new_cnt % 5 == 0:          # Сохраняем каждые 5 сообщений
                 schedule_state_save("повідомлення")
             if "first_message" not in user_achievements.get(_uid_mw, []):
@@ -10048,6 +10106,8 @@ def _apply_data(data: dict) -> None:
         bonus_weekly_cd[int(u)] = str(v)
     for u, v in data.get("daily_games", {}).items():
         daily_games[int(u)] = str(v)
+    for u, v in data.get("daily_msg_cnt", {}).items():
+        daily_msg_cnt[int(u)] = dict(v)
 
 
 if __name__ == "__main__":
