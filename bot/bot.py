@@ -12,8 +12,10 @@ import random
 import re
 import string
 import uuid
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from zoneinfo import ZoneInfo
+
+UTC = timezone.utc   # используется в restrict_chat_member until_date
 
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
@@ -1022,7 +1024,14 @@ async def do_checkin(chat_id: int, user_id: int, reply_msg: Message = None):
     cid = econ_cid(chat_id)
     streaks.setdefault(cid, {})
     data = streaks[cid].get(user_id, {"count": 0, "last": None})
-    if data["last"] == today:
+    last = data.get("last")
+    # Нормализуем last: может быть строкой после загрузки из JSON
+    if isinstance(last, str):
+        try:
+            last = date.fromisoformat(last)
+        except Exception:
+            last = None
+    if last == today:
         if reply_msg:
             cnt = data["count"]
             await reply_msg.reply(
@@ -1034,7 +1043,11 @@ async def do_checkin(chat_id: int, user_id: int, reply_msg: Message = None):
                 parse_mode="HTML",
             )
         return False
-    data["count"] += 1
+    # Стрик продолжается только если вчера — иначе сброс
+    if last is not None and (today - last) == timedelta(days=1):
+        data["count"] += 1
+    else:
+        data["count"] = 1   # пропустил день(и) — стрик сброшен
     data["last"] = today
     streaks[cid][user_id] = data
     cnt = data["count"]
@@ -2071,6 +2084,9 @@ async def cmd_forcemarry(msg: Message, command: CommandObject):
     marriages.setdefault(cid, {})
     marriages[cid][first.id] = second.id
     marriages[cid][second.id] = first.id
+    # Записываем дату свадьбы
+    _pk = f"{min(first.id, second.id)}_{max(first.id, second.id)}"
+    marriage_dates[_pk] = today_kyiv().isoformat()
     add_balance(first.id, 500)
     add_balance(second.id, 500)
     save_data()
@@ -2122,6 +2138,10 @@ async def marry_callback(cb: CallbackQuery):
     ]
     if action == "y":
         cid = econ_cid(chat_id)
+        # Гонка: проверяем что оба ещё не в браке перед записью
+        if is_married(chat_id, proposer_id) or is_married(chat_id, target_id):
+            await cb.answer("💔 Один из участников уже состоит в браке", show_alert=True)
+            return
         marriages.setdefault(cid, {})
         marriages[cid][proposer_id] = target_id
         marriages[cid][target_id] = proposer_id
@@ -2205,6 +2225,9 @@ async def cmd_fordivorce(msg: Message, command: CommandObject = None):
     marriages.setdefault(cid, {})
     marriages[cid].pop(first.id, None)
     marriages[cid].pop(second_id, None)
+    # Удаляем дату свадьбы
+    _pk = f"{min(first.id, second_id)}_{max(first.id, second_id)}"
+    marriage_dates.pop(_pk, None)
     save_data()
 
     divorce_text = (
@@ -2240,6 +2263,9 @@ async def cmd_divorce(msg: Message):
     marriages.setdefault(cid, {})
     marriages[cid].pop(uid, None)
     marriages[cid].pop(partner_id, None)
+    # Удаляем дату свадьбы
+    pair_key = f"{min(uid, partner_id)}_{max(uid, partner_id)}"
+    marriage_dates.pop(pair_key, None)
     save_data()
     _divorce_txt = [
         "💔 Развод оформлен", "😔 Всё кончено", "💔 Пути разошлись",
@@ -5849,14 +5875,14 @@ async def cmd_plinko(msg: Message, command: CommandObject = None):
     mults   = [0.2, 0.5, 0.5, 1.0, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0]
     weights = [5, 10, 10, 20, 20, 15, 10, 5, 4, 1]
     mult    = random.choices(mults, weights=weights, k=1)[0]
-    winnings = int(bet * mult)
+    winnings = max(1, int(bet * mult)) if mult > 0 else 0  # минимум 1 при ненулевом множителе
     diff     = winnings - bet
     add_balance(uid, diff)
-    _game_result(uid, diff >= 0)
+    _game_result(uid, winnings > bet)   # победа только если реально больше ставки
     award_xp(uid, random.randint(5, 20))
     schedule_state_save("plinko")
-    emoji = "✅" if diff >= 0 else "❌"
-    sign  = "+" if diff >= 0 else ""
+    emoji = "✅" if winnings > bet else ("⚖️" if winnings == bet else "❌")
+    sign  = "+" if diff > 0 else ""
     await msg.reply(
         f"🎯 <b>Плинко</b> — ставка {fmt_lmn(bet)} LMN\n\n"
         f"🎰  ● ● ● ● ●\n"
@@ -6018,9 +6044,14 @@ def _bj_val(hand: list) -> int:
     return v
 
 def _bj_names(hand: list) -> str:
+    """Отображает карты. hand — список int (значения карт).
+    Масть выбирается один раз по индексу, не случайно — карта не меняет масть."""
     suits = ["♠","♥","♦","♣"]
     nm    = {11:"A",10:"10",9:"9",8:"8",7:"7",6:"6",5:"5",4:"4",3:"3",2:"2"}
-    return " ".join(f"{nm.get(c,'?')}{random.choice(suits)}" for c in hand)
+    return " ".join(
+        f"{nm.get(c,'?')}{suits[i % len(suits)]}"
+        for i, c in enumerate(hand)
+    )
 
 @dp.message(Command("блэкджек", "blackjack"))
 async def cmd_blackjack(msg: Message, command: CommandObject = None):
@@ -7597,13 +7628,16 @@ async def _check_link_guard(msg: Message) -> bool:
     name    = msg.from_user.full_name
     mention = f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
 
-    warn_msg = await bot.send_message(
-        msg.chat.id,
-        f"🔗 {mention} — <b>ссылки запрещены!</b>\n"
-        f"⚠️ Предупреждение: <b>{count}/3</b>\n\n"
-        f"<i>Сообщение автоматически удалено.</i>",
-        parse_mode="HTML",
-    )
+    try:
+        warn_msg = await bot.send_message(
+            msg.chat.id,
+            f"🔗 {mention} — <b>ссылки запрещены!</b>\n"
+            f"⚠️ Предупреждение: <b>{count}/3</b>\n\n"
+            f"<i>Сообщение автоматически удалено.</i>",
+            parse_mode="HTML",
+        )
+    except Exception:
+        return True  # удалить удалось, предупреждение не вышло — возвращаем True
 
     # ── 3 предупреждения → мут 5 минут ─────────────────────────
     if count >= 3:
@@ -10330,27 +10364,29 @@ async def universal_handler(msg: Message):
 
     # ── Поддержка: пользователь отправляет обращение администрации
     if msg.chat.type == "private" and uid in support_sessions and not text.startswith("/"):
-        del support_sessions[uid]
         mod_chat = _ank.get_mod_chat()
         if mod_chat:
             user = msg.from_user
-            tag = f"@{user.username}" if user.username else user.full_name
+            tag = f"@{html.escape(user.username)}" if user.username else html.escape(user.full_name)
+            safe_text = html.escape(text)
             try:
                 await bot.send_message(
                     mod_chat,
-                    f"📩 *Обращение от участника*\n\n"
-                    f"👤 {tag} (ID: `{user.id}`)\n"
+                    f"📩 <b>Обращение от участника</b>\n\n"
+                    f"👤 {tag} (ID: <code>{user.id}</code>)\n"
                     f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-                    f"{text}",
-                    parse_mode="Markdown"
+                    f"{safe_text}",
+                    parse_mode="HTML"
+                )
+                # Удаляем сессию только после успешной отправки
+                del support_sessions[uid]
+                await _answer_custom(
+                    msg, "support_sent",
+                    "✅ <b>Обращение отправлено!</b>\n\n"
+                    "Администрация рассмотрит его в ближайшее время 🙏",
                 )
             except Exception:
-                pass
-            await _answer_custom(
-                msg, "support_sent",
-                "✅ <b>Обращение отправлено!</b>\n\n"
-                "Администрация рассмотрит его в ближайшее время 🙏",
-            )
+                await msg.reply("❌ Не удалось отправить обращение. Попробуй ещё раз.")
         else:
             await msg.reply("⚠️ Чат администрации не настроен. Попробуй позже.")
         return
@@ -10929,21 +10965,24 @@ def _apply_data(data: dict) -> None:
     for u, value in data.get("bank_withdraw_cd", {}).items():
         try:
             _bwcd_dt = datetime.fromisoformat(value)
-            # Нормализуем к aware UTC чтобы не было TypeError при сравнении
+            # Нормализуем: naive → Kyiv, aware → приводим к Kyiv
             if _bwcd_dt.tzinfo is None:
-                from datetime import timezone as _tz
-                _bwcd_dt = _bwcd_dt.replace(tzinfo=_tz.utc)
+                _bwcd_dt = _bwcd_dt.replace(tzinfo=KYIV_TZ)
+            else:
+                _bwcd_dt = _bwcd_dt.astimezone(KYIV_TZ)
             bank_withdraw_cd[int(u)] = _bwcd_dt
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown банку для user=%s пропущено", u)
     for u, value in data.get("hunt_cooldown", {}).items():
         try:
-            hunt_cooldown[int(u)] = datetime.fromisoformat(value)
+            _dt = datetime.fromisoformat(value)
+            hunt_cooldown[int(u)] = _dt if _dt.tzinfo else _dt.replace(tzinfo=KYIV_TZ)
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown охоти для user=%s пропущено", u)
     for u, value in data.get("alchemy_cooldown", {}).items():
         try:
-            alchemy_cooldown[int(u)] = datetime.fromisoformat(value)
+            _dt = datetime.fromisoformat(value)
+            alchemy_cooldown[int(u)] = _dt if _dt.tzinfo else _dt.replace(tzinfo=KYIV_TZ)
         except (TypeError, ValueError):
             logging.warning("⚠️ Некоректний cooldown алхимии для user=%s пропущено", u)
     for cid, run in data.get("team_alchemy_runs", {}).items():
