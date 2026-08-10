@@ -9860,6 +9860,48 @@ async def universal_handler(msg: Message):
             await msg.reply("⚠️ Чат администрации не настроен. Попробуй позже.")
         return
 
+    # ── Команды администрации из личного чата ────────────────────
+    if msg.chat.type == "private":
+        _pm_tl  = text.lower().lstrip("/")
+        _pm_cmd = _pm_tl.split()[0] if _pm_tl.split() else ""
+        if _pm_cmd in ("объявление", "announce"):
+            allowed = (
+                is_owner(msg)
+                or has_role(uid, "lead_admin", "co_admin", "admin", "moderator")
+            )
+            if not allowed:
+                await msg.reply("⛔ Только администрация")
+                return
+            import re as _re2
+            _pm_raw  = (msg.text or "").strip()
+            _pm_body = _re2.sub(r'^/?объявление\s*|^/?announce\s*', '', _pm_raw,
+                                count=1, flags=_re2.IGNORECASE).strip()
+            if not _pm_body:
+                await msg.reply(
+                    "📢 <b>Укажи текст объявления:</b>\n\n"
+                    "<code>объявление Сегодня в 20:00 — ивент!</code>",
+                    parse_mode="HTML"
+                )
+                return
+            _pm_pub = _ank.get_pub_chat()
+            _pm_tgt = _pm_pub if _pm_pub else None
+            if not _pm_tgt:
+                await msg.reply("⚠️ Паб-чат не настроен. Используй /сетпубчат.")
+                return
+            _pm_text = (
+                f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n"
+                f"{brand.div()}\n"
+                f"{html.escape(_pm_body)}\n"
+                f"{brand.div()}"
+            )
+            try:
+                await bot.send_message(_pm_tgt, _pm_text, parse_mode="HTML")
+                await msg.reply("✅ <b>Объявление отправлено в паб-чат!</b>",
+                                parse_mode="HTML")
+            except Exception as _e:
+                await msg.reply(f"❌ Ошибка: <code>{_e}</code>", parse_mode="HTML")
+            return
+
     # ── Анкета: обробка кнопок клавіатури в особистих
     if msg.chat.type == "private":
         status = _ank.get_user_status(uid)
