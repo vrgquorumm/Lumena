@@ -4235,8 +4235,8 @@ async def cmd_serenade(msg: Message):
 
 
 async def cmd_compatibility(msg: Message):
-    """Совместимость двух людей. Работает двумя способами:
-    1. Ответом на сообщение → проверяет тебя и автора сообщения
+    """Совместимость двух людей на основе реальных данных чата.
+    1. Ответом на сообщение → проверяет тебя и автора
     2. совместимость @user1 @user2 → проверяет двух упомянутых
     """
     import hashlib
@@ -4245,29 +4245,24 @@ async def cmd_compatibility(msg: Message):
     uid_b: int | None = None
     name_a = name_b = None
 
-    # Способ 1: ответ на сообщение
+    # ── Способ 1: ответ на сообщение ──────────────────────
     if msg.reply_to_message and msg.reply_to_message.from_user:
         uid_a  = msg.from_user.id
         uid_b  = msg.reply_to_message.from_user.id
         name_a = html.escape(msg.from_user.first_name or "Аноним")
         name_b = html.escape(msg.reply_to_message.from_user.first_name or "Аноним")
 
-    # Способ 2: упоминания через @username или текстовые entities
+    # ── Способ 2: упоминания ──────────────────────────────
     else:
         entities = msg.entities or []
-        mentioned: list[tuple[int, str]] = []  # (stable_int_key, отображаемое_имя)
+        mentioned: list[tuple[int, str]] = []
         for ent in entities:
             if ent.type == "mention":
-                # @username в тексте — uid неизвестен, используем хеш username как ключ
                 uname = (msg.text or "")[ent.offset + 1: ent.offset + ent.length]
-                # Ищем реальный uid в chat_members по username (хранится без @)
-                found_uid = None
-                for cid_data in chat_members.values():
-                    for u_id, u_nm in cid_data.items():
-                        pass  # chat_members хранит имена, не username — поиск ниже
-                # Пробуем найти в user_names_map если есть, иначе хеш строки
-                stable_key = abs(hash(uname.lower())) % (10 ** 15)
-                mentioned.append((stable_key, html.escape(f"@{uname}")))
+                # Ищем uid в user_registry (username → uid) если доступен
+                found_uid = user_registry.get(uname.lower()) if "user_registry" in dir() else None
+                key = found_uid if found_uid else (abs(hash(uname.lower())) % (10 ** 15))
+                mentioned.append((key, html.escape(f"@{uname}")))
             elif ent.type == "text_mention" and ent.user:
                 u = ent.user
                 mentioned.append((u.id, html.escape(u.first_name or f"ID {u.id}")))
@@ -4290,57 +4285,109 @@ async def cmd_compatibility(msg: Message):
     if uid_a == uid_b:
         return await msg.reply("🪞 Ты проверяешь совместимость сам с собой... 100% нарцисс 😄")
 
-    # Стабильный результат: хеш пары (порядок не важен)
+    # ── Стабильный seed на базе пары ──────────────────────
     pair_key = "_".join(str(u) for u in sorted([uid_a, uid_b]))
     seed = int(hashlib.md5(pair_key.encode()).hexdigest(), 16)
     rng  = random.Random(seed)
 
-    # Генерируем 5 категорий
-    cats = [
-        ("❤️", "Романтика"),
-        ("🤝", "Дружба"),
-        ("🔥", "Химия"),
-        ("🧠", "Понимание"),
-        ("⚡", "Энергия"),
+    # ── Вспомогательная функция: схожесть двух числовых значений ──
+    def _sim(val_a: float, val_b: float, lo: int = 40, hi: int = 100) -> int:
+        """Чем ближе значения — тем выше схожесть (lo..hi%)."""
+        mx = max(val_a, val_b, 1)
+        ratio = 1.0 - abs(val_a - val_b) / mx          # 0.0 (разные) .. 1.0 (одинаковые)
+        base  = round(lo + ratio * (hi - lo))
+        # Небольшой хеш-шум ±5 для уникальности
+        noise = rng.randint(-5, 5)
+        return max(lo, min(hi, base + noise))
+
+    def _bonus(val_a: float, val_b: float, threshold: float = 1) -> int:
+        """Бонус если оба выше порога: 0 или +5..+15."""
+        if val_a >= threshold and val_b >= threshold:
+            return rng.randint(5, 15)
+        return 0
+
+    # ── Собираем реальные данные ──────────────────────────
+    cid = msg.chat.id; can = econ_cid(cid)
+
+    def _msgs(uid: int) -> int:
+        return sum(user_messages.get(c, {}).get(uid, 0) for c in (cid, can))
+
+    msgs_a    = _msgs(uid_a);          msgs_b    = _msgs(uid_b)
+    xp_a      = user_xp.get(uid_a, 0); xp_b      = user_xp.get(uid_b, 0)
+    streak_a  = (streak_data.get(uid_a) or {}).get("streak", 0)
+    streak_b  = (streak_data.get(uid_b) or {}).get("streak", 0)
+    lmn_a     = lmn_balances.get(uid_a, 0) + bank_balances.get(uid_a, 0)
+    lmn_b     = lmn_balances.get(uid_b, 0) + bank_balances.get(uid_b, 0)
+    ach_a     = set(user_achievements.get(uid_a, []))
+    ach_b     = set(user_achievements.get(uid_b, []))
+    shared_ach = len(ach_a & ach_b)
+
+    # ── Считаем 5 категорий по реальным данным ────────────
+    # 💬 Активность: схожесть количества сообщений в чате
+    act_score = _sim(msgs_a, msgs_b, lo=35, hi=95)
+
+    # ✨ Уровень: схожесть XP
+    xp_score = _sim(xp_a, xp_b, lo=30, hi=95)
+    xp_score += _bonus(xp_a, xp_b, threshold=100)       # бонус если оба прокачаны
+
+    # 🔥 Стрик: оба держат стрики → высокая химия
+    streak_score = _sim(streak_a, streak_b, lo=30, hi=90)
+    streak_score += _bonus(streak_a, streak_b, threshold=3)
+
+    # 💰 Экономика: схожесть богатства
+    eco_score = _sim(lmn_a, lmn_b, lo=30, hi=95)
+
+    # 🏆 Достижения: общие достижения → понимание
+    if ach_a or ach_b:
+        union = len(ach_a | ach_b) or 1
+        ach_ratio = shared_ach / union
+        ach_score = round(35 + ach_ratio * 60) + rng.randint(-5, 5)
+    else:
+        ach_score = rng.randint(35, 70)   # нет данных — случайно
+    ach_score = max(30, min(100, ach_score))
+
+    # Ограничиваем все значения диапазоном 10..100
+    cat_scores = [
+        min(100, max(10, act_score)),
+        min(100, max(10, xp_score)),
+        min(100, max(10, streak_score)),
+        min(100, max(10, eco_score)),
+        min(100, max(10, ach_score)),
     ]
-    scores = [rng.randint(30, 100) for _ in cats]
-    total  = round(sum(scores) / len(scores))
+    cats = [
+        ("💬", "Активность"),
+        ("✨", "Уровень"),
+        ("🔥", "Стрик"),
+        ("💰", "Экономика"),
+        ("🏆", "Достижения"),
+    ]
 
-    # Итоговый вердикт
-    if   total >= 90: verdict = "Идеальная пара — судьба! 💞"
-    elif total >= 75: verdict = "Очень высокая совместимость 🔥"
-    elif total >= 60: verdict = "Хорошая совместимость 💫"
-    elif total >= 45: verdict = "Есть потенциал, нужно время 🌱"
-    elif total >= 30: verdict = "Противоположности... может и притянутся? 🤔"
-    else:             verdict = "Сложное сочетание 💀"
-
-    # Полоска общего результата
-    filled  = total // 10
-    bar     = "💗" * filled + "🖤" * (10 - filled)
-
-    # Строки по категориям
-    cat_lines = []
-    for icon, label in cats:
-        v = rng.randint(30, 100)  # не используем scores, т.к. rng уже сдвинут — пересчитаем
-    # Сброс rng и честный пересчёт
-    rng2 = random.Random(seed)
-    cat_scores = [rng2.randint(30, 100) for _ in cats]
-    total2 = round(sum(cat_scores) / len(cat_scores))
-    # (используем total2 вместо total для точности)
-    filled2 = total2 // 10
-    bar2    = "💗" * filled2 + "🖤" * (10 - filled2)
+    total  = round(sum(cat_scores) / len(cat_scores))
+    filled = total // 10
+    bar    = "💗" * filled + "🖤" * (10 - filled)
 
     cat_lines = []
     for (icon, label), sc in zip(cats, cat_scores):
         mini = "▓" * (sc // 20) + "░" * (5 - sc // 20)
         cat_lines.append(f"{icon} {label}: {mini} <b>{sc}%</b>")
 
-    if   total2 >= 90: verdict = "Идеальная пара — судьба! 💞"
-    elif total2 >= 75: verdict = "Очень высокая совместимость 🔥"
-    elif total2 >= 60: verdict = "Хорошая совместимость 💫"
-    elif total2 >= 45: verdict = "Есть потенциал, нужно время 🌱"
-    elif total2 >= 30: verdict = "Противоположности... может и притянутся? 🤔"
-    else:              verdict = "Сложное сочетание 💀"
+    if   total >= 90: verdict = "Идеальная пара — судьба! 💞"
+    elif total >= 75: verdict = "Очень высокая совместимость 🔥"
+    elif total >= 60: verdict = "Хорошая совместимость 💫"
+    elif total >= 45: verdict = "Есть потенциал, нужно время 🌱"
+    elif total >= 30: verdict = "Противоположности... может притянутся? 🤔"
+    else:             verdict = "Очень сложное сочетание 💀"
+
+    # Подсказки на основе данных
+    hints = []
+    if msgs_a == 0 or msgs_b == 0:
+        hints.append("📊 <i>Один из вас ещё не писал в этом чате</i>")
+    if streak_a >= 7 and streak_b >= 7:
+        hints.append("🔥 <i>Оба держат стрики — это сближает!</i>")
+    if shared_ach >= 3:
+        hints.append(f"🏆 <i>Общих достижений: {shared_ach}</i>")
+
+    hint_block = ("\n" + "\n".join(hints)) if hints else ""
 
     await msg.reply(
         f"{brand.hdr()}\n\n"
@@ -4349,8 +4396,9 @@ async def cmd_compatibility(msg: Message):
         f"👤 <b>{name_a}</b>\n"
         f"💕\n"
         f"👤 <b>{name_b}</b>\n\n"
-        f"{bar2}  <b>{total2}%</b>\n\n"
-        f"{chr(10).join(cat_lines)}\n\n"
+        f"{bar}  <b>{total}%</b>\n\n"
+        f"{chr(10).join(cat_lines)}"
+        f"{hint_block}\n\n"
         f"✨ {verdict}\n"
         f"{brand.div()}",
         parse_mode="HTML"
