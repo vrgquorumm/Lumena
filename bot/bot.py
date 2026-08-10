@@ -1125,14 +1125,25 @@ def _build_entities(entities_data: list[dict]) -> list[MessageEntity]:
 async def _send_custom(chat_id: int, key: str, fallback_html: str,
                        name: str | None = None, **kwargs):
     """Отправляет кастомный текст фаундера (с Premium emoji) или HTML fallback.
-    name — сырое (не HTML-escaped) имя для подстановки {name} в entities-тексте."""
+    name — сырое (не HTML-escaped) имя для подстановки {name} в entities-тексте.
+    При ошибке entities (напр. custom emoji из личного пака) падает на plain text."""
     ct = brand.get_custom_text(key)
     if ct:
         text, ents_data = ct
         if name is not None:
             text, ents_data = brand.substitute_name(text, ents_data, name)
         ents = _build_entities(ents_data)
-        return await bot.send_message(chat_id, text, entities=ents or None, **kwargs)
+        # entities и parse_mode несовместимы — убираем parse_mode из kwargs
+        kw = {k: v for k, v in kwargs.items() if k != "parse_mode"}
+        try:
+            return await bot.send_message(chat_id, text, entities=ents or None, **kw)
+        except Exception as _ent_err:
+            logging.warning("⚠️ _send_custom entities rejected (%s): %s", key, _ent_err)
+            # Fallback: отправить без entities (plain text, без parse_mode)
+            try:
+                return await bot.send_message(chat_id, text, **kw)
+            except Exception:
+                pass
     return await bot.send_message(chat_id, fallback_html, parse_mode="HTML", **kwargs)
 
 
@@ -1142,13 +1153,23 @@ async def _answer_custom(msg, key: str, fallback_html: str,
     Автоматически трекает отправленное сообщение для reply-редактора фаундера.
     Приоритет: кастомный текст → DEFAULT_TEXTS → fallback_html."""
     ct = brand.get_custom_text(key)
+    sent = None
     if ct:
         text, ents_data = ct
         if name is not None:
             text, ents_data = brand.substitute_name(text, ents_data, name)
         ents = _build_entities(ents_data)
-        sent = await msg.answer(text, entities=ents or None, **kwargs)
-    else:
+        # entities и parse_mode несовместимы — убираем parse_mode из kwargs
+        kw = {k: v for k, v in kwargs.items() if k != "parse_mode"}
+        try:
+            sent = await msg.answer(text, entities=ents or None, **kw)
+        except Exception as _ent_err:
+            logging.warning("⚠️ _answer_custom entities rejected (%s): %s", key, _ent_err)
+            try:
+                sent = await msg.answer(text, **kw)
+            except Exception:
+                sent = None
+    if sent is None and not ct:
         # Используем DEFAULT_TEXTS если есть, иначе fallback_html
         default_text = brand.DEFAULT_TEXTS.get(key)
         if default_text:
@@ -1183,7 +1204,14 @@ async def reply_t(msg: Message, key: str, parse_mode: str = "HTML", **fmt) -> No
             except (KeyError, ValueError):
                 pass
         ents = _build_entities(ents_data)
-        sent = await msg.reply(text, entities=ents or None)
+        try:
+            sent = await msg.reply(text, entities=ents or None)
+        except Exception as _ent_err:
+            logging.warning("⚠️ reply_t entities rejected (%s): %s", key, _ent_err)
+            try:
+                sent = await msg.reply(text)
+            except Exception:
+                sent = None
     else:
         text = brand.DEFAULT_TEXTS.get(key, "")
         if fmt and text:
@@ -1194,7 +1222,7 @@ async def reply_t(msg: Message, key: str, parse_mode: str = "HTML", **fmt) -> No
         if text:
             sent = await msg.reply(text, parse_mode=parse_mode)
         else:
-            return
+            return None
     # Трекаем для reply-редактора
     if key in brand.TEXT_LABELS and sent is not None:
         _tracked_bot_msgs[(sent.chat.id, sent.message_id)] = key
@@ -1210,7 +1238,15 @@ async def _edit_custom(message, key: str, fallback_html: str,
         if name is not None:
             text, ents_data = brand.substitute_name(text, ents_data, name)
         ents = _build_entities(ents_data)
-        return await message.edit_text(text, entities=ents or None, **kwargs)
+        kw = {k: v for k, v in kwargs.items() if k != "parse_mode"}
+        try:
+            return await message.edit_text(text, entities=ents or None, **kw)
+        except Exception as _ent_err:
+            logging.warning("⚠️ _edit_custom entities rejected (%s): %s", key, _ent_err)
+            try:
+                return await message.edit_text(text, **kw)
+            except Exception:
+                pass
     return await message.edit_text(fallback_html, parse_mode="HTML", **kwargs)
 
 
@@ -8743,6 +8779,7 @@ async def handle_founder_edit_text(msg: Message):
         if getattr(e, "custom_emoji_id",None): d["custom_emoji_id"]= e.custom_emoji_id
         ents_data.append(d)
 
+    has_custom_emoji_saved = any(d.get("type") == "custom_emoji" for d in ents_data)
     brand.set_custom_text(key, raw_text, ents_data)
     brand_saved = await brand.persist_brand_now()
 
@@ -8750,17 +8787,26 @@ async def handle_founder_edit_text(msg: Message):
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛠 Открыть редактор", callback_data="editor:menu")]
     ])
+
+    emoji_warning = (
+        "\n\n⚠️ <b>Важно про Premium emoji:</b>\n"
+        "Боты НЕ могут отправлять анимированные emoji из личных Telegram Premium паков. "
+        "Работают только emoji из bot-owned emoji паков (созданных через @Stickers для бота). "
+        "Статичный юникод (😊🔥✨) работает всегда.\n"
+        if has_custom_emoji_saved else ""
+    )
+
     await msg.reply(
         (
             f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
             +
-            "Текст, форматування та Premium Emoji записані в PostgreSQL.\n\n"
+            "Текст та форматування записані в PostgreSQL.\n"
             if brand_saved else
             f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
-            "Текст збережено локально; PostgreSQL недоступний, автосинхронізація повторить запис.\n\n"
+            "Текст збережено локально; PostgreSQL недоступний, автосинхронізація повторить запис.\n"
         )
-        +
-        f"<code>/resettext {key}</code> — сбросить к дефолту.",
+        + emoji_warning
+        + f"\n<code>/resettext {key}</code> — сбросить к дефолту.",
         parse_mode="HTML",
         reply_markup=back_kb,
     )
