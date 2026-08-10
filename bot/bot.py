@@ -4792,8 +4792,32 @@ async def cmd_setrules(msg: Message, command: CommandObject = None):
 
 async def cmd_announce(msg: Message, command: CommandObject = None):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
-    if not (command and command.args): return await msg.reply("Укажи текст объявления")
-    await msg.reply(f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{command.args}", parse_mode="HTML")
+    # Извлекаем текст: из args (slash-команда) или из msg.text (текстовая команда)
+    if command and command.args:
+        text = command.args.strip()
+    else:
+        raw = (msg.text or "").strip()
+        parts = raw.split(maxsplit=1)
+        text = parts[1].strip() if len(parts) > 1 else ""
+    if not text:
+        return await msg.reply(
+            "📢 Укажи текст объявления:\n"
+            "<code>объявление Сегодня в 20:00 — ивент!</code>",
+            parse_mode="HTML"
+        )
+    announce_text = f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{text}"
+    cid = msg.chat.id
+    pub = _ank.get_pub_chat()
+    # Определяем куда слать: если мы в мод-чате → в паб-чат, иначе → в текущий чат
+    target = pub if (pub and cid != pub) else cid
+    try:
+        sent = await bot.send_message(target, announce_text, parse_mode="HTML")
+        if target != cid:
+            await msg.reply(f"✅ Объявление отправлено в паб-чат!", parse_mode="HTML")
+        else:
+            await msg.reply(f"✅ Объявление отправлено!", parse_mode="HTML")
+    except Exception as e:
+        await msg.reply(f"❌ Не удалось отправить: {e}")
 
 
 @dp.message(Command("updatesave"))
