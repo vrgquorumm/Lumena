@@ -4891,7 +4891,15 @@ async def cmd_rank(msg: Message):
     cid  = msg.chat.id
     uid  = msg.from_user.id
     name = html.escape(msg.from_user.first_name or "—")
-    members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(econ_cid(cid), {}).keys())
+    # Берём всех известных участников + гарантированно добавляем текущего юзера
+    members = (
+        set(chat_members.get(cid, {}).keys()) |
+        set(chat_members.get(econ_cid(cid), {}).keys()) |
+        {uid}
+    )
+    # Если у юзера есть XP, показываем его в глобальном топе
+    if user_xp.get(uid, 0) > 0 and msg.chat.type != "private":
+        members |= set(user_xp.keys())
     ranked  = sorted(members, key=lambda u: user_xp.get(u, 0), reverse=True)
     pos     = next((i + 1 for i, u in enumerate(ranked) if u == uid), None)
     xp      = user_xp.get(uid, 0)
@@ -4900,7 +4908,7 @@ async def cmd_rank(msg: Message):
         f"{brand.hdr()}\n\n"
         f"🏆 <b>Ранг · {name}</b>\n\n"
         f"{brand.div()}\n"
-        f"📍 Место: <b>#{pos or '?'}</b> из {len(ranked)}\n"
+        f"📍 Место: <b>#{pos}</b> из {len(ranked)}\n"
         f"✨ XP: <b>{xp:,}</b>\n"
         f"🏷 Уровень: <b>{lvl}</b>\n\n"
         f"{brand.div()}",
@@ -8935,6 +8943,19 @@ TEXT_COMMANDS.update({
     "инвайт":        cmd_invite,
     "рефералы":      cmd_referrals_list,
     "инвайты":       cmd_invites_stats,
+    # VIP / уровни (фаундер)
+    "сетвип":        cmd_setvip_v6,    "setvip":       cmd_setvip_v6,
+    "снятьвип":      cmd_removevip_v6, "removevip":    cmd_removevip_v6,
+    "сетлевел":      cmd_setlevel,     "setlevel":     cmd_setlevel,
+    # Юзеринфо
+    "юзеринфо":      cmd_userinfo,     "userinfo":     cmd_userinfo,
+    # Забрать LMN (фаундер)
+    "взять":         cmd_take,         "take":         cmd_take,
+    # Настройки чата (фаундер)
+    "сетмодчат":     cmd_setmodchat,   "setmodchat":   cmd_setmodchat,
+    "сетпубчат":     cmd_setpubchat,   "setpubchat":   cmd_setpubchat,
+    "сетэмодзи":     cmd_setemoji,     "setemoji":     cmd_setemoji,
+    "сетемодзипак":  cmd_setemojipack, "setemojipack": cmd_setemojipack,
 })
 
 
@@ -9068,6 +9089,13 @@ async def cmd_setchatlink(msg: Message):
         f"Тепер кнопка «⭐ НАШ ЧАТ» з'явиться під кожною анкетою.",
         parse_mode="HTML"
     )
+
+
+# Регистрируем команды настройки чата (определены после основного блока TEXT_COMMANDS)
+TEXT_COMMANDS.update({
+    "сетсайтурл": cmd_setsiteurl, "setsiteurl": cmd_setsiteurl,
+    "сетчатлинк": cmd_setchatlink, "setchatlink": cmd_setchatlink,
+})
 
 
 @dp.message(F.photo, F.chat.type == "private")
