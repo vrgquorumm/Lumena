@@ -10184,6 +10184,13 @@ async def main():
 
     asyncio.create_task(_shutdown_watcher())
 
+    # Сбрасываем webhook и вытесняем любой другой активный polling-инстанс
+    try:
+        await bot.delete_webhook(drop_pending_updates=False)
+        print("✅ Webhook сброшен — polling запускается как единственный инстанс")
+    except Exception as _whe:
+        logging.warning(f"delete_webhook: {_whe}")
+
     # Цикл перезапуска polling — при любом сбое сети/API бот сам восстанавливається
     retry_delay = 5
     while True:
