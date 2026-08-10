@@ -5020,31 +5020,41 @@ async def cmd_setrules(msg: Message, command: CommandObject = None):
     chat_rules[msg.chat.id] = command.args
     await msg.reply("✅ Правила установлены!")
 
+@dp.message(Command("объявление", "announce"))
 async def cmd_announce(msg: Message, command: CommandObject = None):
-    if not await is_admin(msg): return await msg.reply("⛔ Только админы")
-
-    # Всегда берём текст из ОРИГИНАЛЬНОГО msg.text (сохраняем регистр)
-    # command.args приходит в нижнем регистре из диспетчера — не используем
-    raw = (msg.text or msg.caption or "").strip()
-    # Убираем первое слово-команду (объявление / announce) и возможный ! prefix
     import re as _re
-    text = _re.sub(r'^[!]?\s*\S+\s*', '', raw, count=1).strip()
+
+    # ── Проверка прав ────────────────────────────────────────────
+    # В приватном чате is_admin() всегда True → явно проверяем роль
+    if msg.chat.type == "private":
+        allowed = (
+            is_owner(msg)
+            or has_role(msg.from_user.id,
+                        "lead_admin", "co_admin", "admin", "moderator")
+        )
+        if not allowed:
+            return await msg.reply("⛔ Только администрация")
+    else:
+        if not await is_admin(msg):
+            return await msg.reply("⛔ Только админы")
+
+    # ── Текст: всегда из оригинала msg.text (сохраняем регистр) ──
+    raw = (msg.text or msg.caption or "").strip()
+    text = _re.sub(r'^[!/]?\s*\S+\s*', '', raw, count=1).strip()
 
     if not text:
         return await msg.reply(
-            "📢 Укажи текст объявления:\n"
-            "<code>объявление Сегодня в 20:00 — ивент!</code>",
+            "📢 <b>Отправь объявление:</b>\n\n"
+            "<code>объявление Сегодня в 20:00 — ивент!</code>\n"
+            "или\n"
+            "<code>/объявление Текст</code>\n\n"
+            "Сообщение уйдёт в паб-чат.",
             parse_mode="HTML"
         )
 
+    # ── Цель ─────────────────────────────────────────────────────
     cid = msg.chat.id
     pub = _ank.get_pub_chat()
-    mod = econ_cid(pub) if pub else None  # мод-чат
-
-    # Логика цели:
-    # • из мод-чата или любого постороннего чата → шлём в паб-чат
-    # • из паб-чата → шлём в паб-чат (тот же чат)
-    # • если паб-чат не настроен → шлём в текущий чат
     target = pub if pub else cid
 
     announce_text = (
@@ -5056,7 +5066,14 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
 
     try:
         await bot.send_message(target, announce_text, parse_mode="HTML")
-        if target != cid:
+        # В приватном чате — подтверждение с указанием куда ушло
+        if msg.chat.type == "private":
+            chat_name = "паб-чат" if pub else "чат"
+            await msg.reply(
+                f"✅ <b>Объявление отправлено в {chat_name}!</b>",
+                parse_mode="HTML"
+            )
+        elif target != cid:
             await msg.reply("✅ Объявление отправлено в паб-чат!")
         else:
             await msg.reply("✅ Объявление отправлено!")
