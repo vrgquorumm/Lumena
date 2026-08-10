@@ -336,7 +336,7 @@
   "role_usernames": {
     "veroniksssxa": "lead_admin"
   },
-  "last_rain_time": 1786303487.1027951,
+  "last_rain_time": 1786343028.606875,
   "link_guard": {},
   "link_guard_warns": {},
   "link_whitelist": {},
@@ -376,10 +376,22 @@
   "save_update_sent": false,
   "pending_notifications": [],
   "marriage_proposals": [],
-  "user_xp": {},
-  "user_messages": {},
+  "user_xp": {
+    "8655306548": 12
+  },
+  "user_messages": {
+    "-1004401287309": {
+      "8655306548": 4
+    }
+  },
   "daily_cooldown": {},
-  "user_achievements": {},
+  "user_achievements": {
+    "8655306548": [
+      "first_message",
+      "rich_1b",
+      "rich_1m"
+    ]
+  },
   "mod_logs": {},
   "reports_db": {},
   "referrals": {},

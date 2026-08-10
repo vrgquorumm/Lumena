@@ -153,6 +153,7 @@ _games_played:     dict[int, int]  = {}   # uid → кол-во игр
 _games_won:        dict[int, int]  = {}   # uid → кол-во побед
 v6_announced:      bool            = False
 bonus_weekly_cd:   dict[int, str]  = {}   # uid → "YYYY-Www" (ISO week claim)
+daily_games:       dict[int, str]  = {}   # uid → ISO date последней сыгранной игры
 _crash_games:      dict[int, dict] = {}   # uid → crash game state
 _bj_games:         dict[int, dict] = {}   # uid → blackjack state
 _mines_games:      dict[int, dict] = {}   # uid → mines state
@@ -321,6 +322,7 @@ def _build_main_payload() -> dict:
         "games_won":         {str(u): v for u, v in _games_won.items()},
         "v6_announced":      v6_announced,
         "bonus_weekly_cd":   {str(u): v for u, v in bonus_weekly_cd.items()},
+        "daily_games":       {str(u): v for u, v in daily_games.items()},
     }
 
 
@@ -5059,7 +5061,7 @@ async def cmd_tasks(msg: Message):
     today_str = today_kyiv().isoformat()
     msgs_cnt  = sum(m.get(uid, 0) for m in user_messages.values())
     did_daily = daily_cooldown.get(uid) == today_str
-    played    = _games_played.get(uid, 0) > 0
+    played    = daily_games.get(uid) == today_str   # сыграл хотя бы раз СЕГОДНЯ
     streak_v  = max((streaks.get(c, {}).get(uid, {}).get("count", 0) for c in streaks), default=0)
     task_list = [
         ("💬", "Написать 10 сообщений",   min(msgs_cnt, 10), 10, msgs_cnt >= 10),
@@ -5109,6 +5111,7 @@ async def cmd_leaderboard(msg: Message):
 # ═══════════════════════════════════════════════════════
 def _game_result(uid: int, won: bool):
     _games_played[uid] = _games_played.get(uid, 0) + 1
+    daily_games[uid]   = today_kyiv().isoformat()   # отмечаем сегодняшнюю игру
     if won:
         _games_won[uid] = _games_won.get(uid, 0) + 1
     _check_achievements(uid)
@@ -10040,6 +10043,8 @@ def _apply_data(data: dict) -> None:
         _games_won[int(u)] = int(v)
     for u, v in data.get("bonus_weekly_cd", {}).items():
         bonus_weekly_cd[int(u)] = str(v)
+    for u, v in data.get("daily_games", {}).items():
+        daily_games[int(u)] = str(v)
 
 
 if __name__ == "__main__":
