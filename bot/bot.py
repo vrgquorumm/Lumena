@@ -1181,19 +1181,59 @@ def _btn_text(key: str, default: str) -> str:
 
 
 def parse_time_and_reason(args: str) -> tuple:
-    """Returns (timedelta, reason_str). First word parsed as time; rest is reason."""
+    """Returns (timedelta, reason_str).
+    First word parsed as time; rest is reason.
+    Supports: 5м 2ч 3д 1нед 2мес навсегда
+    Default if no time given: 1 час.
+    """
+    import re as _re
     if not args:
-        return timedelta(minutes=1), ""
+        return timedelta(hours=1), ""
     parts = args.strip().split(maxsplit=1)
-    first = parts[0].lower().replace("м","m").replace("ч","h").replace("д","d")
+    first = parts[0].lower()
+    reason = parts[1].strip() if len(parts) > 1 else ""
+
+    # Навсегда / permanent
+    if first in ("навсегда", "perma", "permanent", "∞", "inf", "infinity", "forever"):
+        return timedelta(days=366), reason
+
+    # Нормализуем суффиксы (только первое слово — не трогаем reason!)
+    t = first
+    # Многосимвольные суффиксы сначала
+    t = _re.sub(r'(\d+)\s*(нед(?:ел[яьи]|ель)?|week?s?|w)\b', lambda m: str(int(m.group(1)) * 7) + "d", t)
+    t = _re.sub(r'(\d+)\s*(мес(?:яц[аов]?)?|month?s?|mo)\b',  lambda m: str(int(m.group(1)) * 30) + "d", t)
+    t = _re.sub(r'(\d+)\s*(мин(?:ут[аы]?)?|min(?:ute)?s?)',   lambda m: m.group(1) + "m", t)
+    t = _re.sub(r'(\d+)\s*(час(?:[аов]?)?|hour?s?|hr?)',       lambda m: m.group(1) + "h", t)
+    t = _re.sub(r'(\d+)\s*(дн(?:ей|я)?|день|day?s?)',          lambda m: m.group(1) + "d", t)
+    # Однобуквенные (после многосимвольных чтобы не конфликтовать)
+    t = _re.sub(r'(\d+)м$', lambda m: m.group(1) + "m", t)
+    t = _re.sub(r'(\d+)ч$', lambda m: m.group(1) + "h", t)
+    t = _re.sub(r'(\d+)д$', lambda m: m.group(1) + "d", t)
+
     try:
-        if first.endswith("m"):   delta = timedelta(minutes=int(first[:-1]))
-        elif first.endswith("h"): delta = timedelta(hours=int(first[:-1]))
-        elif first.endswith("d"): delta = timedelta(days=int(first[:-1]))
-        else:                     delta = timedelta(minutes=int(first))
-        return delta, (parts[1] if len(parts) > 1 else "")
+        if t.endswith("m"):   delta = timedelta(minutes=max(1, int(t[:-1])))
+        elif t.endswith("h"): delta = timedelta(hours=max(1, int(t[:-1])))
+        elif t.endswith("d"): delta = timedelta(days=max(1, int(t[:-1])))
+        else:                 delta = timedelta(minutes=max(1, int(t)))
+        return delta, reason
     except:
-        return timedelta(minutes=1), args.strip()
+        # Время не распознано → весь args = причина, дефолт 1ч
+        return timedelta(hours=1), args.strip()
+
+
+def _fmt_duration(delta: timedelta) -> str:
+    """Форматирует timedelta в читаемую строку на русском."""
+    total = int(delta.total_seconds())
+    if total >= 365 * 24 * 3600:
+        return "навсегда ♾"
+    days    = total // 86400
+    hours   = (total % 86400) // 3600
+    minutes = (total % 3600) // 60
+    parts = []
+    if days:    parts.append(f"{days}д")
+    if hours:   parts.append(f"{hours}ч")
+    if minutes: parts.append(f"{minutes}м")
+    return " ".join(parts) or "1м"
 
 # ═══════════════════════════════════════════════════════
 # СИСТЕМА РОЛЕЙ — только фаундер
@@ -1681,17 +1721,28 @@ async def cmd_roles(msg: Message, command=None):
 async def cmd_mute(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     user = await get_user(msg, command)
-    if not user: return await msg.reply("Ответь на сообщение. Пример: !мут 5м причина")
+    if not user: return await msg.reply(
+        "ℹ️ Ответь на сообщение.\n"
+        "Примеры:\n"
+        "<code>!мут 30м флуд</code>\n"
+        "<code>!мут 2ч спам</code>\n"
+        "<code>!мут 7д оскорбления</code>\n"
+        "<code>!мут навсегда</code>",
+        parse_mode="HTML")
     if is_owner(msg):
         await _demote_if_needed(msg.chat.id, user.id)
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
+    dur_str = _fmt_duration(delta)
+    is_perma = delta.days >= 365
+    title = f"Мут ♾ навсегда" if is_perma else f"Мут 🔇 на {dur_str}"
+    extra = None if is_perma else f"⏰ До {until.strftime('%d.%m.%Y %H:%M')}"
     try:
         await bot.restrict_chat_member(msg.chat.id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
         _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
         await msg.reply(
-            mod_card(f"Мут до {until.strftime('%d.%m %H:%M')}", user, reason=reason),
+            mod_card(title, user, reason=reason, extra=extra),
             parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1712,7 +1763,12 @@ async def cmd_unmute(msg: Message, command: CommandObject):
 async def cmd_ban(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     user = await get_user(msg, command)
-    if not user: return await msg.reply("Ответь на сообщение или укажи ID")
+    if not user: return await msg.reply(
+        "ℹ️ Ответь на сообщение.\n"
+        "Примеры:\n"
+        "<code>!бан спам</code>\n"
+        "<code>!бан нарушение правил</code>",
+        parse_mode="HTML")
     if is_super(msg):
         await _demote_if_needed(msg.chat.id, user.id)
     _, reason = parse_time_and_reason(command.args or "")
@@ -1755,13 +1811,16 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     except: pass
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
+    dur_str  = _fmt_duration(delta)
+    is_perma = delta.days >= 365
+    title    = "Принудительный мут ♾ навсегда 🔇" if is_perma else f"Принудительный мут 🔇 на {dur_str}"
+    extra2   = "⚠️ Права сняты" if is_perma else f"⚠️ Права сняты · До {until.strftime('%d.%m.%Y %H:%M')}"
     try:
         await bot.restrict_chat_member(msg.chat.id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
         _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
         await msg.reply(
-            mod_card(f"Принудительный мут до {until.strftime('%d.%m %H:%M')} 🔇", user,
-                     extra="⚠️ Права сняты", reason=reason),
+            mod_card(title, user, extra=extra2, reason=reason),
             parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
@@ -1780,7 +1839,7 @@ async def cmd_unban(msg: Message, command: CommandObject):
 async def cmd_kick(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     user = await get_user(msg, command)
-    if not user: return await msg.reply("Ответь на сообщение")
+    if not user: return await msg.reply("ℹ️ Ответь на сообщение пользователя")
     _, reason = parse_time_and_reason(command.args or "")
     try:
         await bot.ban_chat_member(msg.chat.id, user.id)
@@ -9891,8 +9950,12 @@ async def universal_handler(msg: Message):
         cmd_word = parts[0].lower()
         args_str = parts[1] if len(parts) > 1 else ""
 
-        # Конвертируем русские временные суффиксы
-        args_converted = args_str.replace("м","m").replace("ч","h").replace("д","d")
+        # Конвертируем русские суффиксы ТОЛЬКО в первом слове (время),
+        # чтобы не портить текст причины ("нарушение чата" и т.д.)
+        _ac_parts = args_str.split(maxsplit=1)
+        _ac_time  = _ac_parts[0].replace("м","m").replace("ч","h").replace("д","d") if _ac_parts else ""
+        _ac_rest  = (" " + _ac_parts[1]) if len(_ac_parts) > 1 else ""
+        args_converted = _ac_time + _ac_rest
 
         class FakeCmd:
             args = args_converted
@@ -9901,9 +9964,22 @@ async def universal_handler(msg: Message):
 
         # Бан и мут — только через !
         BAN_MUTE = {
-            "мут": cmd_mute, "бан": cmd_ban,
-            "форсбан": cmd_forceban, "форсмут": cmd_forcemute,
-            "mute": cmd_mute, "ban": cmd_ban,
+            # Мут
+            "мут": cmd_mute, "mute": cmd_mute,
+            "замутить": cmd_mute, "замут": cmd_mute,
+            # Бан
+            "бан": cmd_ban, "ban": cmd_ban,
+            "забанить": cmd_ban, "забан": cmd_ban,
+            # Форс
+            "форсбан": cmd_forceban, "forceban": cmd_forceban,
+            "форсмут": cmd_forcemute, "forcemute": cmd_forcemute,
+            # Размут / разбан / кик через ! тоже работают
+            "размут": cmd_unmute, "unmute": cmd_unmute,
+            "разбан": cmd_unban,  "unban":  cmd_unban,
+            "кик":    cmd_kick,   "kick":   cmd_kick,
+            # Варн
+            "варн": cmd_warn,   "warn": cmd_warn,
+            "снятьварн": cmd_unwarn, "unwarn": cmd_unwarn,
         }
         if cmd_word in BAN_MUTE:
             try: await BAN_MUTE[cmd_word](msg, fake_cmd)
