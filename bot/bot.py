@@ -1174,7 +1174,10 @@ async def reply_t(msg: Message, key: str, parse_mode: str = "HTML", **fmt) -> No
     ct = brand.get_custom_text(key)
     if ct:
         text, ents_data = ct[0], ct[1]
-        if fmt:
+        # Применяем fmt только если нет entities с custom_emoji:
+        # format() меняет длину текста и сдвигает offsets — premium emoji перестают работать
+        has_custom_emoji = any(e.get("type") == "custom_emoji" for e in (ents_data or []))
+        if fmt and not has_custom_emoji:
             try:
                 text = text.format(**fmt)
             except (KeyError, ValueError):
@@ -8806,14 +8809,36 @@ async def cb_edittext(cb: CallbackQuery):
     else:
         status_line = "⬜ <i>Текст не задан</i>"
 
-    preview = html.escape(cur_text[:300]) if cur_text else ""
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
     ]])
+
+    # Если есть custom_emoji entities — превью нельзя вставить в HTML-строку,
+    # отправляем его отдельным сообщением с entities=, чтобы premium emoji были видны
+    cts_data = ct  # tuple (text, entities) или None
+    has_custom_emoji_preview = (
+        cts_data is not None
+        and any(e.get("type") == "custom_emoji" for e in (cts_data[1] or []))
+    )
+
+    if has_custom_emoji_preview:
+        preview_note = "👁 <b>Текущее значение показано выше</b> (с Premium emoji)\n\n"
+        try:
+            _preview_ents = _build_entities(cts_data[1])
+            await cb.message.answer(
+                cts_data[0][:300] + ("…" if len(cts_data[0]) > 300 else ""),
+                entities=_preview_ents or None,
+            )
+        except Exception:
+            preview_note = f"<blockquote>{html.escape((cur_text or '')[:300])}</blockquote>\n\n"
+    else:
+        preview_note = (f"<blockquote>{html.escape(cur_text[:300])}</blockquote>\n\n"
+                        if cur_text else "\n")
+
     await cb.message.answer(
         f"✏️ <b>{html.escape(label)}</b>\n\n"
         f"{status_line}\n"
-        + (f"<blockquote>{preview}</blockquote>\n\n" if preview else "\n")
+        + preview_note
         + "Отправь новый текст — форматирование и Premium emoji сохранятся.\n"
         "<code>/отмена</code> — выйти без сохранения.",
         parse_mode="HTML",
