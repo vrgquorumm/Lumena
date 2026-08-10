@@ -4963,32 +4963,51 @@ async def cmd_setrules(msg: Message, command: CommandObject = None):
 
 async def cmd_announce(msg: Message, command: CommandObject = None):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
-    # Извлекаем текст: из args (slash-команда) или из msg.text (текстовая команда)
-    if command and command.args:
-        text = command.args.strip()
-    else:
-        raw = (msg.text or "").strip()
-        parts = raw.split(maxsplit=1)
-        text = parts[1].strip() if len(parts) > 1 else ""
+
+    # Всегда берём текст из ОРИГИНАЛЬНОГО msg.text (сохраняем регистр)
+    # command.args приходит в нижнем регистре из диспетчера — не используем
+    raw = (msg.text or msg.caption or "").strip()
+    # Убираем первое слово-команду (объявление / announce) и возможный ! prefix
+    import re as _re
+    text = _re.sub(r'^[!]?\s*\S+\s*', '', raw, count=1).strip()
+
     if not text:
         return await msg.reply(
             "📢 Укажи текст объявления:\n"
             "<code>объявление Сегодня в 20:00 — ивент!</code>",
             parse_mode="HTML"
         )
-    announce_text = f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n\n{text}"
+
     cid = msg.chat.id
     pub = _ank.get_pub_chat()
-    # Определяем куда слать: если мы в мод-чате → в паб-чат, иначе → в текущий чат
-    target = pub if (pub and cid != pub) else cid
+    mod = econ_cid(pub) if pub else None  # мод-чат
+
+    # Логика цели:
+    # • из мод-чата или любого постороннего чата → шлём в паб-чат
+    # • из паб-чата → шлём в паб-чат (тот же чат)
+    # • если паб-чат не настроен → шлём в текущий чат
+    target = pub if pub else cid
+
+    announce_text = (
+        f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n"
+        f"{brand.div()}\n"
+        f"{html.escape(text)}\n"
+        f"{brand.div()}"
+    )
+
     try:
-        sent = await bot.send_message(target, announce_text, parse_mode="HTML")
+        await bot.send_message(target, announce_text, parse_mode="HTML")
         if target != cid:
-            await msg.reply(f"✅ Объявление отправлено в паб-чат!", parse_mode="HTML")
+            await msg.reply("✅ Объявление отправлено в паб-чат!")
         else:
-            await msg.reply(f"✅ Объявление отправлено!", parse_mode="HTML")
+            await msg.reply("✅ Объявление отправлено!")
     except Exception as e:
-        await msg.reply(f"❌ Не удалось отправить: {e}")
+        await msg.reply(
+            f"❌ Не удалось отправить.\n"
+            f"Проверь права бота в паб-чате.\n"
+            f"<code>{e}</code>",
+            parse_mode="HTML"
+        )
 
 
 @dp.message(Command("updatesave"))
