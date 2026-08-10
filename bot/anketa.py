@@ -32,6 +32,7 @@ _approved_data: dict        = {}       # uid → dict з даними анкет
 _sessions:      dict        = {}       # uid → незавершена анкета в поточному діалозі
 _pending:       dict[str, dict] = {}    # app_id → заявка, що очікує модерації
 _reactions:     dict[int, dict] = {}    # uid → реакції під опублікованою анкетою
+_mod_commenting: dict[int, str] = {}    # mod_uid → app_id (чекає коментар-правку)
 
 
 def _md_to_html(s: str) -> str:
