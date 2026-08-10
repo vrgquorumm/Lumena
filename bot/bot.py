@@ -327,6 +327,9 @@ def _build_main_payload() -> dict:
         "daily_games":       {str(u): v for u, v in daily_games.items()},
         "daily_msg_cnt":     {str(u): v for u, v in daily_msg_cnt.items()},
         "tasks_bonus_cd":    {str(u): v for u, v in tasks_bonus_cd.items()},
+        "work_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in work_cooldown.items()},
+        "fish_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in fish_cooldown.items()},
+        "rob_cooldown":      {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in rob_cooldown.items()},
     }
 
 
@@ -2296,7 +2299,7 @@ async def cmd_checkin(msg: Message):
 
 @dp.message(Command("streak"))
 async def cmd_streak(msg: Message):
-    data = streaks.get(msg.chat.id, {}).get(msg.from_user.id, {"count": 0})
+    data = streaks.get(econ_cid(msg.chat.id), {}).get(msg.from_user.id, {"count": 0})
     count = data["count"]
     if count >= 30:   fire = "🔥🔥🔥 Легенда!"
     elif count >= 14: fire = "🔥🔥 Горишь!"
@@ -2315,7 +2318,7 @@ async def cmd_streak(msg: Message):
 
 @dp.message(Command("topstreak"))
 async def cmd_topstreak(msg: Message):
-    chat_streaks = streaks.get(msg.chat.id, {})
+    chat_streaks = streaks.get(econ_cid(msg.chat.id), {})
     if not chat_streaks: return await msg.reply("🔥 Пока никто не имеет стрика")
     top = sorted(chat_streaks.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
     medals = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
@@ -5618,6 +5621,7 @@ async def cmd_bonus(msg: Message):
     add_balance(uid, reward)
     award_xp(uid, 100)
     bonus_weekly_cd[uid] = week_key
+    save_data()
     schedule_state_save("бонус за стрик")
     await msg.reply(
         f"{brand.hdr()}\n\n"
@@ -5801,6 +5805,8 @@ async def cmd_limbo(msg: Message, command: CommandObject = None):
         target = float(parts[1])
     except ValueError:
         return await msg.reply("❌ Укажи число и дробное цель")
+    if not math.isfinite(target):
+        return await msg.reply("❌ Цель должна быть обычным числом")
     uid = msg.from_user.id
     if bet <= 0 or get_balance(uid) < bet:
         return await msg.reply("❌ Недостаточно LMN")
@@ -5898,15 +5904,21 @@ async def cmd_crash(msg: Message, command: CommandObject = None):
 async def cb_crash_out(cb: CallbackQuery):
     parts = cb.data.split(":")
     uid   = int(parts[2])
-    bet   = int(parts[3])
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя игра!", show_alert=True)
     game = _crash_games.pop(uid, None)
     if not game:
         return await cb.answer("Игра уже закончилась!", show_alert=True)
     game["active"] = False
-    mult     = game.get("multiplier", 1.0)
-    winnings = int(bet * mult)
+    mult      = game.get("multiplier", 1.0)
+    crash_at  = game.get("crash_at", 1.0)
+    real_bet  = game["bet"]   # берём ставку из состояния игры, не из callback
+    # если успели нажать после краша — выплаты нет
+    if mult >= crash_at:
+        _game_result(uid, False)
+        schedule_state_save("crash late cashout")
+        return await cb.answer("💥 Краш уже произошёл! Ставка потеряна.", show_alert=True)
+    winnings = int(real_bet * mult)
     add_balance(uid, winnings)
     _game_result(uid, True)
     award_xp(uid, int(mult * 5))
@@ -6105,6 +6117,13 @@ async def cb_mines(cb: CallbackQuery):
         return await cb.answer(f"+{fmt_lmn(winnings)}!")
     if action == "click":
         idx = int(parts[3])
+        total_cells = _MINES_SIZE * _MINES_SIZE
+        # защита от невалидного индекса (подделанный callback)
+        if not (0 <= idx < total_cells):
+            return await cb.answer("Неверная клетка!", show_alert=True)
+        # защита от повторного клика по уже открытой клетке
+        if idx in revealed:
+            return await cb.answer()
         if idx in mines:
             _mines_games.pop(uid, None); _game_result(uid, False)
             schedule_state_save("mines boom")
@@ -6744,23 +6763,34 @@ async def cmd_announce_v7(msg: Message):
     if not pub_chat:
         return await msg.reply("❌ pub_chat_id не установлен. Сначала /setpubchat")
     text = (
-        "🌟 <b>LUMENA v7 — БОЛЬШОЕ ОБНОВЛЕНИЕ!</b> 🌟\n\n"
-        "Мы выпустили масштабное обновление. Вот что нового:\n\n"
+        "🌟 <b>LUMENA v7 — ПОЛНОЕ ОБНОВЛЕНИЕ!</b> 🌟\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "📋 <b>Задания дня</b>\n"
-        "• Выполни все 4 задания → <b>+1 000 LMN + 75 XP</b> бонус!\n"
-        "• Наглядный прогресс: <code>задания</code>\n\n"
-        "🔮 <b>Расширенная база предсказаний</b>\n"
-        "• 70+ предсказаний судьбы — <code>предсказание</code>\n"
-        "• 30 суперсил — <code>суперсила</code>\n"
-        "• 40 профессий от звёзд — <code>профессия</code>\n"
-        "• 6 гороскопов для каждого знака — <code>гороскоп</code>\n"
-        "• Нумерология с описанием архетипа — <code>нумерология</code>\n\n"
+        "• Выполни все 4 задания → <b>+1 000 LMN + 75 XP</b>!\n"
+        "• Прогресс-бар и автоначисление: <code>задания</code>\n\n"
+        "🔮 <b>Расширенные предсказания</b>\n"
+        "• 98 предсказаний судьбы — <code>предсказание</code>\n"
+        "• 25 уникальных ответов вселенной — <code>предсказать</code>\n"
+        "• 35 ответов магического шара — <code>8ball</code>\n"
+        "• 30 суперсил с описанием — <code>суперсила</code>\n"
+        "• 40 профессий с описанием — <code>профессия</code>\n"
+        "• 30 животных с описанием — <code>животное</code>\n"
+        "• 6 гороскопов на каждый знак — <code>гороскоп</code>\n"
+        "• Нумерология с архетипом — <code>нумерология</code>\n\n"
         "💰 <b>Улучшенная экономика</b>\n"
         "• Дейли показывает стрик и подсказки: <code>дейли</code>\n"
         "• Прогресс-бар стрика: <code>бонус</code>\n"
-        "• Список всех наград: <code>награды</code>\n\n"
-        "✨ <b>Новый дизайн команд</b>\n"
-        "• Все команды переоформлены — красиво и информативно\n\n"
+        "• Все источники наград: <code>награды</code>\n\n"
+        "🐛 <b>Исправленные баги</b>\n"
+        "• Краш: ставка теперь берётся из игры, не из кнопки\n"
+        "• Краш: нельзя забрать выигрыш после краша\n"
+        "• Мины: повторный клик по открытой клетке заблокирован\n"
+        "• Мины: защита от подделанных кнопок\n"
+        "• Лимбо: защита от NaN/Infinity в цели\n"
+        "• Стрик/топ стриков: правильно читают данные чата\n"
+        "• Бонус за стрик: данные сохраняются сразу после получения\n"
+        "• Кулдауны работы/рыбалки/ограбления теперь не сбрасываются при рестарте\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
         "— <b>Команда Lumena</b> 💙\n"
         "#lumena #update #v7"
     )
@@ -10832,6 +10862,23 @@ def _apply_data(data: dict) -> None:
         daily_msg_cnt[int(u)] = dict(v)
     for u, v in data.get("tasks_bonus_cd", {}).items():
         tasks_bonus_cd[int(u)] = str(v)
+    # кулдауны работы/рыбалки/ограбления (datetime → сохраняем ISO-строкой)
+    _tz = ZoneInfo("Europe/Kyiv")
+    for u, v in data.get("work_cooldown", {}).items():
+        try:
+            work_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
+        except Exception:
+            pass
+    for u, v in data.get("fish_cooldown", {}).items():
+        try:
+            fish_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
+        except Exception:
+            pass
+    for u, v in data.get("rob_cooldown", {}).items():
+        try:
+            rob_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
