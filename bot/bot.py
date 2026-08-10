@@ -5001,7 +5001,8 @@ async def cmd_daily(msg: Message):
     xp_got   = 50
     lvl_up   = award_xp(uid, xp_got)
     daily_cooldown[uid] = today
-    schedule_state_save("дейли")
+    save_data()                    # синхронный сброс на диск немедленно
+    schedule_state_save("дейли")  # + async-синк с PostgreSQL/GitHub
     lvl = get_xp_level(user_xp.get(uid, 0))[0]
     up_text = f"\n🆙 <b>Новый уровень: {lvl}!</b>" if lvl_up else ""
     await msg.reply(
@@ -5115,11 +5116,10 @@ def _game_result(uid: int, won: bool):
     if won:
         _games_won[uid] = _games_won.get(uid, 0) + 1
     _check_achievements(uid)
+    save_data()   # синхронный сброс — данные игры не теряются при перезапуске
 
 async def _priv_check(msg: Message) -> bool:
-    if msg.chat.type != "private":
-        await msg.reply("🎰 Игры доступны только в личном чате с ботом")
-        return False
+    """Игры работают везде — проверка удалена."""
     return True
 
 @dp.message(Command("орёл", "coinflip"))
