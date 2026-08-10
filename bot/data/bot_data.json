@@ -57,7 +57,7 @@
     "6088888892": 0,
     "6195355999": 783,
     "7528519750": 0,
-    "8655306548": 77000002330,
+    "8655306548": 77000000330,
     "6803820759": 0,
     "5662087692": 0,
     "5152720229": 7000000000,
@@ -377,11 +377,11 @@
   "pending_notifications": [],
   "marriage_proposals": [],
   "user_xp": {
-    "8655306548": 77
+    "8655306548": 79
   },
   "user_messages": {
     "-1004401287309": {
-      "8655306548": 8
+      "8655306548": 9
     }
   },
   "daily_cooldown": {
@@ -389,6 +389,7 @@
   },
   "user_achievements": {
     "8655306548": [
+      "gambler",
       "first_message",
       "rich_1b",
       "rich_1m"
@@ -400,9 +401,13 @@
   "referral_counts": {},
   "raid_mode": {},
   "antispam_mode": {},
-  "games_played": {},
+  "games_played": {
+    "8655306548": 2
+  },
   "games_won": {},
   "v6_announced": true,
   "bonus_weekly_cd": {},
-  "daily_games": {}
+  "daily_games": {
+    "8655306548": "2026-08-10"
+  }
 }
