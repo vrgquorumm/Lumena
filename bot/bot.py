@@ -985,15 +985,16 @@ def is_married(chat_id: int, uid: int) -> bool:
     return uid in marriages.get(econ_cid(chat_id), {})
 
 def _marriage_days_str(uid1: int, uid2: int | None) -> str:
-    """Возвращает строку вида ' · 42 дн. вместе 💑' или ''."""
+    """Возвращает строку вида ' · 42 дн. вместе 💑'.
+    Если дата не записана — регистрирует сегодня и возвращает 0 дн."""
     if not uid2:
         return ""
     pair_key = f"{min(uid1, uid2)}_{max(uid1, uid2)}"
-    wed_str = marriage_dates.get(pair_key)
-    if not wed_str:
-        return ""
+    if pair_key not in marriage_dates:
+        marriage_dates[pair_key] = today_kyiv().isoformat()
+        schedule_state_save("инициализация даты брака")
     try:
-        days = (today_kyiv() - date.fromisoformat(wed_str)).days
+        days = (today_kyiv() - date.fromisoformat(marriage_dates[pair_key])).days
         return f" · {days} дн. вместе 💑"
     except Exception:
         return ""
@@ -2315,15 +2316,16 @@ async def cmd_marriages(msg: Message):
                 n2 = m2.user.full_name
             except: pass
             pair_key = f"{min(u1, u2)}_{max(u1, u2)}"
-            wed_date_str = marriage_dates.get(pair_key)
-            days_str = ""
-            if wed_date_str:
-                try:
-                    wed = date.fromisoformat(wed_date_str)
-                    days_together = (today_kyiv() - wed).days
-                    days_str = f" · {days_together} дн. вместе 💑"
-                except Exception:
-                    pass
+            if pair_key not in marriage_dates:
+                # Старый брак без даты — регистрируем сегодня, отсчёт начнётся с нуля
+                marriage_dates[pair_key] = today_kyiv().isoformat()
+                schedule_state_save("инициализация даты брака")
+            try:
+                wed = date.fromisoformat(marriage_dates[pair_key])
+                days_together = (today_kyiv() - wed).days
+                days_str = f" · {days_together} дн. вместе 💑"
+            except Exception:
+                days_str = ""
             lines.append(f"{i}. 💕 <b>{_html.escape(n1)}</b> ❤️ <b>{_html.escape(n2)}</b>{days_str}")
 
     if pending:
