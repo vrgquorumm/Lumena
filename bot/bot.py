@@ -3291,7 +3291,7 @@ async def cmd_richest(msg: Message):
     # Объединяем кошельки + банк для полного богатства
     all_uids = set(lmn_balances) | set(bank_balances)
     if not all_uids: return await msg.reply(empty_msg, parse_mode="HTML")
-    chat_uids = chat_members.get(msg.chat.id, set())
+    chat_uids = set(chat_members.get(msg.chat.id, {}))
     if chat_uids:
         all_uids = all_uids & chat_uids
     if not all_uids:
@@ -5065,6 +5065,9 @@ async def cmd_profile(msg: Message):
     bio = html.escape(profile_data.get("bio", brand.get_text("profile_no_bio") or "не указано"))
     title_str = html.escape(profile_data.get("title", ""))
     _cur = brand.currency()
+    xp = user_xp.get(uid, 0)
+    lvl_name, _lvl_start, _lvl_end = get_xp_level(xp)
+    xp_progress_bar = xp_bar(xp)
     lines = [
         f"{brand.hdr()}\n",
         brand.get_text("profile_header", name=html.escape(target.full_name)),
@@ -5079,6 +5082,8 @@ async def cmd_profile(msg: Message):
         f"{brand.get_text('profile_rep_label')} <b>{rep_val:+d}</b>",
         f"{brand.get_text('profile_marry_label')} {('❤️ ' + html.escape(partner_name) + _marriage_days_str(uid, partner_id)) if married else (brand.get_text('profile_no_partner') or '—')}",
         f"{brand.get_text('profile_id_label')} <code>{uid}</code>",
+        f"\n🏷 Уровень: <b>{lvl_name}</b>",
+        f"📊 {xp_progress_bar}",
         f"\n{brand.div()}",
     ]
     await msg.reply("\n".join(lines), parse_mode="HTML")
@@ -5671,13 +5676,15 @@ async def cmd_rank(msg: Message):
     pos     = next((i + 1 for i, u in enumerate(ranked) if u == uid), None)
     xp      = user_xp.get(uid, 0)
     lvl     = get_xp_level(xp)[0]
+    bar     = xp_bar(xp)
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🏆 <b>Ранг · {name}</b>\n\n"
         f"{brand.div()}\n"
         f"📍 Место: <b>#{pos}</b> из {len(ranked)}\n"
         f"✨ XP: <b>{xp:,}</b>\n"
-        f"🏷 Уровень: <b>{lvl}</b>\n\n"
+        f"🏷 Уровень: <b>{lvl}</b>\n"
+        f"📊 {bar}\n\n"
         f"{brand.div()}",
         parse_mode="HTML"
     )
@@ -10908,11 +10915,39 @@ async def main():
     await brand.restore_brand()
     load_data()
     _ank.load_anketa_settings()
+    # ── Захист від повторного спрацювання одноразових LMN-міграцій ──────────
+    # Версії міграцій раніше зберігались лише всередині великого bot_data
+    # знімку. Якщо його відновлення хоч раз пройде не повністю (гонка,
+    # обірваний запис БД тощо), лічильники версій відкочуються на 0 і
+    # міграції — обнулення/переказ усіх гаманців — спрацьовують ЗНОВУ,
+    # через що монети «зникають» у всіх учасників чату. Тепер версія кожної
+    # міграції додатково звіряється й негайно записується в окремий,
+    # незалежний ключ БД, ще до будь-якого запису великого знімку.
+    global lmn_balance_reset_version, lmn_transfer_version
+    if _db.has_pg():
+        migration_state = await _db.db_get("lmn_migrations") or {}
+        lmn_balance_reset_version = max(
+            lmn_balance_reset_version, int(migration_state.get("reset_version", 0) or 0)
+        )
+        lmn_transfer_version = max(
+            lmn_transfer_version, int(migration_state.get("transfer_version", 0) or 0)
+        )
+
     if normalize_lmn_balances_once():
+        if _db.has_pg():
+            await _db.db_set("lmn_migrations", {
+                "reset_version": lmn_balance_reset_version,
+                "transfer_version": lmn_transfer_version,
+            })
         await save_state_now("одноразовое выравнивание LMN-балансов")
         # Компенсационное объявление отправлено вручную ранее.
         # При редеплое никакие сообщения в чаты не отправляются.
     if transfer_all_balances_to_founder():
+        if _db.has_pg():
+            await _db.db_set("lmn_migrations", {
+                "reset_version": lmn_balance_reset_version,
+                "transfer_version": lmn_transfer_version,
+            })
         await save_state_now("перевод всех LMN-балансов фаундеру")
 
     # ── Отложенные уведомления при старте ОТКЛЮЧЕНЫ ──────────────────────────
