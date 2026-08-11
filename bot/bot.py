@@ -133,6 +133,12 @@ _ROLE_USERNAMES: dict[str, str] = {
 }
 _PREMIUM_ALWAYS = {"hdrttttttt", "veroniksssxa"}
 
+# ── Кастомные права мута ──────────────────────────────────────
+# Эти пользователи могут мутить ТОЛЬКО юзеров из _MUTE_TARGETS
+_CUSTOM_MUTERS: set[str] = {"egamaster", "not_persons", "skes1m"}
+# Пользователей из этого списка могут мутить _CUSTOM_MUTERS (и, конечно, фаундер + lead_admin)
+_MUTE_TARGETS:  set[str] = {"vladmish11", "ne_opoznaii", "zxceblanxa"}
+
 _BOT_ID: int = 0
 _BOT_USERNAME: str = ""
 _state_save_task: asyncio.Task | None = None
@@ -857,6 +863,16 @@ def is_editor(msg) -> bool:
 
 def is_super(msg) -> bool:
     return msg.from_user.id in SUPER_IDS or is_owner(msg)
+
+def is_custom_muter(msg) -> bool:
+    """True если юзер входит в список кастомных мутеров."""
+    u = getattr(msg, "from_user", None)
+    if not u: return False
+    return (u.username or "").lower().lstrip("@") in _CUSTOM_MUTERS
+
+def _username_lower(user) -> str:
+    """Возвращает username пользователя в нижнем регистре без @."""
+    return (getattr(user, "username", None) or "").lower().lstrip("@")
 
 def is_verified(uid: int) -> bool:
     """Прошёл ли пользователь верификацию. Фаундер всегда верифицирован."""
@@ -1795,7 +1811,9 @@ async def cmd_roles(msg: Message, command=None):
 
 @dp.message(Command("mute"))
 async def cmd_mute(msg: Message, command: CommandObject):
-    if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    _caller_is_custom = is_custom_muter(msg)
+    if not await is_admin(msg) and not _caller_is_custom:
+        return await msg.reply("⛔ Только админы")
     user = await get_user(msg, command)
     if not user: return await msg.reply(
         "ℹ️ Ответь на сообщение.\n"
@@ -1809,6 +1827,10 @@ async def cmd_mute(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя замутить фаундера")
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя замутить себя")
+    # Кастомные мутеры могут мутить только своих целей
+    if _caller_is_custom and not await is_admin(msg):
+        if _username_lower(user) not in _MUTE_TARGETS:
+            return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
     if is_owner(msg):
         await _demote_if_needed(msg.chat.id, user.id)
     delta, reason = parse_time_and_reason(command.args or "")
@@ -1825,6 +1847,40 @@ async def cmd_mute(msg: Message, command: CommandObject):
             mod_card(title, user, reason=reason, extra=extra),
             parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
+
+
+@dp.message(Command("mute1", "мут1"))
+async def cmd_mute1(msg: Message, command: CommandObject):
+    """Мут на 1 минуту — кастомные мутеры могут применять только к _MUTE_TARGETS."""
+    _caller_is_custom = is_custom_muter(msg)
+    if not await is_admin(msg) and not _caller_is_custom:
+        return await msg.reply("⛔ Только админы")
+    user = await get_user(msg, command)
+    if not user:
+        return await msg.reply(
+            "ℹ️ Ответь на сообщение пользователя.\n"
+            "Пример: <code>!мут1</code> — мут на 1 минуту",
+            parse_mode="HTML")
+    if user.id == OWNER_ID:
+        return await msg.reply("⛔ Нельзя замутить фаундера")
+    if user.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя замутить себя")
+    if _caller_is_custom and not await is_admin(msg):
+        if _username_lower(user) not in _MUTE_TARGETS:
+            return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
+    delta = timedelta(minutes=1)
+    until = now_kyiv() + delta
+    _, reason = parse_time_and_reason(command.args or "")
+    try:
+        await bot.restrict_chat_member(msg.chat.id, user.id,
+            permissions=ChatPermissions(can_send_messages=False), until_date=until)
+        _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
+        await msg.reply(
+            mod_card("Мут 🔇 на 1 мин", user, reason=reason,
+                     extra=f"⏰ До {until.strftime('%H:%M')}"),
+            parse_mode="HTML")
+    except Exception as e:
+        await msg.reply(f"❌ {e}")
 
 @dp.message(Command("unmute"))
 async def cmd_unmute(msg: Message, command: CommandObject):
@@ -7400,6 +7456,7 @@ def reg(*words):
 TEXT_COMMANDS.update({
     # Модерация (без бан/мут)
     "размут": cmd_unmute, "разбан": cmd_unban, "кик": cmd_kick,
+    "мут1": cmd_mute1, "mute1": cmd_mute1,
     "варн": cmd_warn, "снятьварн": cmd_unwarn, "очистить": cmd_purge,
     "ро": cmd_ro, "закрепить": cmd_pin, "открепить": cmd_unpin,
     # Стрики
@@ -10620,6 +10677,8 @@ async def universal_handler(msg: Message):
             # Форс
             "форсбан": cmd_forceban, "forceban": cmd_forceban,
             "форсмут": cmd_forcemute, "forcemute": cmd_forcemute,
+            # Мут на 1 минуту
+            "мут1": cmd_mute1, "mute1": cmd_mute1,
             # Размут / разбан / кик через ! тоже работают
             "размут": cmd_unmute, "unmute": cmd_unmute,
             "разбан": cmd_unban,  "unban":  cmd_unban,
