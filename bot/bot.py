@@ -7659,52 +7659,41 @@ async def _check_link_guard(msg: Message) -> bool:
     except Exception:
         pass
 
-    # ── Подсчёт предупреждений ──────────────────────────────────
-    _link_guard_warns.setdefault(msg.chat.id, {})
-    _link_guard_warns[msg.chat.id][uid] = _link_guard_warns[msg.chat.id].get(uid, 0) + 1
-    count = _link_guard_warns[msg.chat.id][uid]
-
+    # ── Мут 1 минута сразу ─────────────────────────────────────
     name    = msg.from_user.full_name
     mention = f'<a href="tg://user?id={uid}">{html.escape(name)}</a>'
+    until   = int(datetime.now(tz=KYIV_TZ).timestamp()) + 60  # 1 минута
 
+    muted = False
+    try:
+        await bot.restrict_chat_member(
+            msg.chat.id, uid,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until,
+        )
+        muted = True
+    except Exception:
+        pass
+
+    mute_text = "🔇 мут <b>1 минута</b>" if muted else "⚠️ ссылки запрещены"
     try:
         warn_msg = await bot.send_message(
             msg.chat.id,
             f"🔗 {mention} — <b>ссылки запрещены!</b>\n"
-            f"⚠️ Предупреждение: <b>{count}/3</b>\n\n"
+            f"{mute_text}\n\n"
             f"<i>Сообщение автоматически удалено.</i>",
             parse_mode="HTML",
         )
+        # ── Автоудаление уведомления через 30 с ─────────────────
+        async def _del_warn():
+            await asyncio.sleep(30)
+            try:
+                await warn_msg.delete()
+            except Exception:
+                pass
+        asyncio.create_task(_del_warn())
     except Exception:
-        return True  # удалить удалось, предупреждение не вышло — возвращаем True
-
-    # ── 3 предупреждения → мут 5 минут ─────────────────────────
-    if count >= 3:
-        _link_guard_warns[msg.chat.id][uid] = 0
-        from datetime import datetime as _dt
-        until = int(_dt.now(tz=KYIV_TZ).timestamp()) + 300
-        try:
-            await bot.restrict_chat_member(
-                msg.chat.id, uid,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=until,
-            )
-            await bot.send_message(
-                msg.chat.id,
-                f"🔇 {mention} — мут <b>5 минут</b> за систематическую отправку ссылок.",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
-
-    # ── Автоудаление предупреждения через 30 с ──────────────────
-    async def _del_warn():
-        await asyncio.sleep(30)
-        try:
-            await warn_msg.delete()
-        except Exception:
-            pass
-    asyncio.create_task(_del_warn())
+        pass
 
     save_data()
     return True
@@ -10048,16 +10037,9 @@ async def _check_chat_insult(msg: Message) -> bool:
 
     try:
         await msg.delete()
-        until = int(datetime.now(tz=KYIV_TZ).timestamp()) + 600
-        await bot.restrict_chat_member(
-            msg.chat.id,
-            uid,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until,
-        )
         notice = await bot.send_message(
             msg.chat.id,
-            f"🔇 <b>{html.escape(msg.from_user.full_name)}</b> — мут на <b>10 минут</b> за оскорбления.",
+            f"🚫 <b>{html.escape(msg.from_user.full_name)}</b> — сообщение удалено за нарушение правил.",
             parse_mode="HTML",
         )
         asyncio.create_task(_delete_later(notice, 15))
@@ -10088,23 +10070,21 @@ async def _check_admin_insult(msg: Message) -> bool:
         return False
     if uid in SUPER_IDS:
         return False
-    # Мут на 10 минут
-    from datetime import datetime
-    until = int(datetime.now(tz=KYIV_TZ).timestamp()) + 600
+    name_u = msg.from_user.full_name
+    # Штраф ауры за агрессию — без мута
+    add_aura(uid, -1.0)
     try:
-        await bot.restrict_chat_member(
-            msg.chat.id, uid,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until,
-        )
-        name_u = msg.from_user.full_name
-        # Штраф ауры за агрессию
-        add_aura(uid, -1.0)
-        await msg.reply(
-            f"🔇 <b>{name_u}</b> — мут на 10 минут за оскорбление администрации.\n"
+        await msg.delete()
+    except Exception:
+        pass
+    try:
+        notice = await bot.send_message(
+            msg.chat.id,
+            f"🚫 <b>{html.escape(name_u)}</b> — сообщение удалено за нарушение правил.\n"
             f"🌑 Аура: <b>-1%</b>",
             parse_mode="HTML",
         )
+        asyncio.create_task(_delete_later(notice, 15))
         return True
     except Exception:
         return False
