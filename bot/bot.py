@@ -10906,20 +10906,13 @@ async def main():
     if transfer_all_balances_to_founder():
         await save_state_now("перевод всех LMN-балансов фаундеру")
 
-    # ── Одноразовые уведомления (например, развод фаундером) ─────────────────
+    # ── Отложенные уведомления при старте ОТКЛЮЧЕНЫ ──────────────────────────
+    # Требование: после редеплоя бот НЕ отправляет никаких сообщений в чаты.
+    # Накопившаяся очередь молча очищается.
     if pending_notifications:
-        to_send = list(pending_notifications)
+        logging.info("🔕 Очищено %d отложенных уведомлений без отправки", len(pending_notifications))
         pending_notifications.clear()
-        await save_state_now("отправка отложенных уведомлений")
-        for _notif in to_send:
-            try:
-                await bot.send_message(
-                    chat_id    = _notif["chat_id"],
-                    text       = _notif["text"],
-                    parse_mode = _notif.get("parse_mode", "HTML"),
-                )
-            except Exception as _ex:
-                logging.warning("pending_notification send failed: %s", _ex)
+        await save_state_now("очистка отложенных уведомлений без отправки")
 
     brand.load_custom_texts()
     brand.load_custom_buttons()
