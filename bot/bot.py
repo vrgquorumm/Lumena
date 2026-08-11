@@ -1831,7 +1831,8 @@ async def cmd_mute(msg: Message, command: CommandObject):
     if _caller_is_custom and not await is_admin(msg):
         if _username_lower(user) not in _MUTE_TARGETS:
             return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
-    if is_owner(msg):
+    # Снимаем права администратора у цели, если нужно (иначе Telegram вернёт ошибку)
+    if is_owner(msg) or _username_lower(user) in _MUTE_TARGETS:
         await _demote_if_needed(msg.chat.id, user.id)
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
@@ -1868,6 +1869,9 @@ async def cmd_mute1(msg: Message, command: CommandObject):
     if _caller_is_custom and not await is_admin(msg):
         if _username_lower(user) not in _MUTE_TARGETS:
             return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
+    # Снимаем права администратора у цели, если нужно
+    if is_owner(msg) or _username_lower(user) in _MUTE_TARGETS:
+        await _demote_if_needed(msg.chat.id, user.id)
     delta = timedelta(minutes=1)
     until = now_kyiv() + delta
     _, reason = parse_time_and_reason(command.args or "")
