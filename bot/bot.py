@@ -2486,12 +2486,26 @@ async def cmd_streak(msg: Message):
     elif count >= 7:  fire = "🔥 Неплохо!"
     elif count >= 3:  fire = "✨ Начало!"
     else:             fire = "🆕 Старт"
+    # Шкала прогресса до следующей вехи (3 → 7 → 14 → 30)
+    _milestones = [3, 7, 14, 30]
+    _next = next((m for m in _milestones if count < m), None)
+    if _next is not None:
+        _prev = max([0] + [m for m in _milestones if m <= count])
+        pct = (count - _prev) / (_next - _prev) if _next > _prev else 0
+        filled = int(pct * 10)
+        bar_line = (
+            f"📊 {'█' * filled}{'░' * (10 - filled)} {int(pct * 100)}%\n"
+            f"🎯 До вехи <b>{_next} дней</b>: осталось <b>{_next - count}</b>\n"
+        )
+    else:
+        bar_line = "📊 ██████████ 100% — максимальная веха! 👑\n"
     name = msg.from_user.first_name
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🔥 Стрик · {name}\n\n"
         f"📅 Дней подряд: <b>{count}</b>\n"
-        f"⚡ {fire}\n\n"
+        f"⚡ {fire}\n"
+        f"{bar_line}\n"
         f"{brand.div()}",
         parse_mode="HTML"
     )
@@ -10887,34 +10901,8 @@ async def main():
     _ank.load_anketa_settings()
     if normalize_lmn_balances_once():
         await save_state_now("одноразовое выравнивание LMN-балансов")
-        # Отправить уведомление о компенсации в паб-чат после старта бота
-        async def _send_compensation_announcement():
-            await asyncio.sleep(8)  # дать боту полностью запуститься
-            pub_chat = _ank.get_pub_chat()
-            if not pub_chat:
-                return
-            _n = len(lmn_balances)
-            _amt = fmt_lmn(LMN_BALANCE_RESET_TARGET)
-            _cur = brand.currency()
-            text = (
-                f"{brand.hdr()}\n\n"
-                f"🎁 <b>КОМПЕНСАЦИЯ — {_amt} {_cur} КАЖДОМУ!</b>\n\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Из-за технической проблемы с сохранением монет "
-                f"<b>все балансы были обнулены</b>.\n\n"
-                f"В качестве компенсации <b>каждый участник</b> получил:\n"
-                f"💰 <b>+{_amt} {_cur}</b> на кошелёк\n\n"
-                f"Всего компенсация начислена: <b>{_n} аккаунтов</b>\n\n"
-                f"Проверь свой баланс: <code>баланс</code>\n\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"— <b>Команда Lumena</b> 💙"
-            )
-            try:
-                await bot.send_message(pub_chat, text, parse_mode="HTML")
-                logging.info("✅ Компенсационное объявление отправлено в %s", pub_chat)
-            except Exception as _ex:
-                logging.warning("⚠️ Не удалось отправить компенсационное объявление: %s", _ex)
-        asyncio.create_task(_send_compensation_announcement())
+        # Компенсационное объявление отправлено вручную ранее.
+        # При редеплое никакие сообщения в чаты не отправляются.
     if transfer_all_balances_to_founder():
         await save_state_now("перевод всех LMN-балансов фаундеру")
 
@@ -10953,9 +10941,8 @@ async def main():
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
 
-    # V6: одноразовое объявление об обновлении
-    if not v6_announced:
-        asyncio.create_task(_send_v6_announcement())
+    # V6-объявление больше НЕ отправляется автоматически при старте —
+    # только вручную через /announce_v6 (иначе каждый редеплой спамил чат).
 
     # ── Синхронизация экономики связанных чатов ──────────
     # pub_chat и mod_chat используют единую базу (canonical = pub_chat)
