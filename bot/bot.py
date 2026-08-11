@@ -171,6 +171,7 @@ daily_games:       dict[int, str]  = {}   # uid → ISO date последней 
 daily_msg_cnt:     dict[int, dict] = {}   # uid → {"date": ISO, "count": int} — сообщения за сегодня
 tasks_bonus_cd:    dict[int, str]  = {}   # uid → ISO date: когда получен бонус за все задания
 _crash_games:      dict[int, dict] = {}   # uid → crash game state
+_cook_sessions:    dict[int, dict] = {}   # uid → активная сессия сборки блюда
 _bj_games:         dict[int, dict] = {}   # uid → blackjack state
 _mines_games:      dict[int, dict] = {}   # uid → mines state
 
@@ -3026,15 +3027,60 @@ async def cmd_mine(msg: Message):
     schedule_state_save("mine")
 
 
+COOK_COOLDOWN_MIN = 90
+
+# (эмодзи, название, базовая ценность)
+_COOK_INGREDIENTS = [
+    ("🥩", "мясо",          140),
+    ("🐟", "рыба",          130),
+    ("🧀", "сыр",           100),
+    ("🍅", "томат",          80),
+    ("🌶️", "перец чили",     90),
+    ("🍄", "трюфель",        260),
+    ("🥭", "манго",          110),
+    ("🍫", "шоколад",        120),
+    ("🦞", "лобстер",        340),
+    ("🥚", "яйцо",            70),
+    ("🍯", "мёд",            100),
+    ("✨", "золотая пыль",   480),
+]
+COOK_PICKS_NEEDED = 3
+
+def _cook_kb(uid: int, session: dict) -> InlineKeyboardMarkup:
+    rows = []
+    row = []
+    for idx, opt in enumerate(session["options"]):
+        if idx in session["picked"]:
+            continue
+        icon, name, _ = opt
+        row.append(InlineKeyboardButton(text=f"{icon} {name}", callback_data=f"ckpick:{uid}:{idx}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=f"ckcancel:{uid}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def _cook_progress_text(session: dict) -> str:
+    picked_names = [f"{session['options'][i][0]} {session['options'][i][1]}" for i in session["picked"]]
+    picked_line = ", ".join(picked_names) if picked_names else "пока пусто"
+    return (
+        f"{brand.hdr()}\n\n"
+        f"🍳 <b>Собери блюдо из продуктов</b>\n\n"
+        f"Выбери <b>{COOK_PICKS_NEEDED}</b> ингредиента(ов) — от их сочетания и удачи зависит награда.\n\n"
+        f"📋 В миске: {picked_line} ({len(session['picked'])}/{COOK_PICKS_NEEDED})\n\n"
+        f"{brand.div()}"
+    )
+
 @dp.message(Command("cook", "готовка", "кулинария"))
 async def cmd_cook(msg: Message):
-    """Кулинария: готовишь блюда на продажу, кулдаун 90 мин."""
+    """Кулинария: собираешь блюдо из продуктов, кулдаун 90 мин."""
     uid = msg.from_user.id
     now = now_kyiv()
     last = cook_cooldown.get(uid)
-    cooldown_minutes = 90
-    if last and (now - last).total_seconds() < cooldown_minutes * 60:
-        mins = cooldown_minutes - int((now - last).total_seconds()) // 60
+    if last and (now - last).total_seconds() < COOK_COOLDOWN_MIN * 60:
+        mins = COOK_COOLDOWN_MIN - int((now - last).total_seconds()) // 60
         return await msg.reply(
             f"{brand.hdr()}\n\n"
             f"🍳 <b>Кухня ещё не готова к новой смене</b>\n\n"
@@ -3042,44 +3088,119 @@ async def cmd_cook(msg: Message):
             f"{brand.div()}",
             parse_mode="HTML",
         )
-    cook_cooldown[uid] = now
-    # Есть риск испортить блюдо.
-    if random.random() < 0.12:
+    if uid in _cook_sessions:
+        return await msg.reply("🍳 У тебя уже есть незавершённое блюдо! Заверши или отмени его.")
+
+    options = random.sample(_COOK_INGREDIENTS, k=6)
+    session = {"options": options, "picked": []}
+    _cook_sessions[uid] = session
+    await msg.reply(
+        _cook_progress_text(session),
+        parse_mode="HTML",
+        reply_markup=_cook_kb(uid, session),
+    )
+
+@dp.callback_query(F.data.startswith("ckpick:"))
+async def cb_cook_pick(cb: CallbackQuery):
+    _, uid_s, idx_s = cb.data.split(":")
+    uid, idx = int(uid_s), int(idx_s)
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоё блюдо!", show_alert=True)
+    session = _cook_sessions.get(uid)
+    if not session:
+        return await cb.answer("Сессия готовки не найдена", show_alert=True)
+    if idx in session["picked"] or idx >= len(session["options"]):
+        return await cb.answer()
+    session["picked"].append(idx)
+
+    if len(session["picked"]) < COOK_PICKS_NEEDED:
+        await cb.message.edit_text(
+            _cook_progress_text(session),
+            parse_mode="HTML",
+            reply_markup=_cook_kb(uid, session),
+        )
+        return await cb.answer(f"Добавлено: {session['options'][idx][1]}")
+
+    # Все ингредиенты выбраны — показываем кнопку готовки
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🍳 Готовить!", callback_data=f"ckgo:{uid}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"ckcancel:{uid}")],
+    ])
+    await cb.message.edit_text(
+        _cook_progress_text(session) + "\n\n👨‍🍳 Все продукты готовы — можно приступать!",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    await cb.answer(f"Добавлено: {session['options'][idx][1]}")
+
+@dp.callback_query(F.data.startswith("ckcancel:"))
+async def cb_cook_cancel(cb: CallbackQuery):
+    uid = int(cb.data.split(":")[1])
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоё блюдо!", show_alert=True)
+    _cook_sessions.pop(uid, None)
+    cook_cooldown.pop(uid, None)
+    await cb.message.edit_text("🍳 Готовку отменили. Продукты вернулись в холодильник — можно начать заново.")
+    await cb.answer("Отменено")
+
+@dp.callback_query(F.data.startswith("ckgo:"))
+async def cb_cook_go(cb: CallbackQuery):
+    uid = int(cb.data.split(":")[1])
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоё блюдо!", show_alert=True)
+    session = _cook_sessions.pop(uid, None)
+    if not session or len(session["picked"]) < COOK_PICKS_NEEDED:
+        return await cb.answer("Сессия готовки не найдена", show_alert=True)
+
+    cook_cooldown[uid] = now_kyiv()
+    picked = [session["options"][i] for i in session["picked"]]
+    picked_names = ", ".join(f"{icon} {name}" for icon, name, _ in picked)
+    base_value = sum(value for _, _, value in picked)
+
+    # Удача решает исход готовки
+    roll = random.random()
+    if roll < 0.06:
         fine = min(get_balance(uid), random.randint(20, 120))
         add_balance(uid, -fine)
         schedule_state_save("cook")
-        return await msg.reply(
+        await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
             f"🍳 <b>Блюдо подгорело!</b>\n\n"
-            f"Пришлось выбросить продукты и заплатить за испорченную кухню.\n"
+            f"Ингредиенты: {picked_names}\n"
+            f"Пришлось выбросить всё и заплатить за испорченную кухню.\n"
             f"💸 Потеряно: <b>{fmt_lmn(fine)} LMN</b>\n"
             f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
-            f"⏳ Следующая готовка через <b>{cooldown_minutes} мин</b>\n\n"
+            f"⏳ Следующая готовка через <b>{COOK_COOLDOWN_MIN} мин</b>\n\n"
             f"{brand.div()}",
             parse_mode="HTML",
         )
-    dishes = [
-        ("🍰", "Королевский торт", "испёк(ла) шедевр на заказ богатого клиента", 900, 1700),
-        ("🍣", "Сет премиум-суши", "собрал(а) идеальный сет из свежих ингредиентов", 700, 1350),
-        ("🥘", "Фирменное рагу", "довёл(а) рецепт до идеала после долгих проб", 500, 1000),
-        ("🍜", "Наваристый рамен", "сварил(а) бульон, который просят добавки", 350, 750),
-        ("🥗", "Витаминный салат", "быстро и полезно — заказчик доволен", 200, 500),
-    ]
-    icon, dish, action, earn_min, earn_max = random.choice(dishes)
-    earned = random.randint(earn_min, earn_max)
+        return await cb.answer("😱 Подгорело!", show_alert=True)
+
+    if roll < 0.16:
+        mult, tier, dish_note = 0.6, "🙁 Так себе блюдо", "Вкус получился так себе — покупатель заплатил по минимуму."
+    elif roll < 0.66:
+        mult, tier, dish_note = 1.0, "🍽️ Достойное блюдо", "Обычное, но приличное блюдо — клиент доволен."
+    elif roll < 0.90:
+        mult, tier, dish_note = 1.6, "🌟 Удачное сочетание!", "Ингредиенты сложились идеально — блюдо ушло по хорошей цене!"
+    else:
+        mult, tier, dish_note = 2.6, "🏆 КУЛИНАРНЫЙ ШЕДЕВР!", "Такое блюдо не стыдно подать в мишленовском ресторане!"
+
+    earned = max(1, int(base_value * mult * random.uniform(0.85, 1.15)))
     add_balance(uid, earned)
-    await msg.reply(
+    schedule_state_save("cook")
+    await cb.message.edit_text(
         f"{brand.hdr()}\n\n"
         f"🍳 <b>LMN Кулинария</b>\n\n"
-        f"{icon} <b>{dish}</b>\n"
-        f"<i>Ты {action}.</i>\n\n"
+        f"Ингредиенты: {picked_names}\n\n"
+        f"{tier}\n"
+        f"<i>{dish_note}</i>\n\n"
         f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
-        f"⏳ Следующая готовка через <b>{cooldown_minutes} мин</b>\n\n"
+        f"⏳ Следующая готовка через <b>{COOK_COOLDOWN_MIN} мин</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
     )
-    schedule_state_save("cook")
+    await cb.answer(f"+{fmt_lmn(earned)} LMN!")
 
 
 @dp.message(Command("explore", "экспедиция", "исследование"))
