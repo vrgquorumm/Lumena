@@ -91,6 +91,9 @@ fish_cooldown = {}
 rob_cooldown = {}
 hunt_cooldown = {}
 alchemy_cooldown = {}
+mine_cooldown = {}
+cook_cooldown = {}
+explore_cooldown = {}
 # {canonical_chat_id: {"date": "YYYY-MM-DD", "participants": {uid: name},
 #                       "completed": bool}}
 team_alchemy_runs = {}
@@ -342,6 +345,9 @@ def _build_main_payload() -> dict:
         "work_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in work_cooldown.items()},
         "fish_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in fish_cooldown.items()},
         "rob_cooldown":      {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in rob_cooldown.items()},
+        "mine_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in mine_cooldown.items()},
+        "cook_cooldown":     {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in cook_cooldown.items()},
+        "explore_cooldown":  {str(u): v.isoformat() if hasattr(v, "isoformat") else str(v) for u, v in explore_cooldown.items()},
     }
 
 
@@ -2964,6 +2970,179 @@ async def cmd_hunt(msg: Message):
         parse_mode="HTML",
     )
     schedule_state_save("hunt")
+
+
+@dp.message(Command("mine", "майнинг", "шахта"))
+async def cmd_mine(msg: Message):
+    """Майнинг: копаешь в шахте руду и минералы, кулдаун 45 мин."""
+    uid = msg.from_user.id
+    now = now_kyiv()
+    last = mine_cooldown.get(uid)
+    if last and (now - last).total_seconds() < 2700:
+        mins = 45 - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"⛏️ Кирка ещё не остыла.\n\n"
+            f"⏳ Следующая смена через <b>{max(1, mins)} мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    mine_cooldown[uid] = now
+    r = random.random()
+    # (эмодзи, название, мин, макс, комментарий)
+    _finds = [
+        (0.02, "💠", "ЖИЛА АЛМАЗОВ",      3500, 9000, "Такая находка бывает раз в сезон! Слух о ней разнесётся по всему чату"),
+        (0.08, "🌟", "Метеоритный осколок", 1600, 3200, "Редкий инопланетный металл — коллекционеры дерутся за него"),
+        (0.16, "🥇", "Золотая жила",        800,  1600, "Настоящее золото — можно неплохо продать"),
+        (0.32, "🥈", "Серебряная руда",     300,  800,  "Хороший слиток серебра"),
+        (0.52, "🟤", "Медная руда",         100,  320,  "Обычная, но полезная руда"),
+        (0.70, "⚫", "Уголь",               30,   100,  "Пригодится для печи, но небогато"),
+        (0.84, "🪨", "Обычный камень",       0,    0,   "Просто булыжник — шахта сегодня скупая"),
+        (0.94, "💧", "Подземная вода",       0,    0,   "Кирка провалилась в лужу..."),
+        (1.00, "💥", "Обвал в тоннеле",      0,    0,   "Пришлось откапываться — сегодня без добычи"),
+    ]
+    chosen = _finds[-1]
+    for threshold, *rest in _finds:
+        if r < threshold:
+            chosen = (threshold, *rest)
+            break
+    _, icon, name, earn_min, earn_max, comment = chosen
+    earned = random.randint(earn_min, earn_max) if earn_max > 0 else 0
+    add_balance(uid, earned)
+    new_bal = get_balance(uid)
+    _intros = ["Спустился(лась) в шахту...", "Кирка бьёт по породе...", "Копал(а) без остановки и вот:"]
+    result_line = f"<b>+{fmt_lmn(earned)} LMN</b>" if earned else "<i>Ничего не намайнил(а) 😔</i>"
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"⛏️ {random.choice(_intros)}\n\n"
+        f"{icon} <b>{name}</b>\n"
+        f"<i>{comment}</i>\n\n"
+        f"💰 Добыча: {result_line}\n"
+        f"💵 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n\n"
+        f"⏳ Следующая смена через <b>45 мин</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+    schedule_state_save("mine")
+
+
+@dp.message(Command("cook", "готовка", "кулинария"))
+async def cmd_cook(msg: Message):
+    """Кулинария: готовишь блюда на продажу, кулдаун 90 мин."""
+    uid = msg.from_user.id
+    now = now_kyiv()
+    last = cook_cooldown.get(uid)
+    cooldown_minutes = 90
+    if last and (now - last).total_seconds() < cooldown_minutes * 60:
+        mins = cooldown_minutes - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🍳 <b>Кухня ещё не готова к новой смене</b>\n\n"
+            f"Следующее блюдо будет доступно через <b>{max(1, mins)} мин</b>.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    cook_cooldown[uid] = now
+    # Есть риск испортить блюдо.
+    if random.random() < 0.12:
+        fine = min(get_balance(uid), random.randint(20, 120))
+        add_balance(uid, -fine)
+        schedule_state_save("cook")
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🍳 <b>Блюдо подгорело!</b>\n\n"
+            f"Пришлось выбросить продукты и заплатить за испорченную кухню.\n"
+            f"💸 Потеряно: <b>{fmt_lmn(fine)} LMN</b>\n"
+            f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+            f"⏳ Следующая готовка через <b>{cooldown_minutes} мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    dishes = [
+        ("🍰", "Королевский торт", "испёк(ла) шедевр на заказ богатого клиента", 900, 1700),
+        ("🍣", "Сет премиум-суши", "собрал(а) идеальный сет из свежих ингредиентов", 700, 1350),
+        ("🥘", "Фирменное рагу", "довёл(а) рецепт до идеала после долгих проб", 500, 1000),
+        ("🍜", "Наваристый рамен", "сварил(а) бульон, который просят добавки", 350, 750),
+        ("🥗", "Витаминный салат", "быстро и полезно — заказчик доволен", 200, 500),
+    ]
+    icon, dish, action, earn_min, earn_max = random.choice(dishes)
+    earned = random.randint(earn_min, earn_max)
+    add_balance(uid, earned)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🍳 <b>LMN Кулинария</b>\n\n"
+        f"{icon} <b>{dish}</b>\n"
+        f"<i>Ты {action}.</i>\n\n"
+        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+        f"⏳ Следующая готовка через <b>{cooldown_minutes} мин</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+    schedule_state_save("cook")
+
+
+@dp.message(Command("explore", "экспедиция", "исследование"))
+async def cmd_explore(msg: Message):
+    """Экспедиция: рискованное исследование неизведанных земель, кулдаун 2 ч."""
+    uid = msg.from_user.id
+    now = now_kyiv()
+    last = explore_cooldown.get(uid)
+    if last and (now - last).total_seconds() < 7200:
+        mins = 120 - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🧭 Экспедиционный отряд ещё отдыхает.\n\n"
+            f"⏳ Следующий поход через <b>{max(1, mins)} мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    explore_cooldown[uid] = now
+    roll = random.random()
+    if roll < 0.04:
+        icon, find, earned, note = "🏺", "затерянные сокровища древней цивилизации", random.randint(2800, 6000), "Об этой находке напишут в учебниках истории!"
+    elif roll < 0.22:
+        icon, find, earned, note = "🗺️", "карту с указанием клада", random.randint(900, 1800), "Экспедиция окупилась с лихвой."
+    elif roll < 0.58:
+        icon, find, earned, note = "🧿", "редкий артефакт", random.randint(220, 700), "Небольшая, но приятная находка."
+    elif roll < 0.80:
+        fine = min(get_balance(uid), random.randint(40, 200))
+        add_balance(uid, -fine)
+        schedule_state_save("explore")
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🧭 <b>Экспедиция сорвалась</b>\n\n"
+            f"Отряд попал в передрягу и потратился на спасение снаряжения.\n"
+            f"💸 Потеряно: <b>{fmt_lmn(fine)} LMN</b>\n"
+            f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+            f"⏳ Следующий поход через <b>120 мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    else:
+        schedule_state_save("explore")
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🧭 <b>Земли изучены, но пусто</b>\n\n"
+            f"Отряд вернулся с картами местности, но без добычи.\n\n"
+            f"⏳ Следующий поход через <b>120 мин</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    add_balance(uid, earned)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🧭 <b>Успешная экспедиция!</b>\n\n"
+        f"{icon} Отряд нашёл <b>{find}</b>.\n"
+        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"<i>{note}</i>\n"
+        f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+        f"⏳ Следующий поход через <b>120 мин</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+    schedule_state_save("explore")
 
 
 @dp.message(Command("casino"))
@@ -7182,6 +7361,10 @@ _HELP_SECTIONS = {
         "<code>баланс</code> — кошелёк\n"
         "<code>работа</code> — заработать (кд 1 ч)\n"
         "<code>рыбалка</code> — рыбачить за LMN (кд 30 мин)\n\n"
+        "<code>охота</code> — охотиться за LMN (кд 1 ч)\n"
+        "<code>майнинг</code> — копать руду в шахте (кд 45 мин)\n"
+        "<code>готовка</code> — готовить блюда на продажу (кд 1,5 ч)\n"
+        "<code>экспедиция</code> — исследовать неизведанные земли (кд 2 ч)\n\n"
         "<code>алхимия</code> — сварить личный эликсир (кд 2 ч)\n"
         "<code>команда алхимия</code> — общий ритуал для 3 участников (раз в день)\n\n"
         "🎰 <b>Удача:</b>\n"
@@ -7491,6 +7674,9 @@ TEXT_COMMANDS.update({
     # Валюта
     "баланс": cmd_balance, "кошелёк": cmd_balance,
     "работа": cmd_work, "рыбалка": cmd_fish, "охота": cmd_hunt, "hunt": cmd_hunt,
+    "майнинг": cmd_mine, "шахта": cmd_mine, "mine": cmd_mine,
+    "готовка": cmd_cook, "кулинария": cmd_cook, "cook": cmd_cook,
+    "экспедиция": cmd_explore, "исследование": cmd_explore, "explore": cmd_explore,
     "казино": cmd_casino, "слоты": cmd_slots, "слот": cmd_slots,
     "ограбить": cmd_rob, "украсть": cmd_rob,
     "банк": _bank_card, "bank": _bank_card,
@@ -7629,6 +7815,9 @@ for slash_name, func in [
     ("баланс", cmd_balance), ("работа", cmd_work), ("рыбалка", cmd_fish), ("hunt", cmd_hunt),
      ("алхимия", cmd_alchemy), ("teamalchemy", cmd_team_alchemy),
      ("команднаяалхимия", cmd_team_alchemy), ("командаалхимия", cmd_team_alchemy),
+     ("майнинг", cmd_mine), ("mine", cmd_mine),
+     ("готовка", cmd_cook), ("кулинария", cmd_cook), ("cook", cmd_cook),
+     ("экспедиция", cmd_explore), ("исследование", cmd_explore), ("explore", cmd_explore),
     ("казино", cmd_casino), ("слоты", cmd_slots), ("ограбить", cmd_rob),
     ("дать", cmd_give),
     ("чекин", cmd_checkin), ("стрик", cmd_streak),
@@ -11237,6 +11426,21 @@ def _apply_data(data: dict) -> None:
     for u, v in data.get("rob_cooldown", {}).items():
         try:
             rob_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
+        except Exception:
+            pass
+    for u, v in data.get("mine_cooldown", {}).items():
+        try:
+            mine_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
+        except Exception:
+            pass
+    for u, v in data.get("cook_cooldown", {}).items():
+        try:
+            cook_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
+        except Exception:
+            pass
+    for u, v in data.get("explore_cooldown", {}).items():
+        try:
+            explore_cooldown[int(u)] = datetime.fromisoformat(str(v)).replace(tzinfo=_tz)
         except Exception:
             pass
 
