@@ -4829,8 +4829,8 @@ async def cmd_compatibility(msg: Message):
 
     msgs_a    = _msgs(uid_a);          msgs_b    = _msgs(uid_b)
     xp_a      = user_xp.get(uid_a, 0); xp_b      = user_xp.get(uid_b, 0)
-    streak_a  = (streak_data.get(uid_a) or {}).get("streak", 0)
-    streak_b  = (streak_data.get(uid_b) or {}).get("streak", 0)
+    streak_a  = max((streaks.get(c, {}).get(uid_a, {}).get("count", 0) for c in streaks), default=0)
+    streak_b  = max((streaks.get(c, {}).get(uid_b, {}).get("count", 0) for c in streaks), default=0)
     lmn_a     = lmn_balances.get(uid_a, 0) + bank_balances.get(uid_a, 0)
     lmn_b     = lmn_balances.get(uid_b, 0) + bank_balances.get(uid_b, 0)
     ach_a     = set(user_achievements.get(uid_a, []))
@@ -10098,6 +10098,15 @@ _ADMIN_TARGETS = {
     "верхушка","команда","хдр","hdr","hdrttt","начальник","начальники",
     "боты","бот","lumena","лумена","лумена",
 }
+
+async def _delete_later(message: Message, delay: float) -> None:
+    """Удаляет сообщение через `delay` секунд, игнорируя ошибки."""
+    await asyncio.sleep(delay)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
 
 async def _check_chat_insult(msg: Message) -> bool:
     """Удаляет оскорбление и выдаёт участнику мут на 10 минут."""

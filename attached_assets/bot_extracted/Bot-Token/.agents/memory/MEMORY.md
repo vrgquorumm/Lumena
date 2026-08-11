@@ -1,1 +1,0 @@
-- [Premium message style](premium-style.md) — all bot outputs use ┏━━┓ L U M E N A ┗━━┛ header + ━━━ dividers via _LMN_HDR/_LMN_DIV constants and mod_card() helper

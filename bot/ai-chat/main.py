@@ -299,7 +299,7 @@ async def chat(req: ChatReq):
             response = await asyncio.to_thread(_gemini_stream, session)
 
             for chunk in response:
-                text = chunk_text(chunk)
+                text = getattr(chunk, "text", None)
                 if text:
                     full_response += text
                     payload = json.dumps({"type": "chunk", "text": text})

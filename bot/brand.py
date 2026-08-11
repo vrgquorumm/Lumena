@@ -727,9 +727,6 @@ TEXT_LABELS: dict[str, str] = {
     "inventory_header":    "Инвентарь — заголовок",
     "inventory_empty":     "Инвентарь — пуст",
 
-    # ── Стрик: milestone ───────────────────────────────────
-    "checkin_milestone":   "Чекин: milestone-бонус 🎁 ({days} дней, {bonus} LMN)",
-
     # ── Банк ──────────────────────────────────────────────
     "bank_header":            "Банк — заголовок картки",
     "bank_deposit_done":      "Депозит успішний ({amount} LMN)",
