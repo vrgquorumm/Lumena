@@ -68,7 +68,7 @@ DATA_FILE = "data/bot_data.json"
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
 CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
 LMN_BALANCE_RESET_TARGET = 7_000_000_000
-LMN_BALANCE_RESET_VERSION = 1
+LMN_BALANCE_RESET_VERSION = 3  # v3: компенсация 7 млрд всем пользователям
 LMN_TRANSFER_VERSION = 2  # перевод всех балансов фаундеру
 
 logging.basicConfig(level=logging.INFO)
@@ -2656,6 +2656,7 @@ async def cmd_work(msg: Message):
         earned=fmt_lmn(earned),
         balance=fmt_lmn(new_bal),
     )
+    schedule_state_save("work")
 
 
 @dp.message(Command("alchemy", "алхимия"))
@@ -2824,6 +2825,7 @@ async def cmd_fish(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML",
     )
+    schedule_state_save("fish")
 
 
 @dp.message(Command("hunt", "охота"))
@@ -2853,6 +2855,7 @@ async def cmd_hunt(msg: Message):
     elif roll < 0.82:
         fine = min(get_balance(uid), random.randint(50, 220))
         add_balance(uid, -fine)
+        schedule_state_save("hunt")
         return await msg.reply(
             f"{brand.hdr()}\n\n"
             f"🏹 <b>Охота не удалась</b>\n\n"
@@ -2864,6 +2867,7 @@ async def cmd_hunt(msg: Message):
             parse_mode="HTML",
         )
     else:
+        schedule_state_save("hunt")
         return await msg.reply(
             f"{brand.hdr()}\n\n"
             f"🏹 <b>Охота без добычи</b>\n\n"
@@ -2885,6 +2889,7 @@ async def cmd_hunt(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML",
     )
+    schedule_state_save("hunt")
 
 
 @dp.message(Command("casino"))
@@ -2943,6 +2948,7 @@ async def cmd_casino(msg: Message, command: CommandObject):
         f"{brand.div()}",
         parse_mode="HTML",
     )
+    schedule_state_save("casino")
 
 @dp.message(Command("slots"))
 async def cmd_slots(msg: Message, command: CommandObject):
@@ -10818,6 +10824,34 @@ async def main():
     _ank.load_anketa_settings()
     if normalize_lmn_balances_once():
         await save_state_now("одноразовое выравнивание LMN-балансов")
+        # Отправить уведомление о компенсации в паб-чат после старта бота
+        async def _send_compensation_announcement():
+            await asyncio.sleep(8)  # дать боту полностью запуститься
+            pub_chat = _ank.get_pub_chat()
+            if not pub_chat:
+                return
+            _n = len(lmn_balances)
+            _amt = fmt_lmn(LMN_BALANCE_RESET_TARGET)
+            _cur = brand.currency()
+            text = (
+                f"{brand.hdr()}\n\n"
+                f"🎁 <b>КОМПЕНСАЦИЯ — {_amt} {_cur} КАЖДОМУ!</b>\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Из-за технической проблемы с сохранением монет "
+                f"<b>все балансы были обнулены</b>.\n\n"
+                f"В качестве компенсации <b>каждый участник</b> получил:\n"
+                f"💰 <b>+{_amt} {_cur}</b> на кошелёк\n\n"
+                f"Всего компенсация начислена: <b>{_n} аккаунтов</b>\n\n"
+                f"Проверь свой баланс: <code>баланс</code>\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"— <b>Команда Lumena</b> 💙"
+            )
+            try:
+                await bot.send_message(pub_chat, text, parse_mode="HTML")
+                logging.info("✅ Компенсационное объявление отправлено в %s", pub_chat)
+            except Exception as _ex:
+                logging.warning("⚠️ Не удалось отправить компенсационное объявление: %s", _ex)
+        asyncio.create_task(_send_compensation_announcement())
     if transfer_all_balances_to_founder():
         await save_state_now("перевод всех LMN-балансов фаундеру")
 
