@@ -8143,25 +8143,28 @@ async def cb_ank_mutual(cb: CallbackQuery):
     reactor_name = info["name"]
     reactor_user = info["username"]
     tag = f"@{reactor_user}" if reactor_user else reactor_name
+    # Имя-ссылка: клик открывает личный чат с этим человеком напрямую.
+    reactor_link = f"[{reactor_name}](tg://user?id={reactor_uid})"
 
     # Показываем владельцу кто это
     await cb.message.edit_reply_markup(reply_markup=None)
     await cb.message.answer(
         f"💞 *Взаимная симпатия!*\n\n"
-        f"Тебя лайкнул(а): *{reactor_name}*\n"
+        f"Тебя лайкнул(а): {reactor_link}\n"
         f"Telegram: {tag}\n\n"
-        "_Напиши первым — возможно это судьба! 🌟_",
+        "_Нажми на имя, чтобы написать первым — возможно это судьба! 🌟_",
         parse_mode="Markdown"
     )
 
     # Уведомляем лайкера
     owner_data = _ank.get_approved_data(owner_uid)
     owner_name = owner_data["answers"].get("name", "автор анкеты") if owner_data else "автор анкеты"
+    owner_link = f"[{owner_name}](tg://user?id={owner_uid})"
     try:
         await bot.send_message(
             reactor_uid,
             f"💞 *Взаимная симпатия!*\n\n"
-            f"*{owner_name}* ответил(а) на твой лайк — можешь написать им!",
+            f"{owner_link} ответил(а) на твой лайк — нажми на имя, чтобы написать им!",
             parse_mode="Markdown"
         )
     except Exception:
