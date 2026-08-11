@@ -1,2 +1,3 @@
 - [PostgreSQL persistence — operational decision](pg-persistence.md) — Railway PG replaces GitHub writes; DATABASE_URL absent = disk-only with clear warning; {} is valid authoritative state
 - [Task agent merge — entry point deletion risk](task-agent-merge-risk.md) — after any merge to bot.py, verify asyncio.run(main()) still exists at end of file
+- [asyncpg Nix version mismatch](asyncpg-python-version-mismatch.md) — replit.nix pinned asyncpg to Python 3.13 while project runs 3.11, silently breaking PostgreSQL persistence
