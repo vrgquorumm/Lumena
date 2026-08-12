@@ -7205,10 +7205,10 @@ async def cmd_take(msg: Message, command: CommandObject = None):
         except ValueError:
             return await msg.reply("❌ Укажи целое число или напиши <b>всё</b>", parse_mode="HTML")
     else:
-        return await msg.reply(
-            "Использование: <b>забрать [сумма]</b> или <b>забрать всё</b> (ответом)",
-            parse_mode="HTML",
-        )
+        # Для фаундера команда без аргумента означает забрать весь баланс.
+        # Это также делает одинаково рабочими «забрать», «забрать всё» и
+        # «забрать все монеты» в обычном текстовом режиме.
+        amount = target_balance
     if amount <= 0:
         return await msg.reply("❌ Нечего забирать — сумма должна быть больше нуля")
     actual = min(amount, target_balance)
@@ -7883,6 +7883,7 @@ TEXT_COMMANDS.update({
     "выдатьроли": cmd_give_role,
     "наградить": cmd_award,
     "раздать": cmd_razdach,
+    "забрать": cmd_take, "take": cmd_take,
     "забрать500м": cmd_ownerclaim, "ownerclaim": cmd_ownerclaim,
     # Репутация
     "репутация": cmd_rep, "реп": cmd_rep,
