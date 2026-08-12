@@ -26,6 +26,8 @@ except ImportError:
     _ASYNCPG_OK = False
 
 _pool: "asyncpg.Pool | None" = None  # type: ignore
+_instance_lock_conn = None
+_INSTANCE_LOCK_NAME = "lumena-bot-singleton"
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS bot_store (
@@ -59,7 +61,7 @@ async def init_db() -> bool:
     """Ініціалізує connection pool та схему БД.
     Повертає True якщо PostgreSQL доступний, False — якщо ні.
     """
-    global _pool
+    global _pool, _instance_lock_conn
     if not _ASYNCPG_OK:
         print("⚠️ asyncpg не встановлено — PostgreSQL вимкнено, використовується GitHub")
         return False
@@ -80,9 +82,28 @@ async def init_db() -> bool:
         )
         async with pool.acquire() as conn:
             await conn.execute(_CREATE_TABLE)
+        # Не допускаем второй рабочий процесс с тем же DATABASE_URL.
+        # Иначе два polling-инстанса читают разные snapshots и последний
+        # autosave может вернуть балансы к устаревшему состоянию.
+        lock_conn = await pool.acquire()
+        locked = await lock_conn.fetchval(
+            "SELECT pg_try_advisory_lock(hashtext($1))",
+            _INSTANCE_LOCK_NAME,
+        )
+        if not locked:
+            await pool.release(lock_conn)
+            await pool.close()
+            raise RuntimeError(
+                "Другой экземпляр Lumena уже использует PostgreSQL "
+                "(advisory lock lumena-bot-singleton)"
+            )
+        _instance_lock_conn = lock_conn
         _pool = pool
         print("✅ PostgreSQL підключено, таблиця bot_store готова")
+        print("🔒 Получена блокировка единственного экземпляра Lumena")
         return True
+    except RuntimeError:
+        raise
     except Exception as e:
         logging.warning(f"⚠️ Не вдалося підключитись до PostgreSQL: {e}")
 
@@ -170,8 +191,11 @@ async def db_set_many(records: list[tuple[str, dict]]) -> bool:
 
 async def close_db() -> None:
     """Закриває connection pool."""
-    global _pool
+    global _pool, _instance_lock_conn
     if _pool:
+        if _instance_lock_conn:
+            await _pool.release(_instance_lock_conn)
+            _instance_lock_conn = None
         await _pool.close()
         _pool = None
         print("🔒 PostgreSQL з'єднання закрито")
