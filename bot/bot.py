@@ -1070,8 +1070,10 @@ async def cmd_staff_rate(msg: Message, command=None):
 async def cmd_staff_stats(msg: Message):
     if msg.chat.type == "private":
         return await msg.reply("ℹ️ Статистика доступна в рабочем групповом чате.")
-    if not msg.from_user or not _is_staff_uid(msg.from_user.id):
-        return await msg.reply("⛔ Статистика команды доступна только администрации.")
+    if not msg.from_user or (
+        msg.from_user.id != OWNER_ID and not _is_staff_uid(msg.from_user.id)
+    ):
+        return await msg.reply("⛔ Статистика команды доступна только администрации и фаундеру.")
     cid = msg.chat.id
     pairs = staff_relations.get(cid, {})
     ratings = staff_ratings.get(cid, {})
@@ -7978,7 +7980,7 @@ _HELP_SECTIONS = {
         "<code>онлайн</code> — активные участники\n"
         "<code>аналитика</code> — данные системы\n"
         "<code>рост</code> — участники по чатам\n\n"
-        "🛡 <b>Работа команды (только админы/модераторы):</b>\n"
+        "🛡 <b>Работа команды (админы/модераторы; просмотр также фаундеру):</b>\n"
         "<code>плохоеотношение [причина]</code> — ответом отметить случай\n"
         "<code>оценитьадмина 1–5</code> — ответом поставить звёзды\n"
         "<code>статаадминов</code> — пары, проценты и рейтинг\n"
