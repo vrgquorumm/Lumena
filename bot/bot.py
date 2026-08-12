@@ -7781,12 +7781,33 @@ async def cmd_farm_slash(msg: Message):
 
 
 # ── Магазин (coming soon) ───────────────────────────────
+SHOP_OPEN_AT = datetime(2026, 10, 26, tzinfo=KYIV_TZ)
+
+
+def _shop_countdown() -> str:
+    remaining = SHOP_OPEN_AT - now_kyiv()
+    total_seconds = max(0, int(remaining.total_seconds()))
+    if total_seconds == 0:
+        return "🎉 <b>Магазин уже открыт!</b>"
+    days, remainder = divmod(total_seconds, 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, seconds = divmod(remainder, 60)
+    return (
+        "⏳ <b>До открытия магазина:</b>\n"
+        f"📅 <b>{days} дн. {hours:02d} ч. {minutes:02d} мин. {seconds:02d} сек.</b>"
+    )
+
+
 async def _shop_soon(msg: Message):
-    await msg.reply(
-        brand.get_text("shop_coming_soon") or (
+    custom_text = brand.get_text("shop_coming_soon")
+    if custom_text:
+        text = f"{custom_text}\n\n{_shop_countdown()}"
+    else:
+        text = (
             f"{brand.hdr()}\n\n"
             f"🛒 <b>Магазин LMN</b>\n\n"
             f"⚙️ <i>Скоро відкриється!</i>\n\n"
+            f"{_shop_countdown()}\n\n"
             f"Тут можна буде витратити зароблені {brand.currency()} на:\n"
             f"• 🎭 Ролі та статуси\n"
             f"• 🛡 Захист від пограбування\n"
@@ -7795,9 +7816,8 @@ async def _shop_soon(msg: Message):
             f"• 🎁 Унікальні предмети\n\n"
             f"<i>Слідкуй за оновленнями!</i>\n\n"
             f"{brand.div()}"
-        ),
-        parse_mode="HTML",
-    )
+        )
+    await msg.reply(text, parse_mode="HTML")
 
 
 async def _inventory_soon(msg: Message):
