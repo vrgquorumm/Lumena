@@ -1362,6 +1362,8 @@ def get_balance(uid: int) -> int:
 
 def add_balance(uid: int, amount: int):
     lmn_balances[uid] = lmn_balances.get(uid, 0) + amount
+    if amount:
+        schedule_state_save("изменение LMN-баланса")
 
 def fmt_lmn(n: int) -> str:
     return f"{n:,}".replace(",", " ")
