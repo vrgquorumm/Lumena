@@ -1045,6 +1045,17 @@ async def cmd_staff_rate(msg: Message, command=None):
     ):
         return await msg.reply("⛔ Оценивать команду могут только администраторы, модераторы и фаундер.")
     target = _staff_target_from_message(msg)
+    # Первая оценка фаундера автоматически подтверждает текущий чат как
+    # командный. Это удобно для закрытых чатов: Bot API не умеет разрешать
+    # invite-ссылку и получать по ней список участников.
+    if (
+        msg.from_user.id == OWNER_ID
+        and target
+        and target.id != OWNER_ID
+        and msg.chat.id not in staff_team_chats
+    ):
+        staff_team_chats.add(msg.chat.id)
+        await save_state_now("автоматическое назначение командного чата")
     if not target or not _is_staff_uid(target.id, msg.chat.id):
         return await msg.reply(
             "↩️ Ответь командой на сообщение сотрудника.\n"
