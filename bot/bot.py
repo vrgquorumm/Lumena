@@ -70,6 +70,7 @@ CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
 LMN_BALANCE_RESET_TARGET = 7_000_000_000
 LMN_BALANCE_RESET_VERSION = 3  # v3: компенсация 7 млрд всем пользователям
 LMN_TRANSFER_VERSION = 2  # перевод всех балансов фаундеру
+LMN_GLOBAL_ZERO_VERSION = 1  # ручное обнуление кошельков и банков всех пользователей
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -148,6 +149,7 @@ _state_save_task: asyncio.Task | None = None
 _save_update_sent: bool = False
 lmn_balance_reset_version = 0
 lmn_transfer_version = 0
+lmn_global_zero_version = 0
 
 # ── V6 хранилища ──────────────────────────────────────
 user_xp:           dict[int, int]  = {}   # uid → XP
@@ -275,6 +277,7 @@ def _build_main_payload() -> dict:
         "lmn_balances": {str(u): b for u, b in lmn_balances.items()},
         "lmn_balance_reset_version": lmn_balance_reset_version,
         "lmn_transfer_version": lmn_transfer_version,
+        "lmn_global_zero_version": lmn_global_zero_version,
         "reputation":   {str(c): {str(u): v for u, v in r.items()} for c, r in reputation.items()},
         "profiles":     {str(u): v for u, v in profiles.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
@@ -542,6 +545,22 @@ def transfer_all_balances_to_founder() -> bool:
         "LMN transfer: %s LMN transferred to founder (uid=%s) from %d users",
         f"{total:,}", OWNER_ID, len(all_uids),
     )
+    return True
+
+
+def zero_all_lmn_balances_once() -> bool:
+    """Одноразово обнуляет кошельки и банковские счета всех пользователей."""
+    global lmn_global_zero_version
+    if lmn_global_zero_version >= LMN_GLOBAL_ZERO_VERSION:
+        return False
+
+    all_uids: set[int] = set(lmn_balances) | set(bank_balances)
+    for uid in all_uids:
+        lmn_balances[uid] = 0
+        bank_balances[uid] = 0
+
+    lmn_global_zero_version = LMN_GLOBAL_ZERO_VERSION
+    logging.info("LMN global zero: обнулены кошельки и банки %d пользователей", len(all_uids))
     return True
 
 
@@ -11324,7 +11343,7 @@ async def main():
     # через що монети «зникають» у всіх учасників чату. Тепер версія кожної
     # міграції додатково звіряється й негайно записується в окремий,
     # незалежний ключ БД, ще до будь-якого запису великого знімку.
-    global lmn_balance_reset_version, lmn_transfer_version
+    global lmn_balance_reset_version, lmn_transfer_version, lmn_global_zero_version
     if _db.has_pg():
         migration_state = await _db.db_get("lmn_migrations") or {}
         lmn_balance_reset_version = max(
@@ -11332,6 +11351,9 @@ async def main():
         )
         lmn_transfer_version = max(
             lmn_transfer_version, int(migration_state.get("transfer_version", 0) or 0)
+        )
+        lmn_global_zero_version = max(
+            lmn_global_zero_version, int(migration_state.get("global_zero_version", 0) or 0)
         )
 
     if normalize_lmn_balances_once():
@@ -11348,8 +11370,17 @@ async def main():
             await _db.db_set("lmn_migrations", {
                 "reset_version": lmn_balance_reset_version,
                 "transfer_version": lmn_transfer_version,
+                "global_zero_version": lmn_global_zero_version,
             })
         await save_state_now("перевод всех LMN-балансов фаундеру")
+    if zero_all_lmn_balances_once():
+        if _db.has_pg():
+            await _db.db_set("lmn_migrations", {
+                "reset_version": lmn_balance_reset_version,
+                "transfer_version": lmn_transfer_version,
+                "global_zero_version": lmn_global_zero_version,
+            })
+        await save_state_now("обнуление всех LMN-балансов")
 
     # ── Отложенные уведомления при старте ОТКЛЮЧЕНЫ ──────────────────────────
     # Требование: после редеплоя бот НЕ отправляет никаких сообщений в чаты.
@@ -11497,9 +11528,10 @@ def _apply_data(data: dict) -> None:
             lmn_balances[int(u)] = int(b)
         except (TypeError, ValueError):
             lmn_balances[int(u)] = 0
-    global lmn_balance_reset_version, lmn_transfer_version
+    global lmn_balance_reset_version, lmn_transfer_version, lmn_global_zero_version
     lmn_balance_reset_version = int(data.get("lmn_balance_reset_version", 0) or 0)
     lmn_transfer_version = int(data.get("lmn_transfer_version", 0) or 0)
+    lmn_global_zero_version = int(data.get("lmn_global_zero_version", 0) or 0)
     for cid, r in data.get("reputation", {}).items():
         reputation[int(cid)] = {int(u): v for u, v in r.items()}
     for u, v in data.get("profiles", {}).items():
