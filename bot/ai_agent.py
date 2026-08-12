@@ -109,6 +109,38 @@ def _create_terra_client():
     raise RuntimeError("Немає доступних облікових даних OpenAI (OPENAI_API_KEY або Replit AI Integrations).")
 
 
+async def transcribe_audio(audio_bytes: bytes, filename: str = "voice.ogg") -> Optional[str]:
+    """Расшифровывает короткое Telegram voice-сообщение, если доступен AI proxy."""
+    if not terra_available() or not audio_bytes:
+        return None
+    client = None
+    try:
+        client = _create_terra_client()
+        response = await asyncio.wait_for(
+            client.audio.transcriptions.create(
+                model="whisper-1",
+                file=(filename, audio_bytes, "audio/ogg"),
+                response_format="text",
+                language="ru",
+            ),
+            timeout=35,
+        )
+        if isinstance(response, str):
+            text = response.strip()
+        else:
+            text = str(getattr(response, "text", "") or "").strip()
+        return text[:4000] if text else None
+    except Exception:
+        # Голосовая аналитика не должна ломать обработку обычных сообщений.
+        return None
+    finally:
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                pass
+
+
 async def _terra_reply(mem: _Mem, user_name: str, text: str) -> Optional[str]:
     """Повертає відповідь GPT-5.6 Terra або None, не ламаючи локальний AI."""
     if not terra_available():
