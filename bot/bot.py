@@ -7193,15 +7193,25 @@ async def cmd_userinfo(msg: Message):
 async def cmd_take(msg: Message, command: CommandObject = None):
     if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
     if not msg.reply_to_message or not msg.reply_to_message.from_user:
-        return await msg.reply("Ответь на сообщение и укажи сумму")
-    if not command or not command.args:
-        return await msg.reply("Использование: <b>забрать [сумма]</b> (ответом)", parse_mode="HTML")
-    try:
-        amount = int(command.args.split()[0])
-    except ValueError:
-        return await msg.reply("❌ Укажи целое число")
+        return await msg.reply("Ответь на сообщение и укажи сумму (или напиши <b>всё</b>)", parse_mode="HTML")
     target = msg.reply_to_message.from_user
-    actual = min(amount, get_balance(target.id))
+    target_balance = get_balance(target.id)
+    arg = command.args.split()[0].strip().lower() if command and command.args else ""
+    if arg in ("все", "всё", "all"):
+        amount = target_balance
+    elif arg:
+        try:
+            amount = int(arg)
+        except ValueError:
+            return await msg.reply("❌ Укажи целое число или напиши <b>всё</b>", parse_mode="HTML")
+    else:
+        return await msg.reply(
+            "Использование: <b>забрать [сумма]</b> или <b>забрать всё</b> (ответом)",
+            parse_mode="HTML",
+        )
+    if amount <= 0:
+        return await msg.reply("❌ Нечего забирать — сумма должна быть больше нуля")
+    actual = min(amount, target_balance)
     add_balance(target.id, -actual)
     schedule_state_save("забрать")
     await msg.reply(
