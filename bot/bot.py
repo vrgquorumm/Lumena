@@ -70,7 +70,8 @@ CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
 LMN_BALANCE_RESET_TARGET = 7_000_000_000
 LMN_BALANCE_RESET_VERSION = 3  # v3: компенсация 7 млрд всем пользователям
 LMN_TRANSFER_VERSION = 2  # перевод всех балансов фаундеру
-LMN_GLOBAL_ZERO_VERSION = 1  # ручное обнуление кошельков и банков всех пользователей
+LMN_GLOBAL_ZERO_VERSION = 2  # ручное обнуление кошельков и банков всех пользователей
+OWNER_AUTO_CREDIT_ENABLED = False  # после общего сброса фаундеру не начисляются монеты автоматически
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -2630,6 +2631,8 @@ owner_id_cache: int | None = None  # запоминаем ID владельца 
 
 def owner_auto_credit(uid: int):
     """Начисляет 500М владельцу если баланс 0 (после рестарта)."""
+    if not OWNER_AUTO_CREDIT_ENABLED:
+        return
     if get_balance(uid) == 0:
         add_balance(uid, 500_000_000)
 
