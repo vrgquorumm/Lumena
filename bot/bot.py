@@ -7767,6 +7767,48 @@ async def cmd_shop_slash(msg: Message):
 async def cmd_inventory_slash(msg: Message):
     await _inventory_soon(msg)
 
+
+# ── Telegram Premium (coming soon) ──────────────────────
+TG_PREMIUM_PRICE = 100_000_000
+
+async def _premium_soon(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"⭐ <b>Telegram Premium за LMN</b>\n\n"
+        f"💰 Цена: <b>{fmt_lmn(TG_PREMIUM_PRICE)} LMN</b>\n\n"
+        f"⚙️ <i>Магазин ещё не открыт — покупка пока недоступна.</i>\n\n"
+        f"Как только магазин заработает, здесь можно будет обменять "
+        f"накопленные {brand.currency()} на подписку Telegram Premium.\n\n"
+        f"<i>Следи за обновлениями!</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+@dp.message(Command("premium", "премиум", "тгпремиум"))
+async def cmd_premium_slash(msg: Message):
+    await _premium_soon(msg)
+
+
+# ── Обмен LMN на реальные деньги / вывод в TON (coming soon) ──
+async def _exchange_soon(msg: Message):
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💱 <b>Обмен {brand.currency()}</b>\n\n"
+        f"⚙️ <i>Функция ещё не открыта — обмен и вывод пока недоступны.</i>\n\n"
+        f"В будущем здесь можно будет:\n"
+        f"• 💵 Обменять {brand.currency()} на доллары (USD)\n"
+        f"• 💶 Обменять {brand.currency()} на евро (EUR)\n"
+        f"• 💴 Обменять {brand.currency()} на гривны (UAH)\n"
+        f"• 💎 Вывести {brand.currency()} на криптокошелёк TON\n\n"
+        f"<i>Следи за обновлениями!</i>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
+
+@dp.message(Command("exchange", "обмен", "обменять", "вывод", "withdraw"))
+async def cmd_exchange_slash(msg: Message):
+    await _exchange_soon(msg)
+
 # ═══════════════════════════════════════════════════════
 # ТЕКСТОВЫЕ КОМАНДЫ БЕЗ ПРЕФИКСА
 # ═══════════════════════════════════════════════════════
@@ -7882,6 +7924,9 @@ TEXT_COMMANDS.update({
     "ферма": _farm_soon, "фарм": _farm_soon, "farm": _farm_soon,
     "магазин": _shop_soon, "крамниця": _shop_soon, "shop": _shop_soon,
     "інвентар": _inventory_soon, "инвентарь": _inventory_soon, "inv": _inventory_soon,
+    "премиум": _premium_soon, "тгпремиум": _premium_soon, "premium": _premium_soon,
+    "обмен": _exchange_soon, "обменять": _exchange_soon, "exchange": _exchange_soon,
+    "вывод": _exchange_soon, "withdraw": _exchange_soon,
     # Алхимия
     "алхимия": cmd_alchemy,
     "командная алхимия": cmd_team_alchemy,
