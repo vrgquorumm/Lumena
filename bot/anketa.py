@@ -82,31 +82,31 @@ async def _answer_custom(msg_obj, key: str, fallback: str,
 # ──────────────────────────────────────────
 QUESTIONS: list[tuple[str, str]] = [
     ("name",
-     "👤 *Як тебе звати?*\n_(ім'я або нікнейм)_"),
+     "👤 *Как тебя зовут?*\n_(имя или никнейм)_"),
     ("age",
-     "🎂 *Скільки тобі років?*"),
+     "🎂 *Сколько тебе лет?*"),
     ("district",
-     "🏙 *Твій район?*\n_(район або мікрорайон міста)_"),
+     "🏙 *Твой район?*\n_(район или микрорайон города)_"),
     ("goal",
-     "🎯 *Мета знайомства*\n_(спілкування, дружба, відносини, без різниці)_"),
+     "🎯 *Цель знакомства*\n_(общение, дружба, отношения, не важно)_"),
     ("looking_for",
-     "💖 *Кого шукаєш?*\n_(дівчину, хлопця, не важливо)_"),
+     "💖 *Кого ищешь?*\n_(девушку, парня, не важно)_"),
     ("smoking",
-     "🚬 *Куріння*\n_(Курю / Не курю / Іноді)_"),
+     "🚬 *Курение*\n_(Курю / Не курю / Иногда)_"),
     ("kids",
-     "👶 *Діти*\n_(Є / Немає / Хочу в майбутньому)_"),
+     "👶 *Дети*\n_(Есть / Нет / Хочу в будущем)_"),
     ("about",
-     "📝 *Про себе*\n_(декілька речень: характер, інтереси, хто ти)_"),
+     "📝 *О себе*\n_(пару предложений: характер, интересы, кто ты)_"),
 ]
 QUESTION_KEYS = [k for k, _ in QUESTIONS]
 
 # Фото-крок іде ПІСЛЯ всіх текстових питань
 PHOTO_STEP_IDX = len(QUESTIONS)
 PHOTO_STEP_TEXT = (
-    "📸 *Фото та відео*\n\n"
-    "Надішли від *1 до 10* фото або відео будь-якої тривалості.\n"
-    "Коли закінчиш — натисни *«✅ Готово»*.\n\n"
-    "Або напиши *«без фото»* щоб пропустити цей крок."
+    "📸 *Фото и видео*\n\n"
+    "Отправь от *1 до 10* фото или видео любой длины.\n"
+    "Когда закончишь — нажми *«✅ Готово»*.\n\n"
+    "Или напиши *«без фото»*, чтобы пропустить этот шаг."
 )
 _SKIP_MEDIA = {
     "без фото", "без видео", "без медиа", "без", "skip",
@@ -121,7 +121,7 @@ _DONE_WORDS = {
 # ──────────────────────────────────────────
 # ПИТАННЯ ДВОМА МОВАМИ
 # ──────────────────────────────────────────
-QUESTIONS_UK = QUESTIONS  # псевдонім — українська (оригінал)
+QUESTIONS_UK = QUESTIONS  # обратная совместимость для старых сессий
 
 QUESTIONS_RU: list[tuple[str, str]] = [
     ("name",
@@ -151,26 +151,25 @@ PHOTO_STEP_TEXT_RU = (
 
 
 def _lang_questions(lang: str) -> list[tuple[str, str]]:
-    return QUESTIONS_RU if lang == "ru" else QUESTIONS_UK
+    return QUESTIONS_RU
 
 
 def _lang_photo_text(lang: str) -> str:
-    return PHOTO_STEP_TEXT_RU if lang == "ru" else PHOTO_STEP_TEXT
+    return PHOTO_STEP_TEXT_RU
 
 
 def _media_done_kb(uid: int) -> InlineKeyboardMarkup:
     """Кнопки під підтвердженням кожного медіа-файлу."""
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Готово",       callback_data=f"ank_media_done:{uid}"),
-        InlineKeyboardButton(text="⏭ Без медіа",   callback_data=f"ank_media_skip:{uid}"),
+        InlineKeyboardButton(text="⏭ Без медиа",   callback_data=f"ank_media_skip:{uid}"),
     ]])
 
 
 def _lang_kb() -> InlineKeyboardMarkup:
-    """Клавіатура вибору мови анкети."""
+    """Клавиатура выбора языка анкеты."""
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🇺🇦 Українська", callback_data="ank_lang:uk"),
-        InlineKeyboardButton(text="🇷🇺 Русский",    callback_data="ank_lang:ru"),
+        InlineKeyboardButton(text="🇷🇺 Русский", callback_data="ank_lang:ru"),
     ]])
 
 async def load_anketa_from_db() -> None:
@@ -454,27 +453,27 @@ def fmt_mod_card(answers: dict, user_id: int, username: str, full_name: str,
         parts = []
         if n_photo: parts.append(f"📷 {n_photo}")
         if n_video: parts.append(f"🎬 {n_video}")
-        media_icon = " + ".join(parts) + f" ✅ ({len(media_list)} файл(ів))"
+        media_icon = " + ".join(parts) + f" ✅ ({len(media_list)} файлов)"
     else:
-        media_icon = "❌ немає"
+        media_icon = "❌ нет"
     vip_label = " 👑 VIP" if is_premium else ""
     num = anketa_num if anketa_num else "?"
     bul = brand.bul()
     return (
         f"{brand.hdr()}\n\n"
-        f"{brand.acc()} <b>Нова анкета #{num}</b>{vip_label} — на модерацію\n\n"
+        f"{brand.acc()} <b>Новая анкета #{num}</b>{vip_label} — на модерацию\n\n"
         f"{brand.div()}\n"
-        f"👤 <b>Ім'я:</b> {_h(answers.get('name', '—'))}\n"
-        f"🎂 <b>Вік:</b> {_h(answers.get('age', '—'))}\n"
+        f"👤 <b>Имя:</b> {_h(answers.get('name', '—'))}\n"
+        f"🎂 <b>Возраст:</b> {_h(answers.get('age', '—'))}\n"
         f"🏙 <b>Район:</b> {_h(answers.get('district', '—'))}\n\n"
-        f"🎯 <b>Ціль:</b> {_h(answers.get('goal', '—'))}\n"
-        f"💖 <b>Шукаю:</b> {_h(answers.get('looking_for', '—'))}\n"
-        f"🚬 <b>Куріння:</b> {_h(answers.get('smoking', '—'))}\n"
-        f"👶 <b>Діти:</b> {_h(answers.get('kids', '—'))}\n\n"
+        f"🎯 <b>Цель:</b> {_h(answers.get('goal', '—'))}\n"
+        f"💖 <b>Ищу:</b> {_h(answers.get('looking_for', '—'))}\n"
+        f"🚬 <b>Курение:</b> {_h(answers.get('smoking', '—'))}\n"
+        f"👶 <b>Дети:</b> {_h(answers.get('kids', '—'))}\n\n"
         f"📝 <b>Про себе:</b>\n{_h(answers.get('about', '—'))}\n\n"
         f"{brand.div()}\n"
         f"🔗 {_h(tag)}  ·  🆔 <code>{user_id}</code>\n"
-        f"{bul} Медіа: {_h(media_icon)}"
+        f"{bul} Медиа: {_h(media_icon)}"
     )
 
 
@@ -597,8 +596,8 @@ def make_mutual_kb(reactor_uid: int, owner_uid: int) -> InlineKeyboardMarkup:
 def _make_mod_kb(app_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Прийняти", callback_data=f"ank_ok:{app_id}"),
-            InlineKeyboardButton(text="❌ Відхилити", callback_data=f"ank_no:{app_id}"),
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"ank_ok:{app_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"ank_no:{app_id}"),
         ],
         [
             InlineKeyboardButton(text="✏️ Правки (написать автору)", callback_data=f"ank_cm:{app_id}"),
@@ -669,7 +668,7 @@ async def start_anketa(bot_obj, msg, force: bool = False) -> None:
         msg, "anketa_start",
         f"{brand.hdr()}\n\n"
         f"{brand.acc()} <b>Анкета знакомств</b>\n\n"
-        "Виберіть мову / Выберите язык:\n\n"
+        "Выберите язык:\n\n"
         f"{brand.div()}",
         reply_markup=_lang_kb()
     )
@@ -695,8 +694,8 @@ async def cancel_anketa(msg) -> bool:
 
 
 async def handle_lang_select(bot_obj, cb) -> None:
-    """Обробляє вибір мови анкети — запускає перше питання."""
-    lang = cb.data.split(":", 1)[1]  # "uk" або "ru"
+    """Обрабатывает выбор языка анкеты и запускает первый вопрос."""
+    lang = "ru"
     uid  = cb.from_user.id
 
     session = _sessions.get(uid)
@@ -834,7 +833,7 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
             reply_markup=make_pending_anketa_kb(uid),
         )
     except Exception as e:
-        await bot_obj.send_message(uid, f"❌ Помилка надсилання: {e}")
+        await bot_obj.send_message(uid, f"❌ Ошибка отправки: {e}")
 
 
 async def handle_media_step(bot_obj, msg) -> bool:
@@ -871,7 +870,7 @@ async def handle_media_step(bot_obj, msg) -> bool:
         # Автозавершення при 10 медіа
         session = _sessions.pop(uid)
         await msg.answer(
-            f"{brand.chk()} <b>10 медіа додано — максимум досягнуто!</b>\n\nВідправляємо анкету…"
+            f"{brand.chk()} <b>Добавлено 10 медиа — достигнут максимум!</b>\n\nОтправляем анкету…"
             if lang != "ru" else
             f"{brand.chk()} <b>10 медиа добавлено — максимум достигнут!</b>\n\nОтправляем анкету…",
             parse_mode="HTML",
@@ -884,13 +883,13 @@ async def handle_media_step(bot_obj, msg) -> bool:
         ack = (
             f"{emoji} *Медиа {count}/10 принято!*\n\n"
             f"Отправь ещё фото/видео или нажми *«✅ Готово»*.\n"
-            f"_Чтобы пропустить медиа — «⏭ Без медіа»._"
+            f"_Чтобы пропустить медиа — «⏭ Без медиа»._"
         )
     else:
         ack = (
-            f"{emoji} *Медіа {count}/10 прийнято!*\n\n"
-            f"Надішли ще фото/відео або натисни *«✅ Готово»*.\n"
-            f"_Щоб пропустити — «⏭ Без медіа»._"
+            f"{emoji} *Медиа {count}/10 принято!*\n\n"
+            f"Отправь ещё фото/видео или нажми *«✅ Готово»*.\n"
+            f"_Чтобы пропустить — «⏭ Без медиа»._"
         )
     await msg.answer(ack, parse_mode="Markdown", reply_markup=_media_done_kb(uid))
     return True
@@ -940,13 +939,13 @@ async def handle_anketa_step(bot_obj, msg) -> bool:
                 hint = (
                     f"📸 Отправь фото или видео. Добавлено: <b>{count}/10</b>.\n"
                     f"Нажми <b>«✅ Готово»</b> чтобы завершить, "
-                    f"или <b>«⏭ Без медіа»</b> чтобы пропустить."
+                    f"или <b>«⏭ Без медиа»</b>, чтобы пропустить."
                 )
             else:
                 hint = (
-                    f"📸 Надішли фото або відео. Додано: <b>{count}/10</b>.\n"
-                    f"Натисни <b>«✅ Готово»</b> щоб завершити, "
-                    f"або <b>«⏭ Без медіа»</b> щоб пропустити."
+                    f"📸 Отправь фото или видео. Добавлено: <b>{count}/10</b>.\n"
+                    f"Нажми <b>«✅ Готово»</b>, чтобы завершить, "
+                    f"или <b>«⏭ Без медиа»</b>, чтобы пропустить."
                 )
             await msg.answer(hint, parse_mode="HTML",
                              reply_markup=_media_done_kb(uid))
@@ -1010,5 +1009,5 @@ async def handle_mod_comment_step(bot_obj, msg) -> bool:
             parse_mode="HTML"
         )
     except Exception as e:
-        await msg.reply(f"❌ Не вдалося надіслати: {e}")
+        await msg.reply(f"❌ Не удалось отправить: {e}")
     return True
