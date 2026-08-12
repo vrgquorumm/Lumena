@@ -7195,7 +7195,9 @@ async def cmd_take(msg: Message, command: CommandObject = None):
     if not msg.reply_to_message or not msg.reply_to_message.from_user:
         return await msg.reply("Ответь на сообщение и укажи сумму (или напиши <b>всё</b>)", parse_mode="HTML")
     target = msg.reply_to_message.from_user
-    target_balance = get_balance(target.id)
+    target_wallet = get_balance(target.id)
+    target_bank = get_bank(target.id)
+    target_balance = target_wallet + target_bank
     arg = command.args.split()[0].strip().lower() if command and command.args else ""
     if arg in ("все", "всё", "all"):
         amount = target_balance
@@ -7212,11 +7214,18 @@ async def cmd_take(msg: Message, command: CommandObject = None):
     if amount <= 0:
         return await msg.reply("❌ Нечего забирать — сумма должна быть больше нуля")
     actual = min(amount, target_balance)
-    add_balance(target.id, -actual)
+    # Сначала забираем из кошелька, затем — оставшуюся сумму из банка.
+    wallet_take = min(actual, target_wallet)
+    bank_take = actual - wallet_take
+    if wallet_take:
+        add_balance(target.id, -wallet_take)
+    if bank_take:
+        bank_balances[target.id] = target_bank - bank_take
     schedule_state_save("забрать")
     await msg.reply(
         f"✅ Забрал <b>{fmt_lmn(actual)} LMN</b> у {html.escape(target.full_name)}\n"
-        f"Новый баланс: <b>{fmt_lmn(get_balance(target.id))} LMN</b>",
+        f"💳 В кошельке: <b>{fmt_lmn(get_balance(target.id))}</b>\n"
+        f"🏦 В банке: <b>{fmt_lmn(get_bank(target.id))}</b>",
         parse_mode="HTML"
     )
 
