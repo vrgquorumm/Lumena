@@ -4,6 +4,7 @@
 """
 import asyncio
 import html
+import io
 import json
 import logging
 import math
@@ -172,6 +173,9 @@ report_cooldown:   dict[tuple, str] = {}  # (chat_id,from_uid,target_uid) → IS
 _games_played:     dict[int, int]  = {}   # uid → кол-во игр
 _games_won:        dict[int, int]  = {}   # uid → кол-во побед
 v6_announced:      bool            = False
+staff_relations:   dict[int, dict] = {}
+staff_ratings:     dict[int, dict] = {}
+staff_voice_stats: dict[int, dict] = {}
 bonus_weekly_cd:   dict[int, str]  = {}   # uid → "YYYY-Www" (ISO week claim)
 daily_games:       dict[int, str]  = {}   # uid → ISO date последней сыгранной игры
 daily_msg_cnt:     dict[int, dict] = {}   # uid → {"date": ISO, "count": int} — сообщения за сегодня
@@ -339,6 +343,30 @@ def _build_main_payload() -> dict:
         "user_achievements": {str(u): list(v) for u, v in user_achievements.items()},
         "mod_logs":          {str(c): v for c, v in mod_logs.items()},
         "reports_db":        {str(c): v for c, v in reports_db.items()},
+        "staff_relations": {
+            str(c): {
+                str(pair): dict(counter)
+                for pair, counter in pairs.items()
+            }
+            for c, pairs in staff_relations.items()
+        },
+        "staff_ratings": {
+            str(c): {
+                str(target): {
+                    str(rater): dict(rating)
+                    for rater, rating in raters.items()
+                }
+                for target, raters in targets.items()
+            }
+            for c, targets in staff_ratings.items()
+        },
+        "staff_voice_stats": {
+            str(c): {
+                str(uid): dict(stats)
+                for uid, stats in users.items()
+            }
+            for c, users in staff_voice_stats.items()
+        },
         "referrals":         {str(u): v for u, v in referrals.items()},
         "referral_counts":   {str(u): v for u, v in referral_counts.items()},
         "raid_mode":         {str(c): v for c, v in raid_mode.items()},
@@ -866,6 +894,262 @@ def remove_role(uid: int, username: str = "") -> bool:
 def has_role(uid: int, *roles: str) -> bool:
     """True если пользователь имеет хотя бы одну из указанных ролей."""
     return ROLES.get(uid) in roles
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# РЕЙТИНГ КОМАНДЫ И АВТОАНАЛИЗ ОТНОШЕНИЙ
+# ══════════════════════════════════════════════════════════════════════════════
+STAFF_ROLES = ("lead_admin", "co_admin", "admin", "moderator")
+_STAFF_BAD_PHRASES = (
+    "заткнись", "заткнитесь", "иди нахуй", "пошёл нахуй", "пошла нахуй",
+    "пошли нахуй", "иди нафиг", "пошёл нафиг", "пошла нафиг", "ты туп",
+    "ты идиот", "ты дебил", "ты мудак", "ты никто", "ненавижу тебя",
+    "отвали", "отстань", "не лезь", "что ты несёшь", "как ты достал",
+)
+_STAFF_BAD_WORDS = {
+    "хуйло", "пиздуй", "сука", "мудак", "мудаки", "уебан", "уёбок",
+    "дебил", "дебилы", "идиот", "идиоты", "ублюдок", "тварь", "твари",
+    "урод", "уроды", "мразь", "мрази", "долбоеб", "долбоёб", "гандон",
+}
+
+
+def _is_staff_uid(uid: int) -> bool:
+    """Командой считаются только назначенные администраторы и модераторы."""
+    return uid != OWNER_ID and get_role(uid) in STAFF_ROLES
+
+
+def _staff_name(chat_id: int, uid: int, fallback: str = "") -> str:
+    return (
+        chat_members.get(chat_id, {}).get(uid)
+        or fallback
+        or f"ID {uid}"
+    )
+
+
+def _staff_pair_key(from_uid: int, target_uid: int) -> str:
+    return f"{from_uid}:{target_uid}"
+
+
+def _staff_bad_reason(text: str) -> str:
+    """Возвращает короткое объяснение автоматического срабатывания."""
+    lowered = (text or "").lower()
+    for phrase in _STAFF_BAD_PHRASES:
+        if phrase in lowered:
+            return f"фраза «{phrase}»"
+    words = set(re.findall(r"[а-яёa-z]+", lowered))
+    for word in _STAFF_BAD_WORDS:
+        if word in words:
+            return f"оскорбление «{word}»"
+    # Существующие списки автомодерации тоже участвуют в анализе команды.
+    for phrase in globals().get("_HARD_INSULTS", set()):
+        if phrase in lowered:
+            return f"оскорбление «{phrase}»"
+    return ""
+
+
+def _staff_target_from_message(msg: Message):
+    """Определяет сотрудника-адресата по reply. Это исключает ошибочные пары."""
+    reply = getattr(msg, "reply_to_message", None)
+    target = getattr(reply, "from_user", None)
+    if target and not target.is_bot:
+        return target
+    return None
+
+
+def _record_staff_interaction(
+    msg: Message,
+    target,
+    *,
+    bad: bool = False,
+    reason: str = "",
+    source: str = "text",
+) -> bool:
+    """Записывает одно обращение сотрудника к сотруднику без хранения полного текста."""
+    if not msg.from_user or not target:
+        return False
+    from_uid = msg.from_user.id
+    target_uid = target.id
+    if from_uid == target_uid or not _is_staff_uid(from_uid) or not _is_staff_uid(target_uid):
+        return False
+    cid = msg.chat.id
+    pair = _staff_pair_key(from_uid, target_uid)
+    counter = staff_relations.setdefault(cid, {}).setdefault(pair, {
+        "messages": 0,
+        "bad": 0,
+        "last": "",
+        "last_bad": "",
+        "last_bad_reason": "",
+    })
+    counter["messages"] = int(counter.get("messages", 0)) + 1
+    counter["last"] = now_kyiv().isoformat()
+    if bad:
+        counter["bad"] = int(counter.get("bad", 0)) + 1
+        counter["last_bad"] = counter["last"]
+        counter["last_bad_reason"] = (reason or f"автоанализ {source}")[:120]
+        # Плохие срабатывания сохраняются немедленно, чтобы не потерять их
+        # при перезапуске процесса.
+        schedule_state_save("автоанализ отношений команды")
+    elif counter["messages"] % 10 == 0:
+        schedule_state_save("счётчик взаимодействий команды")
+    return True
+
+
+def _staff_args(msg: Message, command=None) -> str:
+    if command is not None and getattr(command, "args", None):
+        return str(command.args).strip()
+    parts = (msg.text or "").split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+async def cmd_staff_bad(msg: Message, command=None):
+    if msg.chat.type == "private":
+        return await msg.reply("ℹ️ Используй эту команду в рабочем групповом чате.")
+    if not msg.from_user or not _is_staff_uid(msg.from_user.id):
+        return await msg.reply("⛔ Отмечать плохое отношение могут только администраторы и модераторы.")
+    target = _staff_target_from_message(msg)
+    if not target or not _is_staff_uid(target.id):
+        return await msg.reply(
+            "↩️ Ответь этой командой на сообщение администратора или модератора.\n"
+            "Пример: <code>плохоеотношение игнорирует просьбы</code>",
+            parse_mode="HTML",
+        )
+    if target.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя оценивать самого себя.")
+    reason = _staff_args(msg, command) or "отмечено сотрудником вручную"
+    if _record_staff_interaction(msg, target, bad=True, reason=reason, source="ручная отметка"):
+        await msg.reply(
+            f"⚠️ Зафиксировано: <b>{html.escape(_staff_name(msg.chat.id, msg.from_user.id, msg.from_user.full_name))}</b>"
+            f" → <b>{html.escape(_staff_name(msg.chat.id, target.id, target.full_name))}</b>\n"
+            f"Причина: {html.escape(reason[:240])}\n\n"
+            "Данные вошли в статистику пары.",
+            parse_mode="HTML",
+        )
+
+
+async def cmd_staff_rate(msg: Message, command=None):
+    if msg.chat.type == "private":
+        return await msg.reply("ℹ️ Оценивай команду в рабочем групповом чате.")
+    if not msg.from_user or not _is_staff_uid(msg.from_user.id):
+        return await msg.reply("⛔ Оценивать команду могут только администраторы и модераторы.")
+    target = _staff_target_from_message(msg)
+    if not target or not _is_staff_uid(target.id):
+        return await msg.reply(
+            "↩️ Ответь командой на сообщение сотрудника.\n"
+            "Пример: <code>оценитьадмина 5</code>",
+            parse_mode="HTML",
+        )
+    if target.id == msg.from_user.id:
+        return await msg.reply("⛔ Нельзя ставить звёзды самому себе.")
+    raw = _staff_args(msg, command)
+    match = re.search(r"(?<!\d)([1-5])(?!\d)", raw)
+    stars = int(match.group(1)) if match else raw.count("⭐")
+    if not 1 <= stars <= 5:
+        return await msg.reply(
+            "⭐ Укажи оценку от 1 до 5.\n"
+            "Пример: <code>оценитьадмина 4</code> ответом на сообщение.",
+            parse_mode="HTML",
+        )
+    cid = msg.chat.id
+    target_ratings = staff_ratings.setdefault(cid, {}).setdefault(str(target.id), {})
+    was_updated = str(msg.from_user.id) in target_ratings
+    target_ratings[str(msg.from_user.id)] = {
+        "stars": stars,
+        "ts": now_kyiv().isoformat(),
+        "rater_name": msg.from_user.full_name[:120],
+    }
+    await save_state_now("оценка сотрудника")
+    word = "обновлена" if was_updated else "принята"
+    await msg.reply(
+        f"⭐ Оценка {html.escape(_staff_name(cid, target.id, target.full_name))} {word}: "
+        f"<b>{'⭐' * stars}</b> ({stars}/5)\n"
+        "Повторная оценка заменяет предыдущую.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_staff_stats(msg: Message):
+    if msg.chat.type == "private":
+        return await msg.reply("ℹ️ Статистика доступна в рабочем групповом чате.")
+    if not msg.from_user or not _is_staff_uid(msg.from_user.id):
+        return await msg.reply("⛔ Статистика команды доступна только администрации.")
+    cid = msg.chat.id
+    pairs = staff_relations.get(cid, {})
+    ratings = staff_ratings.get(cid, {})
+    total_messages = sum(int(v.get("messages", 0)) for v in pairs.values())
+    total_bad = sum(int(v.get("bad", 0)) for v in pairs.values())
+    bad_pct = (total_bad / total_messages * 100) if total_messages else 0
+    lines = [
+        "📊 <b>Работа команды</b>",
+        f"💬 Взаимодействий: <b>{total_messages}</b>",
+        f"⚠️ Отметок плохого отношения: <b>{total_bad}</b> ({bad_pct:.1f}% от взаимодействий)",
+    ]
+    by_target: dict[int, dict] = {}
+    by_pair: list[tuple[int, int, dict]] = []
+    for pair, counter in pairs.items():
+        try:
+            from_uid, target_uid = (int(x) for x in str(pair).split(":", 1))
+        except (TypeError, ValueError):
+            continue
+        item = by_target.setdefault(target_uid, {"messages": 0, "bad": 0})
+        item["messages"] += int(counter.get("messages", 0))
+        item["bad"] += int(counter.get("bad", 0))
+        by_pair.append((from_uid, target_uid, counter))
+    if by_target:
+        lines.append("\n🎯 <b>К кому относятся хуже всего</b>")
+        for target_uid, item in sorted(
+            by_target.items(), key=lambda x: (x[1]["bad"], x[1]["messages"]), reverse=True
+        )[:10]:
+            pct = item["bad"] / total_bad * 100 if total_bad else 0
+            lines.append(
+                f"• {html.escape(_staff_name(cid, target_uid))}: "
+                f"<b>{item['bad']}</b> плохих из {item['messages']} "
+                f"({pct:.1f}% всех отметок)"
+            )
+    if by_pair:
+        lines.append("\n🔁 <b>Пары «кто → кому»</b>")
+        for from_uid, target_uid, counter in sorted(
+            by_pair, key=lambda row: int(row[2].get("bad", 0)), reverse=True
+        )[:20]:
+            bad = int(counter.get("bad", 0))
+            messages = int(counter.get("messages", 0))
+            if bad <= 0:
+                continue
+            pair_pct = bad / total_bad * 100 if total_bad else 0
+            relation_pct = bad / messages * 100 if messages else 0
+            lines.append(
+                f"• {html.escape(_staff_name(cid, from_uid))} → "
+                f"{html.escape(_staff_name(cid, target_uid))}: "
+                f"<b>{bad}</b> ({relation_pct:.1f}% пары, {pair_pct:.1f}% всех)"
+            )
+    if ratings:
+        lines.append("\n⭐ <b>Рейтинг администраторов и модераторов</b>")
+        rating_rows = []
+        for target_key, raters in ratings.items():
+            votes = [int(v.get("stars", 0)) for v in raters.values() if 1 <= int(v.get("stars", 0)) <= 5]
+            if votes:
+                rating_rows.append((sum(votes) / len(votes), len(votes), int(target_key), votes))
+        for average, count, target_uid, votes in sorted(
+            rating_rows, key=lambda x: (x[0], x[1]), reverse=True
+        ):
+            distribution = " ".join(
+                f"{star}★:{votes.count(star)}" for star in range(1, 6) if votes.count(star)
+            )
+            lines.append(
+                f"• {html.escape(_staff_name(cid, target_uid))}: "
+                f"<b>{average:.2f}/5</b> ({count} оцен.) — {distribution}"
+            )
+    voice_users = staff_voice_stats.get(cid, {})
+    voice_total = sum(int(v.get("received", 0)) for v in voice_users.values())
+    voice_analyzed = sum(int(v.get("analyzed", 0)) for v in voice_users.values())
+    if voice_total:
+        lines.append(
+            f"\n🎙 Voice-сообщений сотрудников: <b>{voice_total}</b>, "
+            f"расшифровано: <b>{voice_analyzed}</b>"
+        )
+    if not pairs and not ratings:
+        lines.append("\n<i>Данных пока нет. Анализ начинается с новых сообщений-ответов сотрудников.</i>")
+    lines.append("\n<i>Автоматически учитываются ответы между сотрудниками; полный текст сообщений не сохраняется.</i>")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
 
 def role_badge(uid: int, username: str = "") -> str:
     """Возвращает строку-бейдж для роли, или пустую строку."""
@@ -7694,6 +7978,11 @@ _HELP_SECTIONS = {
         "<code>онлайн</code> — активные участники\n"
         "<code>аналитика</code> — данные системы\n"
         "<code>рост</code> — участники по чатам\n\n"
+        "🛡 <b>Работа команды (только админы/модераторы):</b>\n"
+        "<code>плохоеотношение [причина]</code> — ответом отметить случай\n"
+        "<code>оценитьадмина 1–5</code> — ответом поставить звёзды\n"
+        "<code>статаадминов</code> — пары, проценты и рейтинг\n"
+        "Автоматически анализируются ответы сотрудников и присланные voice-сообщения.\n\n"
         "🎮 <b>Игры (только в ЛС бота):</b>\n"
         "<code>/орёл [сумма]</code> — монетка\n"
         "<code>/плинко [сумма]</code> — плинко\n"
@@ -7965,6 +8254,13 @@ TEXT_COMMANDS.update({
     "роль": cmd_set_role, "setrole": cmd_set_role,
     "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
     "роли": cmd_roles, "roles": cmd_roles,
+    # Рейтинг и контроль работы команды (ответом на сообщение сотрудника)
+    "плохоеотношение": cmd_staff_bad, "плохое отношение": cmd_staff_bad,
+    "отношение": cmd_staff_bad,
+    "оценитьадмина": cmd_staff_rate, "оценкаадмина": cmd_staff_rate,
+    "оценить модератора": cmd_staff_rate, "оценкамодератора": cmd_staff_rate,
+    "статаадминов": cmd_staff_stats, "статистикаадминов": cmd_staff_stats,
+    "рейтингадминов": cmd_staff_stats, "рейтингкоманды": cmd_staff_stats,
     "списокбраков": cmd_marriages, "список браков": cmd_marriages, "браки": cmd_marriages,
     # Отношения
     "корабль": cmd_ship, "шип": cmd_ship,
@@ -8089,6 +8385,10 @@ for slash_name, func in [
     ("чекин", cmd_checkin), ("стрик", cmd_streak),
     ("топстриков", cmd_topstreak),
     ("репутация", cmd_rep),
+     ("плохоеотношение", cmd_staff_bad), ("отношение", cmd_staff_bad),
+     ("оценитьадмина", cmd_staff_rate), ("оценкаадмина", cmd_staff_rate),
+     ("статаадминов", cmd_staff_stats), ("статистикаадминов", cmd_staff_stats),
+     ("рейтингадминов", cmd_staff_stats), ("рейтингкоманды", cmd_staff_stats),
     ("профиль", cmd_profile), ("айди", cmd_myid), ("инфочат", cmd_chatinfo),
     ("статистика", cmd_botstats), ("пинг", cmd_ping), ("версия", cmd_version),
     ("інфо", cmd_info), ("инфо", cmd_info), ("info", cmd_info),
@@ -8275,6 +8575,25 @@ class PropagandaMiddleware(BaseMiddleware):
             if "first_message" not in user_achievements.get(_uid_mw, []):
                 user_achievements.setdefault(_uid_mw, []).append("first_message")
             award_xp(_uid_mw, random.randint(1, 5))
+            # Автоматический аудит отношений: считаем только явные ответы
+            # сотрудника сотруднику, чтобы обычные сообщения не превращались
+            # в ложные обвинения. Полный текст в состояние не сохраняем.
+            if event.text and _is_staff_uid(_uid_mw):
+                _target_mw = _staff_target_from_message(event)
+                _first_word_mw = (event.text.strip().lower().split() or [""])[0].lstrip("/")
+                _staff_command_words = {
+                    "плохоеотношение", "отношение", "оценитьадмина",
+                    "оценкаадмина", "оценкамодератора", "статаадминов",
+                    "статистикаадминов", "рейтингадминов", "рейтингкоманды",
+                }
+                if _target_mw and _first_word_mw not in _staff_command_words:
+                    _reason_mw = _staff_bad_reason(event.text)
+                    _record_staff_interaction(
+                        event, _target_mw,
+                        bad=bool(_reason_mw),
+                        reason=_reason_mw,
+                        source="текст",
+                    )
             # Антиспам
             if antispam_mode.get(_cid_mw) and event.text:
                 import time as _t
@@ -11238,6 +11557,46 @@ async def universal_handler(msg: Message):
         return
 
 # ═══════════════════════════════════════════════════════
+@dp.message(F.voice)
+async def handle_staff_voice_message(msg: Message):
+    """Анализирует присланное voice-сообщение сотрудника.
+
+    Telegram Bot API не передаёт живой Voice Chat, но обычные voice-сообщения
+    бот получает как файл. Адресат определяется только по reply, как и для
+    текстовой аналитики.
+    """
+    if msg.chat.type == "private" or not msg.from_user or not _is_staff_uid(msg.from_user.id):
+        return
+    target = _staff_target_from_message(msg)
+    cid = msg.chat.id
+    stats = staff_voice_stats.setdefault(cid, {}).setdefault(str(msg.from_user.id), {
+        "received": 0, "analyzed": 0, "failed": 0,
+    })
+    stats["received"] = int(stats.get("received", 0)) + 1
+    if not target or not _is_staff_uid(target.id) or target.id == msg.from_user.id:
+        stats["failed"] = int(stats.get("failed", 0)) + 1
+        if stats["received"] % 5 == 0:
+            schedule_state_save("статистика voice команды")
+        return
+    try:
+        telegram_file = await bot.get_file(msg.voice.file_id)
+        audio = io.BytesIO()
+        await bot.download(telegram_file, destination=audio)
+        transcript = await ai_agent.transcribe_audio(audio.getvalue())
+    except Exception:
+        transcript = None
+    if not transcript:
+        stats["failed"] = int(stats.get("failed", 0)) + 1
+        schedule_state_save("ошибка расшифровки voice команды")
+        return
+    stats["analyzed"] = int(stats.get("analyzed", 0)) + 1
+    reason = _staff_bad_reason(transcript)
+    _record_staff_interaction(
+        msg, target, bad=bool(reason), reason=reason, source="voice",
+    )
+    schedule_state_save("анализ voice команды")
+
+
 # АВТОПІДКАЗКА КОЛИ БОТ ВХОДИТЬ У НОВИЙ ЧАТ
 # ═══════════════════════════════════════════════════════
 _DEFAULT_WELCOME = (
@@ -11682,6 +12041,51 @@ def _apply_data(data: dict) -> None:
         mod_logs[int(c)] = list(v)
     for c, v in data.get("reports_db", {}).items():
         reports_db[int(c)] = list(v)
+    for c, pairs in data.get("staff_relations", {}).items():
+        try:
+            staff_relations[int(c)] = {
+                str(pair): {
+                    "messages": int(counter.get("messages", 0) or 0),
+                    "bad": int(counter.get("bad", 0) or 0),
+                    "last": str(counter.get("last", "") or ""),
+                    "last_bad": str(counter.get("last_bad", "") or ""),
+                    "last_bad_reason": str(counter.get("last_bad_reason", "") or ""),
+                }
+                for pair, counter in pairs.items()
+                if isinstance(counter, dict)
+            }
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректная статистика отношений команды для chat=%s", c)
+    for c, targets in data.get("staff_ratings", {}).items():
+        try:
+            staff_ratings[int(c)] = {
+                str(target): {
+                    str(rater): {
+                        "stars": max(1, min(5, int(rating.get("stars", 0) or 0))),
+                        "ts": str(rating.get("ts", "") or ""),
+                        "rater_name": str(rating.get("rater_name", "") or ""),
+                    }
+                    for rater, rating in raters.items()
+                    if isinstance(rating, dict) and int(rating.get("stars", 0) or 0) in range(1, 6)
+                }
+                for target, raters in targets.items()
+                if isinstance(raters, dict)
+            }
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректные оценки команды для chat=%s", c)
+    for c, users in data.get("staff_voice_stats", {}).items():
+        try:
+            staff_voice_stats[int(c)] = {
+                str(uid): {
+                    "received": int(stats.get("received", 0) or 0),
+                    "analyzed": int(stats.get("analyzed", 0) or 0),
+                    "failed": int(stats.get("failed", 0) or 0),
+                }
+                for uid, stats in users.items()
+                if isinstance(stats, dict)
+            }
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректная статистика voice для chat=%s", c)
     for u, v in data.get("referrals", {}).items():
         referrals[int(u)] = int(v)
     for u, v in data.get("referral_counts", {}).items():
