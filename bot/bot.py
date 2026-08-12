@@ -176,6 +176,7 @@ v6_announced:      bool            = False
 staff_relations:   dict[int, dict] = {}
 staff_ratings:     dict[int, dict] = {}
 staff_voice_stats: dict[int, dict] = {}
+staff_team_chats:  set[int]       = set()
 bonus_weekly_cd:   dict[int, str]  = {}   # uid → "YYYY-Www" (ISO week claim)
 daily_games:       dict[int, str]  = {}   # uid → ISO date последней сыгранной игры
 daily_msg_cnt:     dict[int, dict] = {}   # uid → {"date": ISO, "count": int} — сообщения за сегодня
@@ -367,6 +368,7 @@ def _build_main_payload() -> dict:
             }
             for c, users in staff_voice_stats.items()
         },
+        "staff_team_chats": [int(c) for c in staff_team_chats],
         "referrals":         {str(u): v for u, v in referrals.items()},
         "referral_counts":   {str(u): v for u, v in referral_counts.items()},
         "raid_mode":         {str(c): v for c, v in raid_mode.items()},
@@ -913,9 +915,13 @@ _STAFF_BAD_WORDS = {
 }
 
 
-def _is_staff_uid(uid: int) -> bool:
-    """Командой считаются только назначенные администраторы и модераторы."""
-    return uid != OWNER_ID and get_role(uid) in STAFF_ROLES
+def _is_staff_uid(uid: int, chat_id: int | None = None) -> bool:
+    """Командой считаются назначенные сотрудники или участники командного чата."""
+    if uid == OWNER_ID:
+        return False
+    return get_role(uid) in STAFF_ROLES or (
+        chat_id is not None and chat_id in staff_team_chats
+    )
 
 
 def _staff_name(chat_id: int, uid: int, fallback: str = "") -> str:
@@ -969,7 +975,11 @@ def _record_staff_interaction(
         return False
     from_uid = msg.from_user.id
     target_uid = target.id
-    if from_uid == target_uid or not _is_staff_uid(from_uid) or not _is_staff_uid(target_uid):
+    if (
+        from_uid == target_uid
+        or not _is_staff_uid(from_uid, msg.chat.id)
+        or not _is_staff_uid(target_uid, msg.chat.id)
+    ):
         return False
     cid = msg.chat.id
     pair = _staff_pair_key(from_uid, target_uid)
@@ -1004,10 +1014,10 @@ def _staff_args(msg: Message, command=None) -> str:
 async def cmd_staff_bad(msg: Message, command=None):
     if msg.chat.type == "private":
         return await msg.reply("ℹ️ Используй эту команду в рабочем групповом чате.")
-    if not msg.from_user or not _is_staff_uid(msg.from_user.id):
+    if not msg.from_user or not _is_staff_uid(msg.from_user.id, msg.chat.id):
         return await msg.reply("⛔ Отмечать плохое отношение могут только администраторы и модераторы.")
     target = _staff_target_from_message(msg)
-    if not target or not _is_staff_uid(target.id):
+    if not target or not _is_staff_uid(target.id, msg.chat.id):
         return await msg.reply(
             "↩️ Ответь этой командой на сообщение администратора или модератора.\n"
             "Пример: <code>плохоеотношение игнорирует просьбы</code>",
@@ -1029,10 +1039,10 @@ async def cmd_staff_bad(msg: Message, command=None):
 async def cmd_staff_rate(msg: Message, command=None):
     if msg.chat.type == "private":
         return await msg.reply("ℹ️ Оценивай команду в рабочем групповом чате.")
-    if not msg.from_user or not _is_staff_uid(msg.from_user.id):
+    if not msg.from_user or not _is_staff_uid(msg.from_user.id, msg.chat.id):
         return await msg.reply("⛔ Оценивать команду могут только администраторы и модераторы.")
     target = _staff_target_from_message(msg)
-    if not target or not _is_staff_uid(target.id):
+    if not target or not _is_staff_uid(target.id, msg.chat.id):
         return await msg.reply(
             "↩️ Ответь командой на сообщение сотрудника.\n"
             "Пример: <code>оценитьадмина 5</code>",
@@ -1071,7 +1081,8 @@ async def cmd_staff_stats(msg: Message):
     if msg.chat.type == "private":
         return await msg.reply("ℹ️ Статистика доступна в рабочем групповом чате.")
     if not msg.from_user or (
-        msg.from_user.id != OWNER_ID and not _is_staff_uid(msg.from_user.id)
+        msg.from_user.id != OWNER_ID
+        and not _is_staff_uid(msg.from_user.id, msg.chat.id)
     ):
         return await msg.reply("⛔ Статистика команды доступна только администрации и фаундеру.")
     cid = msg.chat.id
@@ -1152,6 +1163,32 @@ async def cmd_staff_stats(msg: Message):
         lines.append("\n<i>Данных пока нет. Анализ начинается с новых сообщений-ответов сотрудников.</i>")
     lines.append("\n<i>Автоматически учитываются ответы между сотрудниками; полный текст сообщений не сохраняется.</i>")
     await msg.reply("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_staff_chat(msg: Message):
+    """Помечает текущий чат как командный: все его участники — сотрудники."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер может назначить командный чат.")
+    if msg.chat.type == "private":
+        return await msg.reply("ℹ️ Запусти эту команду внутри чата команды.")
+    staff_team_chats.add(msg.chat.id)
+    await save_state_now("назначение командного чата")
+    await msg.reply(
+        "✅ <b>Командный чат подключён.</b>\n\n"
+        "Все участники этого чата, кроме фаундера, считаются администраторами "
+        "для рейтинга, плохого отношения и звёздных оценок.\n"
+        "Чтобы снять настройку, используй команду <code>снятькомандныйчат</code>.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_staff_chat_remove(msg: Message):
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер.")
+    staff_team_chats.discard(msg.chat.id)
+    await save_state_now("отключение командного чата")
+    await msg.reply("✅ Этот чат больше не считается командным.", parse_mode="HTML")
+
 
 def role_badge(uid: int, username: str = "") -> str:
     """Возвращает строку-бейдж для роли, или пустую строку."""
@@ -7984,6 +8021,7 @@ _HELP_SECTIONS = {
         "<code>плохоеотношение [причина]</code> — ответом отметить случай\n"
         "<code>оценитьадмина 1–5</code> — ответом поставить звёзды\n"
         "<code>статаадминов</code> — пары, проценты и рейтинг\n"
+        "Фаундер подключает такой чат командой <code>командныйчат</code> прямо внутри него.\n"
         "Автоматически анализируются ответы сотрудников и присланные voice-сообщения.\n\n"
         "🎮 <b>Игры (только в ЛС бота):</b>\n"
         "<code>/орёл [сумма]</code> — монетка\n"
@@ -8256,6 +8294,8 @@ TEXT_COMMANDS.update({
     "роль": cmd_set_role, "setrole": cmd_set_role,
     "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
     "роли": cmd_roles, "roles": cmd_roles,
+    "командныйчат": cmd_staff_chat, "чаткоманды": cmd_staff_chat, "staffchat": cmd_staff_chat,
+    "снятькомандныйчат": cmd_staff_chat_remove, "снятьчаткоманды": cmd_staff_chat_remove,
     # Рейтинг и контроль работы команды (ответом на сообщение сотрудника)
     "плохоеотношение": cmd_staff_bad, "плохое отношение": cmd_staff_bad,
     "отношение": cmd_staff_bad,
@@ -8387,6 +8427,8 @@ for slash_name, func in [
     ("чекин", cmd_checkin), ("стрик", cmd_streak),
     ("топстриков", cmd_topstreak),
     ("репутация", cmd_rep),
+     ("командныйчат", cmd_staff_chat), ("чаткоманды", cmd_staff_chat),
+     ("снятькомандныйчат", cmd_staff_chat_remove), ("снятьчаткоманды", cmd_staff_chat_remove),
      ("плохоеотношение", cmd_staff_bad), ("отношение", cmd_staff_bad),
      ("оценитьадмина", cmd_staff_rate), ("оценкаадмина", cmd_staff_rate),
      ("статаадминов", cmd_staff_stats), ("статистикаадминов", cmd_staff_stats),
@@ -8580,7 +8622,7 @@ class PropagandaMiddleware(BaseMiddleware):
             # Автоматический аудит отношений: считаем только явные ответы
             # сотрудника сотруднику, чтобы обычные сообщения не превращались
             # в ложные обвинения. Полный текст в состояние не сохраняем.
-            if event.text and _is_staff_uid(_uid_mw):
+            if event.text and _is_staff_uid(_uid_mw, _cid_mw):
                 _target_mw = _staff_target_from_message(event)
                 _first_word_mw = (event.text.strip().lower().split() or [""])[0].lstrip("/")
                 _staff_command_words = {
@@ -11567,7 +11609,7 @@ async def handle_staff_voice_message(msg: Message):
     бот получает как файл. Адресат определяется только по reply, как и для
     текстовой аналитики.
     """
-    if msg.chat.type == "private" or not msg.from_user or not _is_staff_uid(msg.from_user.id):
+    if msg.chat.type == "private" or not msg.from_user or not _is_staff_uid(msg.from_user.id, msg.chat.id):
         return
     target = _staff_target_from_message(msg)
     cid = msg.chat.id
@@ -11575,7 +11617,7 @@ async def handle_staff_voice_message(msg: Message):
         "received": 0, "analyzed": 0, "failed": 0,
     })
     stats["received"] = int(stats.get("received", 0)) + 1
-    if not target or not _is_staff_uid(target.id) or target.id == msg.from_user.id:
+    if not target or not _is_staff_uid(target.id, msg.chat.id) or target.id == msg.from_user.id:
         stats["failed"] = int(stats.get("failed", 0)) + 1
         if stats["received"] % 5 == 0:
             schedule_state_save("статистика voice команды")
@@ -12088,6 +12130,11 @@ def _apply_data(data: dict) -> None:
             }
         except (AttributeError, TypeError, ValueError):
             logging.warning("⚠️ Некорректная статистика voice для chat=%s", c)
+    for c in data.get("staff_team_chats", []):
+        try:
+            staff_team_chats.add(int(c))
+        except (TypeError, ValueError):
+            pass
     for u, v in data.get("referrals", {}).items():
         referrals[int(u)] = int(v)
     for u, v in data.get("referral_counts", {}).items():
