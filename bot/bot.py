@@ -128,10 +128,10 @@ _ECON_CANONICAL: dict[int, int] = {}
 ANKETA_PREMIUM_STARS = 300
 ROLES: dict[int, str] = {}
 ROLE_NAMES: dict[str, str] = {
-    "lead_admin":  "Lead Admin",
-    "co_admin":    "Co-Admin",
-    "admin":       "Admin",
-    "moderator":   "Moderator",
+    "lead_admin":  "Главный администратор",
+    "co_admin":    "Заместитель администратора",
+    "admin":       "Администратор",
+    "moderator":   "Модератор",
     "vip":         "VIP",
 }
 ROLE_HIERARCHY = ["lead_admin", "co_admin", "admin", "moderator"]
@@ -813,16 +813,16 @@ async def auto_moderate_propaganda(msg: Message) -> bool:
         await bot.send_message(
             chat_id,
             f"🚫 {mention} <b>заблокирован</b> за пропаганду российской армии.\n\n"
-            f"🇺🇦 Слава Україні! Пропаганді немає місця в цьому чаті.",
+            f"🇺🇦 Слава Украине! Пропаганде нет места в этом чате.",
             parse_mode="HTML",
         )
     else:
         # Предупреждение (создатель получает только предупреждения)
-        ban_note = "" if is_creator else f"\n❗ Це <b>попередження {count}/2</b>. При повторному порушенні — <b>бан</b>."
+        ban_note = "" if is_creator else f"\n❗ Это <b>предупреждение {count}/2</b>. При повторном нарушении — <b>бан</b>."
         await bot.send_message(
             chat_id,
-            f"⚠️ {mention}, повідомлення видалено за <b>пропаганду російської армії</b>.{ban_note}\n\n"
-            f"🇺🇦 Росія — країна-агресор. Реклама її армії в цьому чаті заборонена.",
+            f"⚠️ {mention}, сообщение удалено за <b>пропаганду российской армии</b>.{ban_note}\n\n"
+            f"🇺🇦 Россия — страна-агрессор. Реклама её армии в этом чате запрещена.",
             parse_mode="HTML",
         )
     return True
@@ -3442,8 +3442,8 @@ async def cmd_rob(msg: Message):
         if vic_bank > 0:
             return await msg.reply(
                 f"{brand.hdr()}\n\n"
-                f"🏦 <b>{html.escape(victim.full_name)}</b> зберіг(ла) монети в банку!\n\n"
-                f"<i>Гаманець майже порожній, але банк захищений від ограбування.</i>\n\n"
+                f"🏦 <b>{html.escape(victim.full_name)}</b> сохранил(а) монеты в банке!\n\n"
+                f"<i>Кошелёк почти пуст, но банк защищён от ограбления.</i>\n\n"
                 f"{brand.div()}",
                 parse_mode="HTML",
             )
@@ -5338,16 +5338,16 @@ async def cmd_whois(msg: Message):
         f"🔎 Досье · {full_name}",
         f"{brand.div()}",
         f"👤 Имя: {first} {last}".strip(),
-        f"🔗 Username: {username}",
+        f"🔗 Имя пользователя: {username}",
         f"🆔 ID: <code>{uid}</code>",
         f"🌐 Язык: {lang}",
-        f"⭐ Premium: {is_premium}",
+        f"⭐ Премиум: {is_premium}",
     ]
 
     if title_str:
         lines.append(f"🏷 Звание: {title_str}")
     if bio != "—":
-        lines.append(f"📝 Bio: {bio}")
+        lines.append(f"📝 О себе: {bio}")
 
     if msg.chat.type != "private":
         aura_val  = get_aura(uid)
@@ -5379,7 +5379,7 @@ async def cmd_chatinfo(msg: Message):
         f"🏷 Название: <b>{chat.title or 'Личный чат'}</b>\n"
         f"🆔 ID: <code>{chat.id}</code>\n"
         f"📋 Тип: <b>{chat.type}</b>\n"
-        f"🔗 Username: @{chat.username or '—'}\n\n"
+         f"🔗 Имя пользователя: @{chat.username or '—'}\n\n"
         f"{brand.div()}",
         parse_mode="HTML")
 
@@ -5525,13 +5525,13 @@ async def cmd_botstats(msg: Message):
         await msg.reply(
             f"{brand.hdr()}\n\n"
             f"📊 Статистика · {chat_title}\n\n"
-            f"👥 Учасників: <b>{member_display}</b>\n"
-            f"💍 Шлюбів: <b>{total_marriages}</b>\n"
-            f"🔥 Активних стріків: <b>{total_streaks}</b>\n"
-            f"🏆 Рекорд стріку: <b>{best_streak} дн.</b>\n"
-            f"⚠️ Попереджень: <b>{total_warns}</b>\n"
-            f"💰 LMN в обороті: <b>{fmt_lmn(total_balance)}</b>"
-            f" <i>(гаманець + банк)</i>"
+            f"👥 Участников: <b>{member_display}</b>\n"
+            f"💍 Браков: <b>{total_marriages}</b>\n"
+            f"🔥 Активных стриков: <b>{total_streaks}</b>\n"
+            f"🏆 Рекорд стрика: <b>{best_streak} дн.</b>\n"
+            f"⚠️ Предупреждений: <b>{total_warns}</b>\n"
+            f"💰 LMN в обороте: <b>{fmt_lmn(total_balance)}</b>"
+            f" <i>(кошелёк + банк)</i>"
             f"{richest_line}\n\n"
             f"{brand.div()}\n"
             f"🤖 v{BOT_VERSION}",
@@ -5569,13 +5569,13 @@ async def cmd_botstats(msg: Message):
         await msg.reply(
             f"{brand.hdr()}\n\n"
             f"📊 Загальна статистика\n\n"
-            f"👥 Унікальних юзерів: <b>{total_users}</b>\n"
-            f"💍 Шлюбів: <b>{total_marriages}</b>\n"
-            f"🔥 Активних стріків: <b>{total_streaks}</b>\n"
-            f"🏆 Рекорд стріку: <b>{best_streak} дн.</b>\n"
-            f"⚠️ Попереджень: <b>{total_warns}</b>\n"
-            f"💰 LMN в обороті: <b>{fmt_lmn(total_balance)}</b>"
-            f" <i>(гаманець + банк)</i>\n\n"
+            f"👥 Уникальных пользователей: <b>{total_users}</b>\n"
+            f"💍 Браков: <b>{total_marriages}</b>\n"
+            f"🔥 Активных стриков: <b>{total_streaks}</b>\n"
+            f"🏆 Рекорд стрика: <b>{best_streak} дн.</b>\n"
+            f"⚠️ Предупреждений: <b>{total_warns}</b>\n"
+            f"💰 LMN в обороте: <b>{fmt_lmn(total_balance)}</b>"
+            f" <i>(кошелёк + банк)</i>\n\n"
             f"{brand.div()}\n"
             f"🤖 v{BOT_VERSION}",
             parse_mode="HTML",
@@ -5630,13 +5630,13 @@ async def cmd_edit_info(msg: Message):
     _edit_sessions[msg.from_user.id] = "info_project"
     current_text = html.escape(brand.get_current_text("info_project"))
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="❌ Відміна", callback_data="reply_edit_cancel"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="reply_edit_cancel"),
     ]])
     await msg.answer(
-        "✏️ <b>Редагування тексту /info</b>\n\n"
-        f"Поточний текст:\n<blockquote>{current_text}</blockquote>\n\n"
-        "Надішли новий текст одним повідомленням. Форматування та Premium Emoji "
-        "будуть збережені.",
+        "✏️ <b>Редактирование текста /info</b>\n\n"
+        f"Текущий текст:\n<blockquote>{current_text}</blockquote>\n\n"
+        "Отправь новый текст одним сообщением. Форматирование и Premium Emoji "
+        "будут сохранены.",
         parse_mode="HTML",
         reply_markup=cancel_kb,
     )
@@ -7773,7 +7773,7 @@ async def cmd_support(msg: Message):
 
 
 async def _farm_soon(msg: Message):
-    await msg.reply("🌾 <b>Farm</b>\n\n<i>Coming soon! Stay tuned 🚀</i>", parse_mode="HTML")
+    await msg.reply("🌾 <b>Ферма</b>\n\n<i>Скоро открытие! Следи за обновлениями 🚀</i>", parse_mode="HTML")
 
 @dp.message(Command("ферма", "ferma", "farm"))
 async def cmd_farm_slash(msg: Message):
@@ -7806,15 +7806,15 @@ async def _shop_soon(msg: Message):
         text = (
             f"{brand.hdr()}\n\n"
             f"🛒 <b>Магазин LMN</b>\n\n"
-            f"⚙️ <i>Скоро відкриється!</i>\n\n"
+            f"⚙️ <i>Скоро откроется!</i>\n\n"
             f"{_shop_countdown()}\n\n"
-            f"Тут можна буде витратити зароблені {brand.currency()} на:\n"
-            f"• 🎭 Ролі та статуси\n"
-            f"• 🛡 Захист від пограбування\n"
-            f"• ⚡ Буст заробітку на зміні\n"
-            f"• 🔥 Щит для стріку\n"
-            f"• 🎁 Унікальні предмети\n\n"
-            f"<i>Слідкуй за оновленнями!</i>\n\n"
+            f"Здесь можно будет потратить заработанные {brand.currency()} на:\n"
+            f"• 🎭 Роли и статусы\n"
+            f"• 🛡 Защита от ограбления\n"
+            f"• ⚡ Буст заработка на смене\n"
+            f"• 🔥 Щит для стрика\n"
+            f"• 🎁 Уникальные предметы\n\n"
+            f"<i>Следи за обновлениями!</i>\n\n"
             f"{brand.div()}"
         )
     await msg.reply(text, parse_mode="HTML")
@@ -7824,10 +7824,10 @@ async def _inventory_soon(msg: Message):
     await msg.reply(
         brand.get_text("inventory_coming_soon") or (
             f"{brand.hdr()}\n\n"
-            f"🎒 <b>Інвентар</b>\n\n"
-            f"⚙️ <i>Скоро буде доступний!</i>\n\n"
-            f"Тут зберігатимуться всі твої предмети з магазину.\n\n"
-            f"<i>Поки що порожньо — зачекай відкриття магазину 🛒</i>\n\n"
+            f"🎒 <b>Инвентарь</b>\n\n"
+            f"⚙️ <i>Скоро будет доступен!</i>\n\n"
+            f"Здесь будут храниться все твои предметы из магазина.\n\n"
+            f"<i>Пока пусто — дождись открытия магазина 🛒</i>\n\n"
             f"{brand.div()}"
         ),
         parse_mode="HTML",
@@ -8434,7 +8434,7 @@ async def cb_ank_accept(cb: CallbackQuery):
                     disable_notification=True,
                 )
             except Exception as pin_error:
-                print(f"⚠️ Не вдалося закріпити анкету {pub_msg_id} у {pub_chat}: {pin_error}")
+                print(f"⚠️ Не удалось закрепить анкету {pub_msg_id} в {pub_chat}: {pin_error}")
         except Exception as e:
             print(f"⚠️ pub_chat send error: {e}")
 
@@ -8660,7 +8660,7 @@ async def cb_ank_start_private(cb: CallbackQuery):
     }
     await bot.send_message(
         uid,
-        "💌 *Анкета знакомств / Анкета знайомств*\n\nВыберите язык / Виберіть мову:",
+        "💌 *Анкета знакомств*\n\nВыберите язык:",
         parse_mode="Markdown",
         reply_markup=_ank._lang_kb()
     )
@@ -8800,7 +8800,7 @@ async def cb_ank_user_edit(cb: CallbackQuery):
     }
     await bot.send_message(
         uid,
-        "💌 *Анкета знакомств / Анкета знайомств*\n\nВыберите язык / Виберіть мову:",
+        "💌 *Анкета знакомств*\n\nВыберите язык:",
         parse_mode="Markdown",
         reply_markup=_ank._lang_kb()
     )
@@ -8995,7 +8995,7 @@ async def cb_captcha_ans(cb: CallbackQuery):
     _verified_users.add(uid)
     save_data()
 
-    site_line = (f"\n\n🌐 <a href=\"{LUMENA_SITE_URL}\">Офіційний сайт Лумени</a> — всі функції та правила"
+    site_line = (f"\n\n🌐 <a href=\"{LUMENA_SITE_URL}\">Официальный сайт Лумены</a> — все функции и правила"
                  if LUMENA_SITE_URL else "")
     await _edit_custom(
         cb.message, "verify_done",
@@ -9119,13 +9119,13 @@ async def cmd_cancel_ank(msg: Message):
 @dp.message(Command("setmodchat", "setmod"))
 async def cmd_setmodchat(msg: Message):
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
     _ank.set_mod_chat(msg.chat.id)
     _ank.save_anketa_settings()
     await msg.reply(
-        f"✅ <b>Чат модерації анкет встановлено!</b>\n"
+        f"✅ <b>Чат модерации анкет установлен!</b>\n"
         f"🆔 ID: <code>{msg.chat.id}</code>\n\n"
-        f"Сюди надходитимуть анкети на перевірку.",
+        f"Сюда будут поступать анкеты на проверку.",
         parse_mode="HTML"
     )
 
@@ -9133,13 +9133,13 @@ async def cmd_setmodchat(msg: Message):
 @dp.message(Command("setpubchat", "setpub"))
 async def cmd_setpubchat(msg: Message):
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
     _ank.set_pub_chat(msg.chat.id)
     _ank.save_anketa_settings()
     await msg.reply(
-        f"✅ <b>Чат публікацій анкет встановлено!</b>\n"
+        f"✅ <b>Чат публикаций анкет установлен!</b>\n"
         f"🆔 ID: <code>{msg.chat.id}</code>\n\n"
-        f"Сюди публікуватимуться схвалені анкети.",
+        f"Сюда будут публиковаться одобренные анкеты.",
         parse_mode="HTML"
     )
 
@@ -9148,12 +9148,12 @@ async def cmd_setpubchat(msg: Message):
 async def cmd_resetpubchat(msg: Message):
     """Скидає чат публікацій анкет."""
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
     _ank.set_pub_chat(None)
     _ank.save_anketa_settings()
     await msg.reply(
-        "🔄 <b>Чат публікацій анкет скинуто.</b>\n\n"
-        "Тепер виконай <code>/setpubchat</code> у потрібному чаті.",
+        "🔄 <b>Чат публикаций анкет сброшен.</b>\n\n"
+        "Теперь выполни <code>/setpubchat</code> в нужном чате.",
         parse_mode="HTML"
     )
 
@@ -9241,7 +9241,7 @@ async def handle_emoji_extract(msg: Message):
         brand.set_pack(ids, brand.get_pack_name())
         save_data()
         await msg.reply(
-            f"✅ <b>Header emoji збережено!</b>\n\n"
+            f"✅ <b>Header emoji сохранено!</b>\n\n"
             f"Emoji: <tg-emoji emoji-id=\"{eid}\">{html.escape(char)}</tg-emoji>  "
             f"<code>{eid}</code>\n\n"
             f"Превью: {brand.hdr()}\n"
@@ -9250,7 +9250,7 @@ async def handle_emoji_extract(msg: Message):
         )
     else:
         # ── Кілька emoji — показуємо список з кнопками ───────
-        lines = ["🔍 <b>Знайдені Custom Emoji:</b>\n"]
+        lines = ["🔍 <b>Найденные Custom Emoji:</b>\n"]
         buttons = []
         for i, (char, eid) in enumerate(found):
             lines += [
@@ -9261,7 +9261,7 @@ async def handle_emoji_extract(msg: Message):
                 text=f"[{i}] Встановити як header",
                 callback_data=f"setemoji_hdr:{eid}",
             )])
-        lines.append("\nНатисни кнопку щоб встановити потрібний як header emoji:")
+        lines.append("\nНажми кнопку, чтобы установить нужный header emoji:")
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
         await msg.reply("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
@@ -9270,7 +9270,7 @@ async def handle_emoji_extract(msg: Message):
 async def cb_setemoji_hdr(cb: CallbackQuery):
     """Встановлює вибраний emoji як header."""
     if not is_owner(cb):
-        return await cb.answer("Тільки фаундер", show_alert=True)
+        return await cb.answer("Только фаундер", show_alert=True)
     eid = cb.data.split(":", 1)[1]
     ids = brand.get_pack()
     if ids:
@@ -9280,7 +9280,7 @@ async def cb_setemoji_hdr(cb: CallbackQuery):
     brand.set_pack(ids, brand.get_pack_name())
     save_data()
     await cb.message.edit_text(
-        f"✅ <b>Header emoji збережено!</b>\n\n"
+            f"✅ <b>Header emoji сохранено!</b>\n\n"
         f"<code>{eid}</code>\n\n"
         f"Превью: {brand.hdr()}\n"
         f"{brand.div()}",
@@ -9335,10 +9335,10 @@ async def handle_founder_edit_text(msg: Message):
         (
             f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
             +
-            "Текст та форматування записані в PostgreSQL.\n"
+             "Текст и форматирование записаны в PostgreSQL.\n"
             if brand_saved else
             f"✅ <b>{html.escape(label)}</b> — сохранён!\n\n"
-            "Текст збережено локально; PostgreSQL недоступний, автосинхронізація повторить запис.\n"
+             "Текст сохранён локально; PostgreSQL недоступен, автосинхронизация повторит запись.\n"
         )
         + emoji_warning
         + f"\n<code>/resettext {key}</code> — сбросить к дефолту.",
@@ -9447,7 +9447,7 @@ async def cmd_resettext(msg: Message):
     saved = await brand.persist_brand_now()
     await msg.reply(
         f"🔄 <b>{html.escape(brand.TEXT_LABELS[key])}</b> — сброшен к дефолту."
-        + ("" if saved else "\n\n⚠️ PostgreSQL недоступний: зміна поки є лише локально."),
+        + ("" if saved else "\n\n⚠️ PostgreSQL недоступен: изменение пока только локальное."),
         parse_mode="HTML"
     )
 
@@ -9517,9 +9517,9 @@ _EDITOR_TEXT_CATEGORIES = [
                               "fortune_country", "fortune_color", "fortune_joke",
                               "fortune_compliment", "fortune_roast",
                               "fortune_8ball", "fortune_predict"]),
-    ("🛒 Магазин & Інвентар", ["shop_header", "shop_coming_soon",
+    ("🛒 Магазин и инвентарь", ["shop_header", "shop_coming_soon",
                                 "inventory_header", "inventory_empty"]),
-    ("ℹ️ Інфо",               ["info_project"]),
+    ("ℹ️ Инфо",               ["info_project"]),
     ("👤 Профиль & Рейтинги", ["profile_no_bio", "profile_no_partner", "info_founder_badge",
                                 "profile_header", "profile_bio_label",
                                 "profile_balance_label", "profile_streak_label",
@@ -9983,7 +9983,7 @@ async def cb_editor_btn_reset(cb: CallbackQuery):
     df = brand.BUTTON_DEFS[key]
     await cb.answer(
         f"🔄 «{df['desc']}» сброшена к дефолту"
-        if saved else "⚠️ Зміна локальна: PostgreSQL недоступний",
+        if saved else "⚠️ Изменение локальное: PostgreSQL недоступен",
         show_alert=True,
     )
     # Обновляем сообщение
@@ -10076,7 +10076,7 @@ async def cb_editor_style_reset(cb: CallbackQuery):
     df = brand.STYLE_DEFS[key]
     await cb.answer(
         f"🔄 «{df['desc']}» сброшено к дефолту"
-        if saved else "⚠️ Зміна локальна: PostgreSQL недоступний",
+        if saved else "⚠️ Изменение локальное: PostgreSQL недоступен",
         show_alert=False,
     )
     # обновить экран детали
@@ -10120,7 +10120,7 @@ async def handle_style_edit_input(msg: Message):
         f"Новое значение: <code>{html.escape(text)}</code>\n\n"
         f"Заголовок теперь: {brand.hdr()}\n"
         f"Разделитель: {brand.div()}"
-        + ("" if saved else "\n\n⚠️ PostgreSQL недоступний: зміна поки є лише локально."),
+        + ("" if saved else "\n\n⚠️ PostgreSQL недоступен: изменение пока только локальное."),
         parse_mode="HTML",
         reply_markup=back_kb,
     )
@@ -10166,7 +10166,7 @@ async def handle_btn_edit_input(msg: Message):
     await msg.reply(
         f"✅ {what} кнопки <b>{html.escape(df.get('desc', key))}</b> обновлено!\n\n"
         f"Новое значение: <code>{html.escape(text)}</code>"
-        + ("" if saved else "\n\n⚠️ PostgreSQL недоступний: зміна поки є лише локально."),
+        + ("" if saved else "\n\n⚠️ PostgreSQL недоступен: изменение пока только локальное."),
         parse_mode="HTML",
         reply_markup=back_kb,
     )
@@ -10389,7 +10389,7 @@ TEXT_COMMANDS.update({
 async def cmd_sendlaunch(msg: Message):
     """Відправляє алерт про запуск проекту в паб-чат (тільки фаундер)."""
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
 
     pub_chat = _ank.get_pub_chat()
     if not pub_chat:
@@ -10411,37 +10411,37 @@ async def cmd_sendlaunch(msg: Message):
                 mentions.append(mention)
 
     mention_line = "  ".join(mentions) if mentions else ""
-    site_line = f"\n🌐 Офіційний сайт: {LUMENA_SITE_URL}" if LUMENA_SITE_URL else ""
+    site_line = f"\n🌐 Официальный сайт: {LUMENA_SITE_URL}" if LUMENA_SITE_URL else ""
 
     text = (
-        "⚡️ <b>УВАГА КОМАНДІ LUMENA</b> ⚡️\n\n"
-        "Адміністратори та модератори — будьте на готові!\n\n"
-        "🚀 <b>Запуск проекту о 20:00 за Києвом</b>\n\n"
-        "📋 Що потрібно зробити:\n"
-        "• Уважно стежте за чатом\n"
-        "• Швидко реагуйте на порушення правил\n"
-        "• Привітно зустрічайте нових учасників\n"
-        "• Перевірте що всі інструменти бота працюють коректно\n"
-        "• Антилінк та верифікація — активні"
+        "⚡️ <b>ВНИМАНИЕ КОМАНДЕ LUMENA</b> ⚡️\n\n"
+        "Администраторы и модераторы — будьте готовы!\n\n"
+        "🚀 <b>Запуск проекта в 20:00 по Киеву</b>\n\n"
+        "📋 Что нужно сделать:\n"
+        "• Внимательно следите за чатом\n"
+        "• Быстро реагируйте на нарушения правил\n"
+        "• Приветливо встречайте новых участников\n"
+        "• Проверьте, что все инструменты бота работают корректно\n"
+        "• Антилинк и верификация — активны"
         f"{site_line}\n"
         "🤖 Бот: @LumenarAi_Bot\n\n"
-        "Слава Україні! 🇺🇦\n\n"
-        "— <i>Автоматичне повідомлення системи LUMENA</i>"
+        "Слава Украине! 🇺🇦\n\n"
+        "— <i>Автоматическое сообщение системы LUMENA</i>"
     )
     if mention_line:
         text += f"\n\n{mention_line}"
 
     try:
         await bot.send_message(pub_chat, text, parse_mode="HTML")
-        await msg.reply("✅ Алерт відправлено в паб-чат!")
+        await msg.reply("✅ Алерт отправлен в паб-чат!")
     except Exception as e:
-        await msg.reply(f"❌ Помилка: {e}")
+        await msg.reply(f"❌ Ошибка: {e}")
 
 @dp.message(Command("aistatus"))
 async def cmd_aistatus(msg: Message):
     """Статус AI Terra — тільки для власника. Не розкриває секретів."""
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
 
     mode = ai_agent.terra_mode()
     available = ai_agent.terra_available()
@@ -10453,20 +10453,20 @@ async def cmd_aistatus(msg: Message):
     elif mode == "replit_proxy":
         source = "🔗 Replit AI Integrations proxy"
         status_icon = "✅"
-        status_text = "Terra <b>активна</b> (через Replit проксі)"
+        status_text = "Terra <b>активна</b> (через прокси Replit)"
     else:
         source = "—"
         status_icon = "❌"
-        status_text = "Terra <b>недоступна</b> — використовується локальний AI"
+        status_text = "Terra <b>недоступна</b> — используется локальный ИИ"
 
-    fallback_ok = "✅ Локальний AI готовий як резерв"
+    fallback_ok = "✅ Локальный ИИ готов как резерв"
 
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"<b>🤖 Статус AI Лумени</b>\n"
         f"{brand.div()}\n"
         f"{status_icon} {status_text}\n"
-        f"📡 Джерело: {source}\n"
+        f"📡 Источник: {source}\n"
         f"🛡 {fallback_ok}\n"
         f"🧠 Модель: <code>gpt-5.6-terra</code>\n"
         f"{brand.div()}",
@@ -10477,19 +10477,19 @@ async def cmd_setsiteurl(msg: Message):
     """Встановлює URL офіційного сайту Лумени (відображається в меню та привітаннях)."""
     global LUMENA_SITE_URL
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
     parts = (msg.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip().startswith("http"):
-        current = LUMENA_SITE_URL or "не встановлено"
+        current = LUMENA_SITE_URL or "не установлено"
         return await msg.reply(
-            f"ℹ️ Поточний URL сайту:\n<code>{current}</code>\n\n"
-            "Оновити:\n<code>/setsiteurl https://...</code>",
+            f"ℹ️ Текущий URL сайта:\n<code>{current}</code>\n\n"
+            "Обновить:\n<code>/setsiteurl https://...</code>",
             parse_mode="HTML"
         )
     LUMENA_SITE_URL = parts[1].strip()
     await msg.reply(
-        f"✅ <b>URL сайту оновлено!</b>\n🌐 <a href=\"{LUMENA_SITE_URL}\">{LUMENA_SITE_URL}</a>\n\n"
-        "Кнопка «🌐 Сайт Лумены» тепер веде на нову адресу.",
+        f"✅ <b>URL сайта обновлён!</b>\n🌐 <a href=\"{LUMENA_SITE_URL}\">{LUMENA_SITE_URL}</a>\n\n"
+        "Кнопка «🌐 Сайт Лумены» теперь ведёт на новый адрес.",
         parse_mode="HTML"
     )
 
@@ -10498,11 +10498,11 @@ async def cmd_setsiteurl(msg: Message):
 async def cmd_setchatlink(msg: Message):
     """Встановлює посилання на головний чат (для кнопки НАШ ЧАТ в анкетах)."""
     if not is_owner(msg):
-        return await msg.reply("⛔ Тільки фаундер")
+        return await msg.reply("⛔ Только фаундер")
     parts = (msg.text or "").split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip().startswith("http"):
         return await msg.reply(
-            "ℹ️ Вкажи посилання на чат:\n"
+            "ℹ️ Укажи ссылку на чат:\n"
             "<code>/setchatlink https://t.me/+...</code>",
             parse_mode="HTML"
         )
@@ -10510,9 +10510,9 @@ async def cmd_setchatlink(msg: Message):
     _ank.set_chat_link(link)
     _ank.save_anketa_settings()
     await msg.reply(
-        f"✅ <b>Посилання на чат збережено!</b>\n"
+        f"✅ <b>Ссылка на чат сохранена!</b>\n"
         f"🔗 {link}\n\n"
-        f"Тепер кнопка «⭐ НАШ ЧАТ» з'явиться під кожною анкетою.",
+        f"Теперь кнопка «⭐ НАШ ЧАТ» появится под каждой анкетой.",
         parse_mode="HTML"
     )
 
@@ -10828,7 +10828,7 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
             msg.chat.id,
         )
         reason = args_raw
-        not_found_hint = "Повідомлення не прив'язане до жодної анкети."
+        not_found_hint = "Сообщение не привязано ни к одной анкете."
 
     # 2. З аргументів: числовий ID або @username
     if not target_uid and parts:
@@ -10844,8 +10844,8 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
                     break
             if not target_uid:
                 not_found_hint = (
-                    f"Юзер <code>@{html.escape(first)}</code> не знайдений в базі анкет.\n"
-                    "Перевір username або вкажи Telegram ID."
+                    f"Пользователь <code>@{html.escape(first)}</code> не найден в базе анкет.\n"
+                    "Проверь username или укажи Telegram ID."
                 )
 
     if not target_uid:
@@ -10856,8 +10856,8 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
             )
         return await msg.reply(
             f"{brand.hdr()}\n\n"
-            "❓ <b>Вкажи юзера:</b>\n\n"
-            "• Відповідь на пост анкети в чаті\n"
+            "❓ <b>Укажи пользователя:</b>\n\n"
+            "• Ответь на пост анкеты в чате\n"
             "• <code>/delanket @username</code>\n"
             "• <code>/delanket 123456789</code>\n"
             "• <code>/delanket @username причина</code>",
@@ -10900,16 +10900,16 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
         await bot.send_message(
             target_uid,
             f"{brand.hdr()}\n\n"
-            f"🗑 <b>Твоя анкета була видалена фаундером.</b>{reason_line}\n\n"
-            "Якщо вважаєш це помилкою — звернись до модераторів.\n"
-            "Подати нову анкету: /анкета\n\n"
+            f"🗑 <b>Твоя анкета была удалена фаундером.</b>{reason_line}\n\n"
+            "Если считаешь это ошибкой — обратись к модераторам.\n"
+            "Подать новую анкету: /анкета\n\n"
             f"{brand.div()}",
             parse_mode="HTML",
             reply_markup=_anketa_kb(target_uid),
         )
-        notified = "✅ Юзер отримав повідомлення"
+        notified = "✅ Пользователь получил сообщение"
     except Exception:
-        notified = "⚠️ Не вдалось надіслати повідомлення (юзер заблокував бота)"
+        notified = "⚠️ Не удалось отправить сообщение (пользователь заблокировал бота)"
 
     # ── Підтвердження фаундеру ────────────────────────────────
     await msg.reply(
@@ -11084,12 +11084,12 @@ async def universal_handler(msg: Message):
                                  reply_markup=_anketa_kb(uid))
             return
 
-        if text == "✏️ Редагувати анкету":
+        if text == "✏️ Редактировать анкету":
             # Відхилено — починаємо заново
             await _ank.start_anketa(bot, msg, force=True)
             return
 
-        if text == "⏳ Анкета на перевірці":
+        if text == "⏳ Анкета на проверке":
             await msg.answer(
                 "⏳ *Твоя анкета сейчас рассматривается администраторами.*\n\n"
                 "Ожидай — мы уведомим о решении! 🙏",
@@ -11334,16 +11334,16 @@ async def on_bot_added(event: ChatMemberUpdated):
     mod_set = "✅" if _ank.get_mod_chat() == chat_id else "⬜"
     pub_set = "✅" if _ank.get_pub_chat() == chat_id else "⬜"
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="📖 Всі команди", callback_data="help:menu"),
+        InlineKeyboardButton(text="📖 Все команды", callback_data="help:menu"),
     ]])
     try:
         await bot.send_message(
             chat_id,
-            f"👋 Привіт! Я <b>Лумена</b> — розумний бот для вашого чату 💙\n\n"
-            f"<b>Налаштування анкет</b> (тільки фаундер):\n\n"
-            f"{mod_set} <code>/setmodchat</code> — чат модерації анкет\n"
-            f"{pub_set} <code>/setpubchat</code> — чат публікацій анкет\n\n"
-            f"🆔 ID чату: <code>{chat_id}</code>",
+            f"👋 Привет! Я <b>Лумена</b> — умный бот для вашего чата 💙\n\n"
+            f"<b>Настройка анкет</b> (только фаундер):\n\n"
+            f"{mod_set} <code>/setmodchat</code> — чат модерации анкет\n"
+            f"{pub_set} <code>/setpubchat</code> — чат публикаций анкет\n\n"
+            f"🆔 ID чата: <code>{chat_id}</code>",
             parse_mode="HTML",
             reply_markup=kb,
         )
