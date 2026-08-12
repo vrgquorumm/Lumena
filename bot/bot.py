@@ -7770,15 +7770,24 @@ async def cmd_inventory_slash(msg: Message):
 
 # ── Telegram Premium (coming soon) ──────────────────────
 TG_PREMIUM_PRICE = 100_000_000
+tg_premium_stock = 2  # сколько подписок Premium осталось "на складе"
 
 async def _premium_soon(msg: Message):
+    left = max(0, tg_premium_stock)
+    stock_line = (
+        f"📦 Осталось на складе: <b>{left} шт.</b>"
+        if left > 0 else
+        "📦 <b>Все Premium уже разобрали — склад пуст!</b>"
+    )
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"⭐ <b>Telegram Premium за LMN</b>\n\n"
-        f"💰 Цена: <b>{fmt_lmn(TG_PREMIUM_PRICE)} LMN</b>\n\n"
+        f"💰 Цена: <b>{fmt_lmn(TG_PREMIUM_PRICE)} LMN</b>\n"
+        f"{stock_line}\n\n"
         f"⚙️ <i>Магазин ещё не открыт — покупка пока недоступна.</i>\n\n"
         f"Как только магазин заработает, здесь можно будет обменять "
-        f"накопленные {brand.currency()} на подписку Telegram Premium.\n\n"
+        f"накопленные {brand.currency()} на подписку Telegram Premium "
+        f"(количество ограничено).\n\n"
         f"<i>Следи за обновлениями!</i>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
@@ -7787,6 +7796,18 @@ async def _premium_soon(msg: Message):
 @dp.message(Command("premium", "премиум", "тгпремиум"))
 async def cmd_premium_slash(msg: Message):
     await _premium_soon(msg)
+
+@dp.message(Command("premiumstock", "остатокпремиум", "премиумостаток"))
+async def cmd_premium_stock(msg: Message):
+    left = max(0, tg_premium_stock)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"⭐ <b>Telegram Premium — остаток</b>\n\n"
+        f"📦 Доступно к продаже: <b>{left} шт.</b>\n"
+        f"💰 Цена за 1 шт.: <b>{fmt_lmn(TG_PREMIUM_PRICE)} LMN</b>\n\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 
 # ── Обмен LMN на реальные деньги / вывод в TON (coming soon) ──
@@ -7925,6 +7946,8 @@ TEXT_COMMANDS.update({
     "магазин": _shop_soon, "крамниця": _shop_soon, "shop": _shop_soon,
     "інвентар": _inventory_soon, "инвентарь": _inventory_soon, "inv": _inventory_soon,
     "премиум": _premium_soon, "тгпремиум": _premium_soon, "premium": _premium_soon,
+    "остатокпремиум": cmd_premium_stock, "премиумостаток": cmd_premium_stock,
+    "остаток премиум": cmd_premium_stock, "premiumstock": cmd_premium_stock,
     "обмен": _exchange_soon, "обменять": _exchange_soon, "exchange": _exchange_soon,
     "вывод": _exchange_soon, "withdraw": _exchange_soon,
     # Алхимия
