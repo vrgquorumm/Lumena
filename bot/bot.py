@@ -108,6 +108,7 @@ chat_rules = {}
 hangman_games = {}
 roulette_players = {}
 profiles = {}
+user_locations: dict[int, str] = {}  # uid → явное место проживания для геостатистики
 chat_members = {}
 support_sessions = {}
 _active_rain: dict = {}
@@ -290,6 +291,7 @@ def _build_main_payload() -> dict:
         "founder_grant_version": founder_grant_version,
         "reputation":   {str(c): {str(u): v for u, v in r.items()} for c, r in reputation.items()},
         "profiles":     {str(u): v for u, v in profiles.items()},
+        "user_locations": {str(u): value for u, value in user_locations.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
         "chat_rules":   {str(c): r for c, r in chat_rules.items()},
@@ -5812,7 +5814,8 @@ async def cmd_botstats(msg: Message):
         # Уникальные участники из обоих чатов (без дублей)
         members_cid = chat_members.get(cid, {})
         members_can = chat_members.get(canonical, {}) if canonical != cid else {}
-        all_uid_set = set(members_cid) | set(members_can)
+        geo_members = await _collect_chat_members_for_stats(cid, canonical)
+        all_uid_set = set(geo_members)
 
         member_display = tg_member_count if tg_member_count is not None else len(all_uid_set)
 
@@ -5871,7 +5874,8 @@ async def cmd_botstats(msg: Message):
             f"⚠️ Предупреждений: <b>{total_warns}</b>\n"
             f"💰 LMN в обороте: <b>{fmt_lmn(total_balance)}</b>"
             f" <i>(кошелёк + банк)</i>"
-            f"{richest_line}\n\n"
+            f"{richest_line}\n"
+            f"{chr(10).join(_chat_geo_lines(geo_members, member_display))}\n\n"
             f"{brand.div()}\n"
             f"🤖 v{BOT_VERSION}",
             parse_mode="HTML",
@@ -7320,13 +7324,158 @@ async def cmd_filters_list(msg: Message):
 # ═══════════════════════════════════════════════════════
 # V6 — СТАТИСТИКА ЧАТА
 # ═══════════════════════════════════════════════════════
+_UA_CITY_ALIASES = {
+    "Киев": ("киев", "києв", "києві", "киеве", "київ", "kyiv", "kiev"),
+    "Львов": ("львов", "львове", "львові", "львів", "lviv"),
+    "Одесса": ("одесса", "одессе", "одесі", "одеса", "odesa", "odessa"),
+    "Харьков": ("харьков", "харькове", "харкові", "харків", "kharkiv"),
+    "Днепр": ("днепр", "днепре", "дніпрі", "дніпро", "dnipro", "dnepr"),
+    "Запорожье": ("запорожье", "запоріжжя", "zaporizhzhia", "zaporizhzhya"),
+    "Николаев": ("николаев", "миколаїв", "mykolaiv"),
+    "Херсон": ("херсон", "kherson"),
+    "Полтава": ("полтава", "poltava"),
+    "Чернигов": ("чернигов", "чернігів", "chernihiv"),
+    "Черкассы": ("черкассы", "черкаси", "cherkasy"),
+    "Сумы": ("сумы", "суми", "sumy"),
+    "Житомир": ("житомир", "zhytomyr"),
+    "Винница": ("винница", "вінниця", "vinnytsia"),
+    "Ровно": ("ровно", "рівне", "rivne"),
+    "Тернополь": ("тернополь", "тернопіль", "ternopil"),
+    "Ивано-Франковск": ("ивано-франковск", "івано-франківськ", "ivano-frankivsk"),
+    "Ужгород": ("ужгород", "uzhhorod", "uzhgorod"),
+    "Черновцы": ("черновцы", "чернівці", "chernivtsi"),
+    "Хмельницкий": ("хмельницкий", "хмельницький", "khmelnytskyi"),
+    "Кропивницкий": ("кропивницкий", "кропивницький", "kropyvnytskyi"),
+    "Луцк": ("луцк", "луцьк", "lutsk"),
+    "Мариуполь": ("мариуполь", "маріуполь", "mariupol"),
+    "Белая Церковь": ("белая церковь", "біла церква", "bila tserkva"),
+}
+
+_OTHER_COUNTRY_ALIASES = {
+    "Польша": ("польша", "польше", "польщі", "польщу", "польща", "poland", "polska"),
+    "Германия": ("германия", "германии", "германию", "німеччина", "germany", "deutschland"),
+    "Чехия": ("чехия", "чехии", "чехію", "чехія", "czechia", "czech republic"),
+    "Молдова": ("молдова", "молдове", "молдові", "moldova"),
+    "Румыния": ("румыния", "румынии", "румунію", "румунія", "romania"),
+    "США": ("сша", "usa", "united states", "америка"),
+    "Канада": ("канада", "canada"),
+    "Великобритания": ("великобритания", "британия", "uk", "united kingdom"),
+    "Франция": ("франция", "франции", "францію", "франція", "france"),
+    "Италия": ("италия", "италии", "італії", "італія", "italy"),
+    "Испания": ("испания", "исании", "іспанії", "іспанія", "spain"),
+    "Португалия": ("португалия", "португалии", "португалії", "португалія", "portugal"),
+    "Нидерланды": ("нидерланды", "нидерландах", "нідерландах", "нідерланди", "netherlands", "holland"),
+    "Турция": ("турция", "турции", "туреччині", "туреччина", "turkey"),
+    "Грузия": ("грузия", "грузии", "грузії", "грузія", "georgia"),
+    "Израиль": ("израиль", "израиле", "ізраїлі", "ізраїль", "israel"),
+    "Казахстан": ("казахстан", "казахстан"),
+    "Армения": ("армения", "вірменія", "armenia"),
+    "Литва": ("литва", "литва", "lithuania"),
+    "Латвия": ("латвия", "латвія", "latvia"),
+    "Эстония": ("эстония", "естонія", "estonia"),
+}
+
+
+def _geo_label_from_text(value: object, *, allow_unknown: bool = False) -> str | None:
+    """Определяет город/страну только по явно указанному тексту."""
+    text = str(value or "").strip().lower().replace("ё", "е")
+    if not text or text in {"—", "-", "нет", "не указано", "не знаю"}:
+        return None
+    for city, aliases in _UA_CITY_ALIASES.items():
+        if any(re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text) for alias in aliases):
+            return f"🇺🇦 {city}"
+    if re.search(r"(?<!\w)(украина|україна|ukraine)(?!\w)", text):
+        return "🇺🇦 Город не указан"
+    for country, aliases in _OTHER_COUNTRY_ALIASES.items():
+        if any(re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text) for alias in aliases):
+            return f"🌍 {country}"
+    if allow_unknown and len(text) <= 60:
+        return f"🌍 {text[:1].upper() + text[1:]}"
+    return None
+
+
+def _user_geo_label(uid: int) -> str | None:
+    """Ищет геоданные в явном указании, профиле и одобренной анкете."""
+    explicit = _geo_label_from_text(user_locations.get(uid))
+    if explicit:
+        return explicit
+    profile = profiles.get(uid, {})
+    for key in ("city", "country", "location", "place", "bio"):
+        label = _geo_label_from_text(profile.get(key))
+        if label:
+            return label
+    approved = _ank.get_approved_data(uid)
+    answers = approved.get("answers", {}) if approved else {}
+    for key in ("district", "city", "country", "about"):
+        label = _geo_label_from_text(answers.get(key))
+        if label:
+            return label
+    return None
+
+
+async def _collect_chat_members_for_stats(cid: int, canonical: int) -> dict[int, str]:
+    """Собирает всех доступных боту участников: сообщения, кеш и админов."""
+    members: dict[int, str] = {}
+    for chat_id in dict.fromkeys((cid, canonical)):
+        members.update(chat_members.get(chat_id, {}))
+        for uid in user_messages.get(chat_id, {}):
+            members.setdefault(uid, f"ID {uid}")
+        try:
+            admins = await bot.get_chat_administrators(chat_id)
+            for admin in admins:
+                if not admin.user.is_bot:
+                    members[admin.user.id] = admin.user.full_name
+        except Exception:
+            pass
+    return members
+
+
+def _chat_geo_lines(members: dict[int, str], total_members: int) -> list[str]:
+    counts: dict[str, int] = {}
+    for uid in members:
+        label = _user_geo_label(uid) or "❔ Город/страна не указаны"
+        counts[label] = counts.get(label, 0) + 1
+    scan_total = max(total_members, len(members))
+    if not scan_total:
+        return ["\n🌍 <b>География:</b> пока нет доступных участников."]
+    lines = [
+        "\n🌍 <b>География участников</b>",
+        f"<i>Определено по {len(members):,} доступным профилям из {scan_total:,} участников Telegram.</i>",
+    ]
+    for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        lines.append(f"• {html.escape(label)} — <b>{count / scan_total * 100:.1f}%</b> ({count})")
+    if len(members) < scan_total:
+        lines.append(
+            f"• ⏳ Не просканированы ботом — <b>{(scan_total - len(members)) / scan_total * 100:.1f}%</b>"
+        )
+    lines.append("<i>Telegram не передаёт боту город/страну и не разрешает получить список молчащих участников.</i>")
+    return lines
+
+
+async def cmd_set_location(msg: Message, command: CommandObject = None):
+    raw = (command.args or "").strip() if command else ""
+    if not raw:
+        return await msg.reply(
+            "📍 Укажи город или страну:\n"
+            "<code>указатьместо Киев</code>\n"
+            "<code>указатьместо Польша</code>",
+            parse_mode="HTML",
+        )
+    label = _geo_label_from_text(raw, allow_unknown=True)
+    if not label:
+        return await msg.reply("❌ Не удалось распознать город или страну. Укажи их обычным названием.")
+    user_locations[msg.from_user.id] = label
+    schedule_state_save("обновление геолокации пользователя")
+    await msg.reply(f"✅ Геолокация сохранена: <b>{html.escape(label)}</b>", parse_mode="HTML")
+
+
 async def cmd_chatstats(msg: Message):
     if msg.chat.type == "private":
         return await msg.reply("📊 Команда работает в групповых чатах")
     import html as _html
     cid = msg.chat.id; can = econ_cid(cid)
     # Объединяем данные из обоих связанных чатов
-    all_members = {**chat_members.get(can, {}), **chat_members.get(cid, {})}
+    all_members = await _collect_chat_members_for_stats(cid, can)
     all_msgs: dict[int, int] = {}
     for c in (cid, can):
         for u, cnt in user_messages.get(c, {}).items():
@@ -7364,6 +7513,7 @@ async def cmd_chatstats(msg: Message):
         lines.extend(top_lines)
     if rich_line:
         lines.append(rich_line)
+    lines.extend(_chat_geo_lines(all_members, tg_cnt))
     lines.append(f"\n{brand.div()}")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
@@ -8030,6 +8180,7 @@ _HELP_SECTIONS = {
         "📊 Статистика чата — V6\n\n"
         f"{brand.div()}\n"
         "<code>статчата</code> — детальная статистика\n"
+        "<code>указатьместо Киев</code> — добавить себя в геостатистику\n"
         "<code>онлайн</code> — активные участники\n"
         "<code>аналитика</code> — данные системы\n"
         "<code>рост</code> — участники по чатам\n\n"
@@ -8451,6 +8602,8 @@ for slash_name, func in [
      ("рейтингадминов", cmd_staff_stats), ("рейтингкоманды", cmd_staff_stats),
     ("профиль", cmd_profile), ("айди", cmd_myid), ("инфочат", cmd_chatinfo),
     ("статистика", cmd_botstats), ("пинг", cmd_ping), ("версия", cmd_version),
+    ("статчата", cmd_chatstats),
+    ("указатьместо", cmd_set_location), ("моягеография", cmd_set_location),
     ("інфо", cmd_info), ("инфо", cmd_info), ("info", cmd_info),
     ("правила", cmd_rules), ("команды", cmd_help),
     ("помощь", cmd_support), ("поддержка", cmd_support), ("support", cmd_support),
@@ -10733,6 +10886,8 @@ TEXT_COMMANDS.update({
     "лидерборд":     cmd_leaderboard,
     # Статистика чата
     "статчата":      cmd_chatstats,
+    "указатьместо":  cmd_set_location,
+    "моягеография":  cmd_set_location,
     "онлайн":        cmd_online,
     "аналитика":     cmd_analytics,
     "рост":          cmd_growth,
@@ -12007,6 +12162,9 @@ def _apply_data(data: dict) -> None:
         reputation[int(cid)] = {int(u): v for u, v in r.items()}
     for u, v in data.get("profiles", {}).items():
         profiles[int(u)] = v
+    for u, value in data.get("user_locations", {}).items():
+        if isinstance(value, str) and value.strip():
+            user_locations[int(u)] = value.strip()[:80]
     for cid, w in data.get("warnings_db", {}).items():
         warnings_db[int(cid)] = {int(u): v for u, v in w.items()}
     for cid, w in data.get("ru_army_warns", {}).items():
