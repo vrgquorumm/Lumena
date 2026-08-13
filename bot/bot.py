@@ -7325,11 +7325,11 @@ async def cmd_filters_list(msg: Message):
 # V6 — СТАТИСТИКА ЧАТА
 # ═══════════════════════════════════════════════════════
 _UA_CITY_ALIASES = {
-    "Киев": ("киев", "києв", "києві", "киеве", "київ", "kyiv", "kiev"),
-    "Львов": ("львов", "львове", "львові", "львів", "lviv"),
-    "Одесса": ("одесса", "одессе", "одесі", "одеса", "odesa", "odessa"),
-    "Харьков": ("харьков", "харькове", "харкові", "харків", "kharkiv"),
-    "Днепр": ("днепр", "днепре", "дніпрі", "дніпро", "dnipro", "dnepr"),
+    "Киев": ("киев", "киева", "киеве", "киеву", "киевом", "києв", "києва", "києві", "київ", "kyiv", "kiev"),
+    "Львов": ("львов", "львова", "львове", "львову", "львові", "львів", "lviv"),
+    "Одесса": ("одесса", "одессы", "одессе", "одесу", "одесі", "одеса", "odesa", "odessa"),
+    "Харьков": ("харьков", "харькова", "харькове", "харькову", "харкові", "харків", "kharkiv"),
+    "Днепр": ("днепр", "днепра", "днепре", "дніпрі", "дніпра", "дніпро", "dnipro", "dnepr"),
     "Запорожье": ("запорожье", "запоріжжя", "zaporizhzhia", "zaporizhzhya"),
     "Николаев": ("николаев", "миколаїв", "mykolaiv"),
     "Херсон": ("херсон", "kherson"),
@@ -7392,6 +7392,19 @@ def _geo_label_from_text(value: object, *, allow_unknown: bool = False) -> str |
     if allow_unknown and len(text) <= 60:
         return f"🌍 {text[:1].upper() + text[1:]}"
     return None
+
+
+def _declared_geo_from_message(text: str) -> str | None:
+    """Распознаёт только явные заявления о месте, не случайные упоминания."""
+    match = re.match(
+        r"^\s*(?:я\s+)?(?:из|родом\s+из|живу\s+в|нахожусь\s+в|сейчас\s+в|"
+        r"город\s*[:\-]?|страна\s*[:\-]?)\s+(.{2,80}?)\s*[.!?]*\s*$",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return _geo_label_from_text(match.group(1), allow_unknown=True)
 
 
 def _user_geo_label(uid: int) -> str | None:
@@ -8773,6 +8786,11 @@ class PropagandaMiddleware(BaseMiddleware):
             _uid_mw = event.from_user.id
             _cid_mw = event.chat.id
             chat_members.setdefault(_cid_mw, {})[_uid_mw] = event.from_user.full_name
+            if event.text:
+                _declared_geo = _declared_geo_from_message(event.text)
+                if _declared_geo and user_locations.get(_uid_mw) != _declared_geo:
+                    user_locations[_uid_mw] = _declared_geo
+                    schedule_state_save("автоматическое определение геолокации")
             # V6: XP + счётчик сообщений
             user_messages.setdefault(_cid_mw, {})
             _new_cnt = user_messages[_cid_mw].get(_uid_mw, 0) + 1
