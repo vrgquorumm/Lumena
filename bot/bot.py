@@ -6182,6 +6182,50 @@ async def cmd_setrules(msg: Message, command: CommandObject = None):
     chat_rules[msg.chat.id] = command.args
     await msg.reply("✅ Правила установлены!")
 
+
+_ANNOUNCE_MD_LINK_RE = re.compile(
+    r"\[([^\]\r\n]{1,200})\]\(((?:https?://|t\.me/)[^\s)]+)\)",
+    re.IGNORECASE,
+)
+_ANNOUNCE_URL_RE = re.compile(
+    r"(?<![\"'=])((?:https?://|t\.me/)[^\s<>]+)",
+    re.IGNORECASE,
+)
+
+
+def _format_announcement_text(value: str) -> str:
+    """Экранирует объявление и сохраняет ссылки кликабельными в Telegram."""
+    placeholders: list[str] = []
+
+    def make_anchor(display: str, url: str) -> str:
+        url = url.rstrip(".,!?;:")
+        if url.lower().startswith("t.me/"):
+            href = f"https://{url}"
+        else:
+            href = url
+        token = f"\x00LUMENA_LINK_{len(placeholders)}\x00"
+        placeholders.append(
+            f'<a href="{html.escape(href, quote=True)}">'
+            f"{html.escape(display.rstrip('.,!?;:'))}</a>"
+        )
+        return token
+
+    # Поддержка Markdown: [название](https://example.com)
+    prepared = _ANNOUNCE_MD_LINK_RE.sub(
+        lambda match: make_anchor(match.group(1), match.group(2)),
+        value,
+    )
+    # И обычные URL: https://example.com или t.me/example
+    prepared = _ANNOUNCE_URL_RE.sub(
+        lambda match: make_anchor(match.group(1), match.group(1)),
+        prepared,
+    )
+    escaped = html.escape(prepared)
+    for index, anchor in enumerate(placeholders):
+        escaped = escaped.replace(f"\x00LUMENA_LINK_{index}\x00", anchor)
+    return escaped
+
+
 @dp.message(Command("объявление", "announce"))
 async def cmd_announce(msg: Message, command: CommandObject = None):
     import re as _re
@@ -6222,7 +6266,7 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
     announce_text = (
         f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n"
         f"{brand.div()}\n"
-        f"{html.escape(text)}\n"
+        f"{_format_announcement_text(text)}\n"
         f"{brand.div()}"
     )
 
@@ -11580,7 +11624,7 @@ async def universal_handler(msg: Message):
             _pm_text = (
                 f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n"
                 f"{brand.div()}\n"
-                f"{html.escape(_pm_body)}\n"
+                f"{_format_announcement_text(_pm_body)}\n"
                 f"{brand.div()}"
             )
             try:
