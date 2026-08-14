@@ -9707,9 +9707,15 @@ def reg(*words):
         return func
     return decorator
 
-# Регистрируем все команды (без бан и мут — они только через !)
+# Регистрируем все команды. Бан/мут поддерживают и slash-, и !-формат.
 TEXT_COMMANDS.update({
-    # Модерация (без бан/мут)
+    # Модерация
+    "мут": cmd_mute, "mute": cmd_mute,
+    "замутить": cmd_mute, "замут": cmd_mute,
+    "бан": cmd_ban, "ban": cmd_ban,
+    "забанить": cmd_ban, "забан": cmd_ban,
+    "форсбан": cmd_forceban, "forceban": cmd_forceban,
+    "форсмут": cmd_forcemute, "forcemute": cmd_forcemute,
     "размут": cmd_unmute, "разбан": cmd_unban, "кик": cmd_kick,
     "мут1": cmd_mute1, "mute1": cmd_mute1,
     "варн": cmd_warn, "снятьварн": cmd_unwarn, "очистить": cmd_purge,
