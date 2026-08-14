@@ -121,6 +121,8 @@ shop_reservations: dict[str, dict[str, int]] = {
     "Ника": {"Telegram Premium на 1 год": 2},
     "Алла": {"Telegram Premium на 1 год": 1},
 }
+founder_polls: dict[str, dict] = {}
+poll_extra_sessions: dict[int, str] = {}
 chat_members = {}
 support_sessions = {}
 _active_rain: dict = {}
@@ -317,6 +319,10 @@ def _build_main_payload() -> dict:
             }
             for owner, items in shop_reservations.items()
             if items
+        },
+        "founder_polls": {str(poll_id): poll for poll_id, poll in founder_polls.items()},
+        "poll_extra_sessions": {
+            str(uid): poll_id for uid, poll_id in poll_extra_sessions.items()
         },
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
@@ -595,6 +601,20 @@ async def _restore_anon_response_sessions(uid: int) -> None:
         pass
     except Exception as error:
         logging.debug("Не удалось восстановить сессию анонимного диалога: %s", error)
+
+
+async def _restore_poll_extra_session(uid: int) -> None:
+    if uid in poll_extra_sessions or not _db.has_pg():
+        return
+    try:
+        payload = await _db.db_get("bot_data")
+        poll_id = (payload or {}).get("poll_extra_sessions", {}).get(str(uid))
+        if poll_id and str(poll_id) in founder_polls:
+            poll_extra_sessions[uid] = str(poll_id)
+    except (TypeError, ValueError, KeyError):
+        pass
+    except Exception as error:
+        logging.debug("Не удалось восстановить сессию дополнения к опросу: %s", error)
 
 
 async def restore_bot_data() -> None:
@@ -9034,6 +9054,123 @@ async def cmd_shop_reservations(msg: Message, command: CommandObject = None):
     )
 
 
+def _poll_extra_keyboard(poll_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="✍️ Написать дополнительно",
+            url=f"{CASINO_BOT_URL}?start=poll_extra_{poll_id}",
+        )
+    ]])
+
+
+def _poll_command_help() -> str:
+    return (
+        "📊 <b>Создание опроса</b>\n\n"
+        "Формат:\n"
+        "<code>/опрос Вопрос | Вариант 1 | Вариант 2</code>\n\n"
+        "Можно добавить от 2 до 10 вариантов ответа.\n"
+        "Пример:\n"
+        "<code>/опрос Какой формат встречи выбрать? | Онлайн | Офлайн | Гибрид</code>"
+    )
+
+
+@dp.message(Command("опрос", "опросы", "poll", "polls"))
+async def cmd_founder_poll(msg: Message, command: CommandObject = None):
+    if not is_owner(msg):
+        return await msg.reply("⛔ Создавать опросы может только фаундер.")
+
+    raw_args = ((command.args if command else "") or "").strip()
+    parts = [part.strip() for part in raw_args.split("|") if part.strip()]
+    if len(parts) < 3:
+        return await msg.reply(_poll_command_help(), parse_mode="HTML")
+    if len(parts) > 11:
+        return await msg.reply(
+            "⚠️ Максимум 10 вариантов ответа.\n\n"
+            + _poll_command_help(),
+            parse_mode="HTML",
+        )
+
+    question = parts[0][:300]
+    options = [option[:100] for option in parts[1:]]
+    target_chat = msg.chat.id if msg.chat.type != "private" else _ank.get_pub_chat()
+    if not target_chat:
+        return await msg.reply(
+            "⚠️ Не найден чат для отправки. Создай опрос из группового чата "
+            "или сначала настрой паб-чат."
+        )
+
+    poll_id = uuid.uuid4().hex[:12]
+    try:
+        poll_message = await bot.send_poll(
+            target_chat,
+            question=question,
+            options=options,
+            is_anonymous=True,
+            allows_multiple_answers=False,
+        )
+        founder_polls[poll_id] = {
+            "founder_id": msg.from_user.id,
+            "chat_id": target_chat,
+            "message_id": poll_message.message_id,
+            "question": question,
+            "options": options,
+            "created_at": now_kyiv().isoformat(timespec="seconds"),
+        }
+        schedule_state_save("создание опроса фаундером")
+        await bot.send_message(
+            target_chat,
+            "💬 <b>Есть что добавить к этому опросу?</b>\n"
+            "Нажми кнопку — сообщение придёт фаундеру в личку.",
+            parse_mode="HTML",
+            reply_markup=_poll_extra_keyboard(poll_id),
+        )
+        destination = "этот чат" if target_chat == msg.chat.id else "паб-чат"
+        await msg.reply(f"✅ Опрос отправлен в {destination}.", parse_mode="HTML")
+    except Exception as error:
+        await msg.reply(
+            "❌ Не удалось отправить опрос.\n"
+            f"<code>{html.escape(str(error))}</code>",
+            parse_mode="HTML",
+        )
+
+
+async def _deliver_poll_extra(msg: Message, poll_id: str, text: str) -> bool:
+    poll = founder_polls.get(poll_id)
+    poll_extra_sessions.pop(msg.from_user.id, None)
+    schedule_state_save("дополнение к опросу")
+    if not poll:
+        await msg.reply("⚠️ Этот опрос больше недоступен.")
+        return False
+
+    sender = msg.from_user
+    sender_label = (
+        f"@{html.escape(sender.username)}"
+        if sender.username
+        else html.escape(sender.full_name or str(sender.id))
+    )
+    try:
+        await bot.send_message(
+            int(poll["founder_id"]),
+            "📝 <b>Дополнение к опросу</b>\n\n"
+            f"📊 <b>Опрос:</b> {html.escape(poll['question'])}\n"
+            f"👤 <b>От:</b> {sender_label}\n\n"
+            f"💬 {html.escape(text.strip()[:2000])}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        await msg.reply(
+            "⚠️ Не удалось доставить сообщение фаундеру. "
+            "Попробуй ещё раз позже."
+        )
+        return False
+
+    await msg.reply(
+        "✅ Твоё дополнение отправлено фаундеру.",
+        reply_markup=_poll_extra_keyboard(poll_id),
+    )
+    return True
+
+
 @dp.message(Command("shop", "магазин", "крамниця"))
 async def cmd_shop_slash(msg: Message):
     await _shop_soon(msg)
@@ -9225,6 +9362,8 @@ TEXT_COMMANDS.update({
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
     "правила": cmd_rules, "сетправила": cmd_setrules,
     "объявление": cmd_announce, "анонс": cmd_announce,
+    "опрос": cmd_founder_poll, "опросы": cmd_founder_poll,
+    "poll": cmd_founder_poll, "polls": cmd_founder_poll,
     "ask": cmd_ask, "спросить": cmd_ask, "анонимныйвопрос": cmd_ask,
     "answer": cmd_anon_answer, "ответить": cmd_anon_answer,
     "users": cmd_users, "пользователи": cmd_users, "юзеры": cmd_users,
@@ -10208,6 +10347,19 @@ async def cmd_start_private(msg: Message, command: CommandObject = None):
     uid  = msg.from_user.id
     raw_name = msg.from_user.first_name or "друг"
     name     = html.escape(raw_name)
+
+    poll_payload = (command.args if command else "") or ""
+    if poll_payload.startswith("poll_extra_"):
+        poll_id = poll_payload[len("poll_extra_"):].strip()
+        if poll_id in founder_polls:
+            poll_extra_sessions[uid] = poll_id
+            schedule_state_save("запуск дополнения к опросу")
+            if is_verified(uid):
+                await msg.answer(
+                    "✍️ Напиши одним сообщением, что хочешь добавить к опросу. "
+                    "Текст придёт фаундеру."
+                )
+                return
 
     # V6: обработка реферального кода ?start=ref_UID
     if command and command.args and command.args.startswith("ref_"):
@@ -12316,6 +12468,7 @@ async def universal_handler(msg: Message):
         await _restore_anon_ask_session(uid)
     if msg.chat.type == "private":
         await _restore_anon_response_sessions(uid)
+        await _restore_poll_extra_session(uid)
 
     # Следующее сообщение после /ask @user становится вопросом.
     if msg.chat.type == "private" and uid in anon_ask_sessions and not text.startswith("/"):
@@ -12333,6 +12486,11 @@ async def universal_handler(msg: Message):
     # Следующее сообщение автора вопроса отправляется собеседнику анонимно.
     if msg.chat.type == "private" and uid in anon_reply_sessions and not text.startswith("/"):
         await _deliver_anon_reply(msg, text)
+        return
+
+    # Дополнение к опросу после deep-link кнопки.
+    if msg.chat.type == "private" and uid in poll_extra_sessions and not text.startswith("/"):
+        await _deliver_poll_extra(msg, poll_extra_sessions[uid], text)
         return
 
     # ── Поддержка: пользователь отправляет обращение администрации
@@ -13078,6 +13236,26 @@ def _apply_data(data: dict) -> None:
                 clean_items[str(item)[:120]] = amount
         if clean_items:
             shop_reservations[str(owner)[:120]] = clean_items
+    for poll_id, value in data.get("founder_polls", {}).items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            founder_polls[str(poll_id)[:32]] = {
+                "founder_id": int(value["founder_id"]),
+                "chat_id": int(value["chat_id"]),
+                "message_id": int(value.get("message_id", 0) or 0),
+                "question": str(value.get("question", ""))[:300],
+                "options": [str(option)[:100] for option in value.get("options", [])][:10],
+                "created_at": str(value.get("created_at", ""))[:40],
+            }
+        except (KeyError, TypeError, ValueError):
+            pass
+    for uid, poll_id in data.get("poll_extra_sessions", {}).items():
+        try:
+            if str(poll_id) in founder_polls:
+                poll_extra_sessions[int(uid)] = str(poll_id)
+        except (TypeError, ValueError):
+            pass
     for cid, w in data.get("warnings_db", {}).items():
         warnings_db[int(cid)] = {int(u): v for u, v in w.items()}
     for cid, w in data.get("ru_army_warns", {}).items():
