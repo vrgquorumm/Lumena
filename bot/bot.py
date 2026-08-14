@@ -2814,6 +2814,55 @@ async def cmd_unwarn(msg: Message, command: CommandObject):
             mod_card("Снятие варна", user, extra="ℹ️ У пользователя нет варнов"),
             parse_mode="HTML")
 
+
+# Явные slash-хендлеры для кириллических команд модерации.
+# Резервный universal_handler остаётся для клиентов, которые не передают
+# кириллическую команду как Telegram MessageEntity bot_command.
+@dp.message(Command("мут", "замутить", "замут"))
+async def cmd_mute_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_mute(msg, command)
+
+
+@dp.message(Command("бан", "забанить", "забан"))
+async def cmd_ban_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_ban(msg, command)
+
+
+@dp.message(Command("форсбан"))
+async def cmd_forceban_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_forceban(msg, command)
+
+
+@dp.message(Command("форсмут"))
+async def cmd_forcemute_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_forcemute(msg, command)
+
+
+@dp.message(Command("размут"))
+async def cmd_unmute_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_unmute(msg, command)
+
+
+@dp.message(Command("разбан"))
+async def cmd_unban_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_unban(msg, command)
+
+
+@dp.message(Command("кик"))
+async def cmd_kick_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_kick(msg, command)
+
+
+@dp.message(Command("варн"))
+async def cmd_warn_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_warn(msg, command)
+
+
+@dp.message(Command("снятьварн"))
+async def cmd_unwarn_ru_slash(msg: Message, command: CommandObject):
+    return await cmd_unwarn(msg, command)
+
+
 @dp.message(Command("purge"))
 async def cmd_purge(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
