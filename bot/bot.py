@@ -5120,6 +5120,79 @@ async def cmd_kiss(msg: Message):
         from_name=msg.from_user.first_name,
         to_name=msg.reply_to_message.from_user.first_name)
 
+async def _playful_action(msg: Message, text_key: str, prompt: str):
+    """Игровое действие над пользователем из reply, без реальных Telegram-действий."""
+    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+        return await msg.reply(prompt)
+    await reply_t(
+        msg,
+        text_key,
+        from_name=msg.from_user.first_name,
+        to_name=msg.reply_to_message.from_user.first_name,
+    )
+
+async def cmd_kill(msg: Message):
+    await _playful_action(
+        msg,
+        "playful_kill",
+        "🎭 Ответь на сообщение участника — это шуточная игровая сценка.",
+    )
+
+async def cmd_shoot(msg: Message):
+    await _playful_action(
+        msg,
+        "playful_shoot",
+        "🎭 Ответь на сообщение участника — это шуточная игровая сценка.",
+    )
+
+async def cmd_stab(msg: Message):
+    await _playful_action(
+        msg,
+        "playful_stab",
+        "🎭 Ответь на сообщение участника — это шуточная игровая сценка.",
+    )
+
+async def cmd_deep_kiss(msg: Message):
+    await _playful_action(
+        msg,
+        "deep_kiss",
+        "💋 Ответь на сообщение того, кого хочешь поцеловать.",
+    )
+
+async def cmd_confess_love(msg: Message):
+    await _playful_action(
+        msg,
+        "confess_love",
+        "💌 Ответь на сообщение человека, которому хочешь признаться в любви.",
+    )
+
+_RU_PLAYFUL_ACTIONS = {
+    "убить": cmd_kill,
+    "застрелить": cmd_shoot,
+    "зарезать": cmd_stab,
+    "поцеловать в засос": cmd_deep_kiss,
+    "признаться в любви": cmd_confess_love,
+}
+
+def _normalize_ru_playful_action(value: object) -> str:
+    """Нормализует русскую игровую команду с optional slash и @bot."""
+    if not isinstance(value, str):
+        return ""
+    parts = value.strip().lower().lstrip("/").split()
+    if parts and "@" in parts[0]:
+        parts[0] = parts[0].split("@", 1)[0]
+    return " ".join(parts)
+
+def _is_ru_playful_action(value: object) -> bool:
+    return _normalize_ru_playful_action(value) in _RU_PLAYFUL_ACTIONS
+
+@dp.message(F.text.func(_is_ru_playful_action))
+async def handle_ru_playful_action(msg: Message):
+    command = _normalize_ru_playful_action(msg.text)
+    handler = _RU_PLAYFUL_ACTIONS.get(command)
+    if handler:
+        await handler(msg)
+
 async def cmd_bite(msg: Message):
     t = msg.reply_to_message.from_user.first_name if msg.reply_to_message else "кого-то"
     await reply_t(msg, "bite", from_name=msg.from_user.first_name, to_name=t)
@@ -9329,6 +9402,8 @@ _HELP_SECTIONS = {
         "🤝 <b>Действия (ответом):</b>\n"
         "<code>обнять</code> · <code>поцеловать</code> · <code>укусить</code>\n"
         "<code>погладить</code> · <code>ударить</code> · <code>подарить</code>\n"
+        "<code>убить</code> · <code>застрелить</code> · <code>зарезать</code>\n"
+        "<code>поцеловать в засос</code> · <code>признаться в любви</code>\n"
         "<code>потыкать</code> · <code>помахать</code> · <code>станцевать</code>\n"
         "<code>фейспалм</code> · <code>серенада</code> · <code>пятёрку</code>\n\n"
         f"{brand.div()}"
@@ -9980,6 +10055,11 @@ TEXT_COMMANDS.update({
     # Социальные
     "обнять": cmd_hug, "обнимашки": cmd_hug,
     "поцеловать": cmd_kiss, "поцелуй": cmd_kiss,
+    "убить": cmd_kill, "застрелить": cmd_shoot, "зарезать": cmd_stab,
+    "поцеловать в засос": cmd_deep_kiss,
+    "поцеловать_в_засос": cmd_deep_kiss, "deepkiss": cmd_deep_kiss,
+    "признаться в любви": cmd_confess_love,
+    "признаться_в_любви": cmd_confess_love, "confesslove": cmd_confess_love,
     "укусить": cmd_bite, "погладить": cmd_pat,
     "ударить": cmd_slap, "подарить": cmd_gift,
     "станцевать": cmd_dance, "танцевать": cmd_dance,
@@ -10053,6 +10133,8 @@ TEXT_COMMANDS.update({
 for slash_name, func in [
     # Социальные действия (без декоратора)
     ("hug", cmd_hug), ("kiss", cmd_kiss), ("bite", cmd_bite),
+    ("kill", cmd_kill), ("shoot", cmd_shoot), ("stab", cmd_stab),
+    ("deepkiss", cmd_deep_kiss), ("confesslove", cmd_confess_love),
     ("pat", cmd_pat), ("slap", cmd_slap), ("gift", cmd_gift),
     ("dance", cmd_dance), ("poke", cmd_poke), ("highfive", cmd_highfive),
     ("wave", cmd_wave), ("facepalm", cmd_facepalm), ("serenade", cmd_serenade),
@@ -11662,6 +11744,8 @@ _EDITOR_TEXT_CATEGORIES = [
                               "game_rate", "game_truth", "game_dare",
                               "game_riddle", "game_random"]),
     ("🤗 Социальные",        ["hug", "kiss", "gift", "slap", "pat",
+                              "playful_kill", "playful_shoot", "playful_stab",
+                              "deep_kiss", "confess_love",
                               "dance", "bite", "poke", "wave", "highfive",
                               "facepalm", "serenade"]),
     ("🛡 Модерация чата",   ["mute_done", "ban_done", "unban_done", "unmute_done",
@@ -14547,15 +14631,23 @@ async def universal_handler(msg: Message):
 
         # Ищем команду по первому слову (и двум словам)
         parts = tl.split(maxsplit=2)
+        three_words = " ".join(parts[:3]) if len(parts) >= 3 else ""
         two_words = " ".join(parts[:2]) if len(parts) >= 2 else ""
         first_word = parts[0] if parts else ""
 
-        # Сначала пробуем два слова (например "список браков")
-        handler = TEXT_COMMANDS.get(two_words) or TEXT_COMMANDS.get(first_word)
+        # Сначала пробуем составные команды (например "признаться в любви"),
+        # затем двухсловные и обычные.
+        handler = (
+            TEXT_COMMANDS.get(three_words)
+            or TEXT_COMMANDS.get(two_words)
+            or TEXT_COMMANDS.get(first_word)
+        )
 
         if handler:
             # Аргументы = всё после первого (или двух) слов
-            if TEXT_COMMANDS.get(two_words):
+            if TEXT_COMMANDS.get(three_words):
+                args_str = " ".join(parts[3:]) if len(parts) > 3 else ""
+            elif TEXT_COMMANDS.get(two_words):
                 args_str = " ".join(parts[2:]) if len(parts) > 2 else ""
             else:
                 args_str = " ".join(parts[1:]) if len(parts) > 1 else ""

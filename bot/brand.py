@@ -455,6 +455,11 @@ DEFAULT_TEXTS: dict[str, str] = {
     # ── Социальные действия ───────────────────────────────
     "hug":                 "🤗 <b>{from_name}</b> обнял(а) <b>{to_name}</b>! Тепло 💕",
     "kiss":                "😘 <b>{from_name}</b> поцеловал(а) <b>{to_name}</b>! 💋",
+    "playful_kill":        "🎭 <b>{from_name}</b> понарошку «убил(а)» <b>{to_name}</b> в театральной сценке! Всё игра 🎬",
+    "playful_shoot":       "🔫 <b>{from_name}</b> шуточно «застрелил(а)» <b>{to_name}</b> из водяного пистолета! 💦",
+    "playful_stab":        "🔪 <b>{from_name}</b> понарошку «зарезал(а)» <b>{to_name}</b> бутафорским ножом! 🎭",
+    "deep_kiss":           "💋 <b>{from_name}</b> поцеловал(а) <b>{to_name}</b> взасос! Только понарошку 😘",
+    "confess_love":        "💌 <b>{from_name}</b> признался(ась) в любви к <b>{to_name}</b>! 💖",
     "gift":                "🎁 <b>{from_name}</b> подарил(а) <b>{to_name}</b> подарок! 🎀",
     "slap":                "💢 <b>{from_name}</b> дал(а) пощёчину <b>{to_name}</b>!",
     "pat":                 "✋ <b>{from_name}</b> погладил(а) <b>{to_name}</b>! 🥰",
@@ -661,6 +666,11 @@ TEXT_LABELS: dict[str, str] = {
     # ── Социальные ─────────────────────────────────────────
     "hug":                 "🤗 {from_name} обнял(а) {to_name}!",
     "kiss":                "😘 {from_name} поцеловал(а) {to_name}!",
+    "playful_kill":        "🎭 {from_name} понарошку «убил(а)» {to_name} в театральной сценке! Всё игра 🎬",
+    "playful_shoot":       "🔫 {from_name} шуточно «застрелил(а)» {to_name} из водяного пистолета! 💦",
+    "playful_stab":        "🔪 {from_name} понарошку «зарезал(а)» {to_name} бутафорским ножом! 🎭",
+    "deep_kiss":           "💋 {from_name} поцеловал(а) {to_name} взасос! Только понарошку 😘",
+    "confess_love":        "💌 {from_name} признался(ась) в любви к {to_name}! 💖",
     "gift":                "🎁 {from_name} подарил(а) {item} для {to_name}!",
     "slap":                "👋 {from_name} дал(а) пощёчину {to_name}!",
     "pat":                 "🤚 {from_name} погладил(а) {to_name}!",
