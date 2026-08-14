@@ -1411,8 +1411,16 @@ def _founder_main_chat_id(msg: Message | CallbackQuery = None) -> int | None:
             return int(configured)
         except (TypeError, ValueError):
             pass
-    # До одноразовой привязки разрешаем founder-команду прямо из группы.
+    observer_configured = _ank.get_observer_chat()
     current_chat = getattr(msg, "chat", None)
+    if observer_configured and current_chat:
+        try:
+            if int(observer_configured) == int(current_chat.id):
+                # Наблюдательный чат не может стать целью по умолчанию.
+                return None
+        except (TypeError, ValueError):
+            pass
+    # До одноразовой привязки разрешаем founder-команду прямо из группы.
     if current_chat and getattr(current_chat, "type", None) != "private":
         return current_chat.id
     # Совместимость со старым состоянием, где был ровно один командный чат.
@@ -1424,7 +1432,17 @@ def _founder_main_chat_id(msg: Message | CallbackQuery = None) -> int | None:
 def _command_chat_id(msg: Message) -> int | None:
     """Чат, на который должна действовать founder-команда."""
     if is_owner(msg):
-        return _founder_main_chat_id(msg) or getattr(msg.chat, "id", None)
+        main_chat = _founder_main_chat_id(msg)
+        if main_chat is not None:
+            return main_chat
+        observer_configured = _ank.get_observer_chat()
+        if observer_configured:
+            try:
+                if int(observer_configured) == int(msg.chat.id):
+                    return None
+            except (TypeError, ValueError):
+                pass
+        return getattr(msg.chat, "id", None)
     return getattr(msg.chat, "id", None)
 
 # Пользователи, которым разрешено редактировать все тексты/кнопки бота
@@ -1534,7 +1552,9 @@ async def get_user(msg: Message, command: CommandObject = None):
         return msg.reply_to_message.from_user
     if command and command.args:
         target_ref = command.args.split()[0].strip()
-        lookup_chat = _command_chat_id(msg) or msg.chat.id
+        lookup_chat = _command_chat_id(msg)
+        if lookup_chat is None:
+            return None
         uid = None
         record = {}
 
@@ -12569,7 +12589,6 @@ async def cmd_founder_extra(msg: Message, command=None):
         return
     args = _founder_extra_args(command)
     ids = _founder_extra_user_ids()
-    chat_id = _command_chat_id(msg) or msg.chat.id
 
     if word == "фпомощь":
         lines = [
@@ -12624,6 +12643,15 @@ async def cmd_founder_extra(msg: Message, command=None):
             f"Кошельки: <b>{fmt_lmn(wallet)}</b>\n"
             f"Банк: <b>{fmt_lmn(bank)}</b>\n"
             f"Пользователей с балансом: <b>{sum(1 for v in lmn_balances.values() if v)}</b>",
+            parse_mode="HTML",
+        )
+
+    chat_id = _command_chat_id(msg)
+    if chat_id is None:
+        return await msg.reply(
+            "❌ Чат общения ещё не связан. "
+            f"Выполни <code>/{FOUNDER_BIND_CHAT_COMMAND}</code> "
+            "в чате общения.",
             parse_mode="HTML",
         )
 
