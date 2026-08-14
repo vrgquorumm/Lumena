@@ -6302,7 +6302,7 @@ def _format_announcement_text(value: str) -> str:
     return escaped
 
 
-@dp.message(Command("объявление", "announce"))
+@dp.message(Command("объявление", "announce", "анонс"))
 async def cmd_announce(msg: Message, command: CommandObject = None):
     import re as _re
 
@@ -6438,13 +6438,6 @@ async def _create_anon_question(
     if target_id == msg.from_user.id:
         await msg.reply("Нельзя отправить анонимный вопрос самому себе.")
         return False
-    if not target_record.get("private_started", False):
-        await msg.reply(
-            "⚠️ Этот пользователь ещё не запускал бота в личных сообщениях.\n"
-            "Попроси его открыть бота и нажать /start."
-        )
-        return False
-
     pending_from_sender = sum(
         1
         for item in anon_questions.values()
@@ -6504,6 +6497,61 @@ async def _create_anon_question(
     return True
 
 
+def _anon_ask_user_keyboard(viewer_id: int, page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
+    records = _known_user_records()
+    ordered = [
+        (uid, record)
+        for uid, record in records.items()
+        if uid != viewer_id
+    ]
+    ordered.sort(key=lambda item: _known_user_label(*item).lower())
+    page_size = 24
+    pages = max(1, (len(ordered) + page_size - 1) // page_size)
+    page = min(max(1, page), pages)
+    start = (page - 1) * page_size
+    rows = []
+    current_row = []
+    for uid, record in ordered[start:start + page_size]:
+        label = _known_user_label(uid, record)
+        if len(label) > 24:
+            label = label[:23] + "…"
+        status = "✅" if record.get("private_started") else "⚠️"
+        current_row.append(
+            InlineKeyboardButton(
+                text=f"{status} {label}",
+                callback_data=f"anon_ask_target:{uid}",
+            )
+        )
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+
+    navigation = []
+    if page > 1:
+        navigation.append(
+            InlineKeyboardButton(text="◀️ Назад", callback_data=f"anon_ask_page:{page - 1}")
+        )
+    if page < pages:
+        navigation.append(
+            InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"anon_ask_page:{page + 1}")
+        )
+    if navigation:
+        rows.append(navigation)
+    rows.append([
+        InlineKeyboardButton(text="✖️ Отмена", callback_data="anon_ask_cancel")
+    ])
+    text = (
+        "🕶 <b>Анонимный вопрос</b>\n\n"
+        "Выбери человека из списка. После выбора напиши вопрос следующим сообщением.\n\n"
+        f"👥 Пользователей в реестре: <b>{len(ordered)}</b>\n"
+        f"📄 Страница {page}/{pages}\n"
+        "✅ — пользователь уже запускал бота · ⚠️ — нужно нажать /start"
+    )
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.message(Command("ask", "спросить", "анонимныйвопрос"))
 async def cmd_ask(msg: Message, command: CommandObject = None):
     args = (command.args if command else "") or ""
@@ -6531,22 +6579,28 @@ async def cmd_ask(msg: Message, command: CommandObject = None):
             "private_started": False,
         }))
 
+    if not target_user and not args and not msg.reply_to_message:
+        if msg.chat.type != "private":
+            return await msg.reply(
+                "Открой личный чат с ботом и используй <code>/ask</code> — "
+                "там появится список людей с кнопками.",
+                parse_mode="HTML",
+            )
+        ask_text, ask_kb = _anon_ask_user_keyboard(msg.from_user.id)
+        await msg.reply(ask_text, parse_mode="HTML", reply_markup=ask_kb)
+        return
+
     if not target_user:
         await msg.reply(
-            "Не нашёл этого пользователя в реестре бота.\n"
-            "Он должен хотя бы раз открыть бота и нажать /start.\n\n"
-            "Пример: <code>/ask @username Как настроение?</code>",
+            "Не нашёл пользователя по этому username.\n\n"
+            "Используй просто <code>/ask</code> и выбери человека кнопкой "
+            "из полного списка.",
             parse_mode="HTML",
         )
         return
 
     target_id, target_record = target_user
     if not question_text:
-        if not target_record.get("private_started", False):
-            await msg.reply(
-                "⚠️ Сначала этот пользователь должен открыть бота и нажать /start."
-            )
-            return
         if msg.chat.type != "private":
             await msg.reply(
                 "Для анонимности продолжи в личке с ботом:\n"
@@ -6602,48 +6656,8 @@ async def cmd_users(msg: Message, command: CommandObject = None):
         f"👥 <b>Пользователи, известные боту</b>: {len(ordered)}\n"
         f"📄 Страница {page}/{pages}\n\n"
         + ("\n".join(lines) or "Пока нет записей.")
-        + "\n\nДля рассылки: <code>/broadcast Текст анонса</code>",
+        + "\n\nДля выбора получателя анонимного вопроса: <code>/ask</code>",
         parse_mode="HTML",
-    )
-
-
-@dp.message(Command("broadcast", "рассылка", "анонс", "рассылкапользователям"))
-async def cmd_broadcast_users(msg: Message, command: CommandObject = None):
-    allowed = (
-        is_owner(msg)
-        or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")
-        or (msg.chat.type != "private" and await is_admin(msg))
-    )
-    if not allowed:
-        return await msg.reply("⛔ Только администрация.")
-    text = ((command.args if command else "") or "").strip()
-    if not text:
-        return await msg.reply(
-            "Укажи текст:\n<code>/broadcast Важное объявление https://example.com</code>",
-            parse_mode="HTML",
-        )
-
-    records = _known_user_records()
-    if not records:
-        return await msg.reply("В реестре пока нет пользователей.")
-    broadcast_text = (
-        f"📢 <b>АНОНС</b>\n{brand.div()}\n"
-        f"{_format_announcement_text(text)}\n{brand.div()}"
-    )
-    sent = failed = 0
-    for uid in sorted(records):
-        try:
-            await bot.send_message(uid, broadcast_text, parse_mode="HTML")
-            sent += 1
-        except Exception:
-            failed += 1
-        await asyncio.sleep(0.04)
-    await msg.reply(
-        f"📣 Рассылка завершена.\n"
-        f"✅ Доставлено: <b>{sent}</b>\n"
-        f"⚠️ Не доставлено: <b>{failed}</b>\n\n"
-        "Telegram не позволяет боту писать тем, кто не запускал его в личке "
-        "или заблокировал бота."
     )
 
 
@@ -8016,7 +8030,7 @@ async def cmd_growth(msg: Message):
 _OWNER_KB = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="👥 Пользователи", callback_data="owner:users"),
      InlineKeyboardButton(text="💰 Экономика",    callback_data="owner:eco")],
-    [InlineKeyboardButton(text="📢 Рассылка",     callback_data="owner:broadcast"),
+    [InlineKeyboardButton(text="📢 Анонс",        callback_data="owner:announcement"),
      InlineKeyboardButton(text="📊 Статистика",   callback_data="owner:stats")],
     [InlineKeyboardButton(text="🛠 Редактор",     callback_data="editor:menu")],
 ])
@@ -8057,11 +8071,11 @@ async def cb_owner(cb: CallbackQuery):
             f"Итого: <b>{fmt_lmn(total_lmn)}</b>\n\nКоманды: /дать · /забрать",
             parse_mode="HTML", reply_markup=back_kb
         )
-    elif sec == "broadcast":
+    elif sec == "announcement":
         await cb.message.edit_text(
-            "📢 <b>Рассылка</b>\n\nИспользуй: <code>/рассылка [текст]</code>\n"
-            "Будет отправлено зарегистрированным пользователям.\n"
-            "Для групповых чатов: <code>/рассылкачатам [текст]</code>.",
+            "📢 <b>Анонс</b>\n\n"
+            "Используй: <code>/анонс Текст объявления</code>\n"
+            "Анонс будет отправлен в настроенный паб-чат.",
             parse_mode="HTML", reply_markup=back_kb
         )
     elif sec == "stats":
@@ -8083,26 +8097,6 @@ async def cb_owner(cb: CallbackQuery):
             parse_mode="HTML", reply_markup=_OWNER_KB
         )
     await cb.answer()
-
-@dp.message(Command("рассылкачатам", "broadcast_chats"))
-async def cmd_broadcast_chats(msg: Message, command: CommandObject = None):
-    if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
-    text = (command.args or "").strip() if command else ""
-    if not text: return await msg.reply("Использование: <b>рассылка [текст]</b>", parse_mode="HTML")
-    active  = [c for c in chat_members if c < 0]
-    sent_ok = 0
-    for cid in active:
-        try:
-            await bot.send_message(
-                cid,
-                f"{brand.hdr()}\n\n📢 <b>Объявление</b>\n\n{brand.div()}\n{html.escape(text)}\n\n{brand.div()}",
-                parse_mode="HTML"
-            )
-            sent_ok += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-    await msg.reply(f"✅ Рассылка отправлена в <b>{sent_ok}</b> чатов", parse_mode="HTML")
 
 @dp.message(Command("юзеринфо", "userinfo"))
 async def cmd_userinfo(msg: Message):
@@ -8936,13 +8930,10 @@ TEXT_COMMANDS.update({
     "інфо": cmd_info, "инфо": cmd_info, "info": cmd_info,
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
     "правила": cmd_rules, "сетправила": cmd_setrules,
-    "объявление": cmd_announce,
+    "объявление": cmd_announce, "анонс": cmd_announce,
     "ask": cmd_ask, "спросить": cmd_ask, "анонимныйвопрос": cmd_ask,
     "answer": cmd_anon_answer, "ответить": cmd_anon_answer,
     "users": cmd_users, "пользователи": cmd_users, "юзеры": cmd_users,
-    "broadcast": cmd_broadcast_users,
-    "рассылка": cmd_broadcast_users, "анонс": cmd_broadcast_users,
-    "рассылкапользователям": cmd_broadcast_users,
     # Помощь
     "помощь": cmd_support, "команды": cmd_help, "хелп": cmd_help,
     # Фарм (скоро)
@@ -9312,6 +9303,51 @@ async def cb_anon_answer(cb: CallbackQuery):
             "Или используй <code>/answer Текст ответа</code>.",
             parse_mode="HTML",
         )
+
+
+@dp.callback_query(F.data.startswith("anon_ask_page:"))
+async def cb_anon_ask_page(cb: CallbackQuery):
+    if not cb.message or cb.message.chat.type != "private":
+        return await cb.answer("Открой личный чат с ботом", show_alert=True)
+    try:
+        page = int(cb.data.split(":", 1)[1])
+    except (TypeError, ValueError):
+        page = 1
+    ask_text, ask_kb = _anon_ask_user_keyboard(cb.from_user.id, page)
+    await cb.message.edit_text(ask_text, parse_mode="HTML", reply_markup=ask_kb)
+    await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("anon_ask_target:"))
+async def cb_anon_ask_target(cb: CallbackQuery):
+    if not cb.message or cb.message.chat.type != "private":
+        return await cb.answer("Открой личный чат с ботом", show_alert=True)
+    try:
+        target_id = int(cb.data.split(":", 1)[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Пользователь не найден", show_alert=True)
+    if target_id == cb.from_user.id:
+        return await cb.answer("Нельзя выбрать себя", show_alert=True)
+    target_record = _known_user_records().get(target_id)
+    if not target_record:
+        return await cb.answer("Пользователь больше не найден", show_alert=True)
+    anon_ask_sessions[cb.from_user.id] = target_id
+    target_label = _known_user_label(target_id, target_record)
+    await cb.message.edit_text(
+        "✍️ <b>Получатель выбран</b>\n\n"
+        f"{html.escape(target_label)}\n\n"
+        "Напиши вопрос следующим сообщением — он будет отправлен анонимно.",
+        parse_mode="HTML",
+    )
+    await cb.answer("Получатель выбран")
+
+
+@dp.callback_query(F.data == "anon_ask_cancel")
+async def cb_anon_ask_cancel(cb: CallbackQuery):
+    anon_ask_sessions.pop(cb.from_user.id, None)
+    if cb.message:
+        await cb.message.edit_text("✖️ Создание анонимного вопроса отменено.")
+    await cb.answer()
 
 
 @dp.callback_query(F.data.startswith("ank_lang:"))
