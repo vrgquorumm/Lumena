@@ -25,8 +25,10 @@ ANKETA_DATA_FILE  = "data/anketa_settings.json"
 # ── In-memory стан ──────────────────────────────────────────
 _mod_chat_id:   list        = [None]   # [0] — id чату модерації
 _pub_chat_id:   list        = [None]   # [0] — id чату публікацій
+_observer_chat_id: list     = [None]   # [0] — founder-наблюдательный чат
 _anketa_counter:list        = [0]      # [0] — наступний номер анкети
 _chat_link:     list        = [None]   # [0] — посилання на чат публікацій
+_observer_chat_link: list   = [None]   # [0] — ссылка founder-наблюдательного чата
 _user_status:   dict        = {}       # uid → "pending"|"approved"|"rejected"
 _approved_data: dict        = {}       # uid → dict з даними анкети
 _sessions:      dict        = {}       # uid → незавершена анкета в поточному діалозі
@@ -180,8 +182,10 @@ async def load_anketa_from_db() -> None:
     if settings:
         _mod_chat_id[0]    = settings.get("mod_chat_id")
         _pub_chat_id[0]    = settings.get("pub_chat_id")
+        _observer_chat_id[0] = settings.get("observer_chat_id")
         _anketa_counter[0] = settings.get("anketa_counter", 0)
         _chat_link[0]      = settings.get("chat_link")
+        _observer_chat_link[0] = settings.get("observer_chat_link")
         print("✅ anketa_settings завантажено з PostgreSQL")
     else:
         # Fallback: локальний файл
@@ -244,8 +248,10 @@ def load_anketa_settings():
                 d = json.load(f)
             _mod_chat_id[0]     = d.get("mod_chat_id")
             _pub_chat_id[0]     = d.get("pub_chat_id")
+            _observer_chat_id[0] = d.get("observer_chat_id")
             _anketa_counter[0]  = d.get("anketa_counter", 0)
             _chat_link[0]       = d.get("chat_link")
+            _observer_chat_link[0] = d.get("observer_chat_link")
         except Exception:
             pass
     if os.path.exists(ANKETA_USERS_FILE):
@@ -266,8 +272,10 @@ def _build_anketa_payloads() -> tuple[dict, dict]:
     settings_payload = {
         "mod_chat_id":    _mod_chat_id[0],
         "pub_chat_id":    _pub_chat_id[0],
+        "observer_chat_id": _observer_chat_id[0],
         "anketa_counter": _anketa_counter[0],
         "chat_link":      _chat_link[0],
+        "observer_chat_link": _observer_chat_link[0],
     }
     users_payload = {
         "status":   {str(k): v for k, v in _user_status.items()},
@@ -347,6 +355,13 @@ def get_pub_chat() -> int | None:
 def set_pub_chat(chat_id: int | None):
     _pub_chat_id[0] = chat_id
     save_anketa_settings()
+
+def get_observer_chat() -> int | None:
+    return _observer_chat_id[0]
+
+def set_observer_chat(chat_id: int | None):
+    _observer_chat_id[0] = chat_id
+    save_anketa_settings()
     _schedule_anketa_save()
 
 def get_chat_link() -> str | None:
@@ -354,6 +369,13 @@ def get_chat_link() -> str | None:
 
 def set_chat_link(link: str):
     _chat_link[0] = link
+    save_anketa_settings()
+
+def get_observer_chat_link() -> str | None:
+    return _observer_chat_link[0]
+
+def set_observer_chat_link(link: str):
+    _observer_chat_link[0] = link
     save_anketa_settings()
     _schedule_anketa_save()
 
