@@ -13357,6 +13357,7 @@ def _founder_user_detail_text(uid: int, record: dict) -> str:
     username_line = f"@{html.escape(username)}" if username else "—"
     last_seen = html.escape(str(record.get("last_seen", "") or "—"))
     private_started = "✅" if record.get("private_started") else "—"
+    bot_mention = _BOT_USERNAME or "LumenarAi_Bot"
     return (
         "👤 <b>Карточка пользователя</b>\n\n"
         f"Имя: <b>{html.escape(full_name)}</b>\n"
@@ -13364,11 +13365,12 @@ def _founder_user_detail_text(uid: int, record: dict) -> str:
         f"🆔 ID: <code>{uid}</code>\n"
         f"Последняя активность: <code>{last_seen}</code>\n"
         f"Писал боту в ЛС: {private_started}\n\n"
-        "Готовые команды для чата наблюдения:\n"
-        f"<code>/размут {uid}</code>\n"
-        f"<code>/мут {uid} 30м</code>\n"
-        f"<code>/бан {uid}</code>\n"
-        f"<code>/разбан {uid}</code>"
+        "Для группового чата используй латинские команды с адресацией боту:\n"
+        f"<code>/unmute@{bot_mention} {uid}</code>\n"
+        f"<code>/mute@{bot_mention} {uid} 30m</code>\n"
+        f"<code>/ban@{bot_mention} {uid}</code>\n"
+        f"<code>/unban@{bot_mention} {uid}</code>\n\n"
+        "В личном чате можно писать без @бота."
     )
 
 
