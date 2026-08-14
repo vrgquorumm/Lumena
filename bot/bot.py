@@ -115,6 +115,7 @@ user_locations: dict[int, str] = {}  # uid → явное место прожи�
 known_users: dict[int, dict] = {}
 anon_questions: dict[str, dict] = {}
 anon_answer_sessions: dict[int, str] = {}
+anon_reply_sessions: dict[int, str] = {}
 anon_ask_sessions: dict[int, int] = {}
 chat_members = {}
 support_sessions = {}
@@ -302,6 +303,7 @@ def _build_main_payload() -> dict:
         "known_users":  {str(u): v for u, v in known_users.items()},
         "anon_questions": {str(qid): q for qid, q in anon_questions.items()},
         "anon_answer_sessions": {str(u): qid for u, qid in anon_answer_sessions.items()},
+        "anon_reply_sessions": {str(u): qid for u, qid in anon_reply_sessions.items()},
         "anon_ask_sessions": {str(u): target for u, target in anon_ask_sessions.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
@@ -559,6 +561,27 @@ async def _restore_anon_ask_session(uid: int) -> None:
         pass
     except Exception as error:
         logging.debug("Не удалось восстановить сессию анонимного вопроса: %s", error)
+
+
+async def _restore_anon_response_sessions(uid: int) -> None:
+    """Восстанавливает кнопочные сессии ответа после смены polling-процесса."""
+    if (uid in anon_answer_sessions or uid in anon_reply_sessions
+            or not _db.has_pg()):
+        return
+    try:
+        payload = await _db.db_get("bot_data")
+        if not payload:
+            return
+        answer_qid = (payload.get("anon_answer_sessions", {}) or {}).get(str(uid))
+        reply_qid = (payload.get("anon_reply_sessions", {}) or {}).get(str(uid))
+        if answer_qid:
+            anon_answer_sessions[uid] = str(answer_qid)
+        elif reply_qid:
+            anon_reply_sessions[uid] = str(reply_qid)
+    except (TypeError, ValueError, KeyError):
+        pass
+    except Exception as error:
+        logging.debug("Не удалось восстановить сессию анонимного диалога: %s", error)
 
 
 async def restore_bot_data() -> None:
@@ -6467,6 +6490,15 @@ def _anon_answer_keyboard(qid: str) -> InlineKeyboardMarkup:
     ]])
 
 
+def _anon_reply_keyboard(qid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="↩️ Ответить анонимно",
+            callback_data=f"anon_reply:{qid}",
+        )
+    ]])
+
+
 async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
     """Передаёт ответ автору вопроса, не раскрывая отправителя."""
     uid = msg.from_user.id
@@ -6503,6 +6535,7 @@ async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
             "👋🏻\n"
             f"{html.escape(answer)}",
             parse_mode="HTML",
+            reply_markup=_anon_reply_keyboard(qid),
         )
     except Exception:
         await msg.reply(
@@ -6514,6 +6547,59 @@ async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
         "✅ Ответ отправлен анонимно.\n\n"
         "Можно отвечать на этот вопрос сколько угодно раз.",
         reply_markup=_anon_answer_keyboard(qid),
+    )
+    return True
+
+
+async def _deliver_anon_reply(msg: Message, answer: str) -> bool:
+    """Передаёт ответ автора вопроса обратно получателю анонимно."""
+    uid = msg.from_user.id
+    qid = anon_reply_sessions.get(uid)
+    question = anon_questions.get(qid or "")
+    if not question or question.get("sender_id") != uid:
+        anon_reply_sessions.pop(uid, None)
+        await msg.reply("ℹ️ Сейчас нет активного анонимного диалога.")
+        return False
+    if question.get("status") not in {"pending", "open", "answered"}:
+        anon_reply_sessions.pop(uid, None)
+        await msg.reply("ℹ️ Этот анонимный вопрос уже закрыт.")
+        return False
+
+    answer = answer.strip()[:1000]
+    if not answer:
+        return await msg.reply("Напиши текст ответа.")
+
+    timestamp = now_kyiv().isoformat(timespec="seconds")
+    question["status"] = "open"
+    question["answer"] = answer
+    question["answered_at"] = timestamp
+    question.setdefault("answers", []).append({
+        "text": answer,
+        "created_at": timestamp,
+    })
+    anon_reply_sessions.pop(uid, None)
+    schedule_state_save("ответ автора анонимного вопроса")
+
+    target_id = int(question["target_id"])
+    try:
+        await bot.send_message(
+            target_id,
+            "📩 <b>Получен анонимный ответ</b>\n\n"
+            "👋🏻\n"
+            f"{html.escape(answer)}",
+            parse_mode="HTML",
+            reply_markup=_anon_answer_keyboard(qid),
+        )
+    except Exception:
+        await msg.reply(
+            "⚠️ Ответ сохранён, но собеседник сейчас не может получить сообщение."
+        )
+        return False
+
+    await msg.reply(
+        "✅ Ответ отправлен анонимно.\n\n"
+        "Можно продолжать диалог без ограничений.",
+        reply_markup=_anon_reply_keyboard(qid),
     )
     return True
 
@@ -6711,10 +6797,14 @@ async def cmd_ask(msg: Message, command: CommandObject = None):
 async def cmd_anon_answer(msg: Message, command: CommandObject = None):
     answer = ((command.args if command else "") or "").strip()
     if not answer:
-        if msg.from_user.id in anon_answer_sessions:
+        if (msg.from_user.id in anon_answer_sessions
+                or msg.from_user.id in anon_reply_sessions):
             return await msg.reply("Напиши ответ после команды <code>/answer</code>.")
         return await msg.reply("Сейчас нет активного анонимного вопроса.")
-    await _deliver_anon_answer(msg, answer)
+    if msg.from_user.id in anon_reply_sessions:
+        await _deliver_anon_reply(msg, answer)
+    else:
+        await _deliver_anon_answer(msg, answer)
 
 
 @dp.message(Command("users", "пользователи", "юзеры"))
@@ -9392,6 +9482,27 @@ async def cb_anon_answer(cb: CallbackQuery):
     if cb.message:
         await cb.message.answer(
             "✍️ Напиши ответ следующим сообщением — автор получит его анонимно.\n"
+            "Или используй <code>/answer Текст ответа</code>.",
+            parse_mode="HTML",
+        )
+
+
+@dp.callback_query(F.data.startswith("anon_reply:"))
+async def cb_anon_reply(cb: CallbackQuery):
+    qid = cb.data.split(":", 1)[1]
+    question = anon_questions.get(qid)
+    if not question:
+        return await cb.answer("Вопрос уже недоступен", show_alert=True)
+    if int(question.get("sender_id", 0)) != cb.from_user.id:
+        return await cb.answer("Это не твой анонимный диалог", show_alert=True)
+    if question.get("status") not in {"pending", "open", "answered"}:
+        return await cb.answer("Этот вопрос уже закрыт", show_alert=True)
+    anon_reply_sessions[cb.from_user.id] = qid
+    schedule_state_save("подготовка ответа автора")
+    await cb.answer("Напиши сообщение следующим текстом")
+    if cb.message:
+        await cb.message.answer(
+            "✍️ Напиши ответ следующим сообщением — собеседник получит его анонимно.\n"
             "Или используй <code>/answer Текст ответа</code>.",
             parse_mode="HTML",
         )
@@ -12087,6 +12198,8 @@ async def universal_handler(msg: Message):
 
     if msg.chat.type == "private" and uid not in anon_ask_sessions:
         await _restore_anon_ask_session(uid)
+    if msg.chat.type == "private":
+        await _restore_anon_response_sessions(uid)
 
     # Следующее сообщение после /ask @user становится вопросом.
     if msg.chat.type == "private" and uid in anon_ask_sessions and not text.startswith("/"):
@@ -12099,6 +12212,11 @@ async def universal_handler(msg: Message):
     # Следующее обычное сообщение после кнопки ответа отправляется анонимно.
     if msg.chat.type == "private" and uid in anon_answer_sessions and not text.startswith("/"):
         await _deliver_anon_answer(msg, text)
+        return
+
+    # Следующее сообщение автора вопроса отправляется собеседнику анонимно.
+    if msg.chat.type == "private" and uid in anon_reply_sessions and not text.startswith("/"):
+        await _deliver_anon_reply(msg, text)
         return
 
     # ── Поддержка: пользователь отправляет обращение администрации
@@ -12803,6 +12921,12 @@ def _apply_data(data: dict) -> None:
         try:
             if str(qid) in anon_questions:
                 anon_answer_sessions[int(u)] = str(qid)
+        except (TypeError, ValueError):
+            pass
+    for u, qid in data.get("anon_reply_sessions", {}).items():
+        try:
+            if str(qid) in anon_questions:
+                anon_reply_sessions[int(u)] = str(qid)
         except (TypeError, ValueError):
             pass
     for u, target in data.get("anon_ask_sessions", {}).items():
