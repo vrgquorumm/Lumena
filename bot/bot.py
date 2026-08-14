@@ -144,13 +144,14 @@ _ECON_CANONICAL: dict[int, int] = {}
 ANKETA_PREMIUM_STARS = 300
 ROLES: dict[int, str] = {}
 ROLE_NAMES: dict[str, str] = {
+    "founder_deputy": "Заместитель фаундера",
     "lead_admin":  "Главный администратор",
     "co_admin":    "Заместитель администратора",
     "admin":       "Администратор",
     "moderator":   "Модератор",
     "vip":         "VIP",
 }
-ROLE_HIERARCHY = ["lead_admin", "co_admin", "admin", "moderator"]
+ROLE_HIERARCHY = ["founder_deputy", "lead_admin", "co_admin", "admin", "moderator"]
 _ROLE_USERNAMES: dict[str, str] = {
     "veroniksssxa": "lead_admin",
 }
@@ -1067,7 +1068,7 @@ def has_role(uid: int, *roles: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 # РЕЙТИНГ КОМАНДЫ И АВТОАНАЛИЗ ОТНОШЕНИЙ
 # ══════════════════════════════════════════════════════════════════════════════
-STAFF_ROLES = ("lead_admin", "co_admin", "admin", "moderator")
+STAFF_ROLES = ("founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
 _STAFF_BAD_PHRASES = (
     "заткнись", "заткнитесь", "иди нахуй", "пошёл нахуй", "пошла нахуй",
     "пошли нахуй", "иди нафиг", "пошёл нафиг", "пошла нафиг", "ты туп",
@@ -1379,6 +1380,7 @@ def role_badge(uid: int, username: str = "") -> str:
     if not r:
         return ""
     icons = {
+        "founder_deputy": "🤝",
         "lead_admin": "👑",
         "co_admin":   "⭐",
         "admin":      "🔷",
@@ -1485,7 +1487,10 @@ async def is_admin(msg: Message) -> bool:
     if msg.chat.type == "private": return True
     if is_super(msg): return True
     # Роль в системе бота — работает даже если TG-промоут не прошёл
-    if has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator"):
+    if has_role(
+        msg.from_user.id,
+        "founder_deputy", "lead_admin", "co_admin", "admin", "moderator",
+    ):
         return True
     try:
         member = await bot.get_chat_member(msg.chat.id, msg.from_user.id)
@@ -1882,6 +1887,12 @@ def _fmt_duration(delta: timedelta) -> str:
 # ═══════════════════════════════════════════════════════
 
 _ROLE_ALIASES: dict[str, str] = {
+    # founder_deputy
+    "founder_deputy": "founder_deputy",
+    "deputy": "founder_deputy",
+    "заместитель фаундера": "founder_deputy",
+    "заместительфаундера": "founder_deputy",
+    "замфау": "founder_deputy",
     # lead_admin
     "lead_admin":  "lead_admin",
     "lead":        "lead_admin",
@@ -1905,6 +1916,7 @@ _ROLE_ALIASES: dict[str, str] = {
 }
 
 _ROLE_ICON: dict[str, str] = {
+    "founder_deputy": "🤝",
     "lead_admin": "👑",
     "co_admin":   "⭐",
     "admin":      "🔷",
@@ -1913,6 +1925,16 @@ _ROLE_ICON: dict[str, str] = {
 
 # Права в чате для каждой роли
 _ROLE_PERMISSIONS: dict[str, dict] = {
+    "founder_deputy": dict(
+        can_manage_chat=True,
+        can_delete_messages=True,
+        can_manage_video_chats=True,
+        can_restrict_members=True,
+        can_promote_members=False,
+        can_change_info=True,
+        can_invite_users=True,
+        can_pin_messages=True,
+    ),
     "lead_admin": dict(
         can_manage_chat=True,
         can_delete_messages=True,
@@ -1962,8 +1984,15 @@ def _fmt_role(role: str) -> str:
     return f"{icon} {name}"
 
 
+_ROLE_CHAT_TITLES = {
+    # Telegram ограничивает custom title 16 символами.
+    "founder_deputy": "Зам. фаундера",
+}
+
+
 # Кто может назначать какие роли
 _ROLE_CAN_ASSIGN: dict[str, set] = {
+    "founder_deputy": {"co_admin", "admin", "moderator"},
     "lead_admin": {"admin", "moderator"},
     "co_admin":   {"moderator"},
 }
@@ -1978,7 +2007,9 @@ def _can_manage_role(msg, target_role: str) -> bool:
 
 def _is_lead_or_above(msg) -> bool:
     """True для фаундера и lead_admin."""
-    return is_owner(msg) or has_role(msg.from_user.id, "lead_admin")
+    return is_owner(msg) or has_role(
+        msg.from_user.id, "founder_deputy", "lead_admin"
+    )
 
 
 async def _promote_in_chat(
@@ -1998,7 +2029,9 @@ async def _promote_in_chat(
         print(f"⚠️ promote_chat_member({user_id}, {role}, chat={chat_id}): {err}")
         return False, False, err
     # Кастомный тег — название роли (максимум 16 символов по ограничению Telegram)
-    custom_title = ROLE_NAMES.get(role, role)[:16]
+    custom_title = _ROLE_CHAT_TITLES.get(
+        role, ROLE_NAMES.get(role, role)[:16]
+    )
     try:
         await bot.set_chat_administrator_custom_title(chat_id, user_id, custom_title)
         title_ok = True
@@ -2089,7 +2122,9 @@ async def cmd_set_role(msg: Message, command=None):
     Фаундер — любую. Lead/co_admin — только admin и moderator.
     Работает: роль @username lead_admin  ИЛИ ответ на сообщение + роль admin"""
     uid = msg.from_user.id
-    if not (is_owner(msg) or has_role(uid, "lead_admin", "co_admin")):
+    if not (is_owner(msg) or has_role(
+        uid, "founder_deputy", "lead_admin", "co_admin"
+    )):
         return await msg.reply("⛔ Только фаундер или главный админ")
 
     # Получаем сырые аргументы — из CommandObject или из текста сообщения
@@ -2258,6 +2293,10 @@ def _normalize_promote_args(raw_args: str, has_reply: bool) -> str:
         "главного админа": "lead_admin",
         "главного администратора": "lead_admin",
         "lead admin": "lead_admin",
+        "заместитель фаундера": "founder_deputy",
+        "заместителя фаундера": "founder_deputy",
+        "заместительфаундера": "founder_deputy",
+        "замфау": "founder_deputy",
         "ко админ": "co_admin",
         "ко админа": "co_admin",
         "ко-админ": "co_admin",
@@ -2309,7 +2348,9 @@ async def cmd_promote(msg: Message, command: CommandObject = None):
 async def cmd_remove_role(msg: Message, command=None):
     """Снять роль. Фаундер — любую. Lead/co_admin — только admin и moderator."""
     uid = msg.from_user.id
-    if not (is_owner(msg) or has_role(uid, "lead_admin", "co_admin")):
+    if not (is_owner(msg) or has_role(
+        uid, "founder_deputy", "lead_admin", "co_admin"
+    )):
         return await msg.reply("⛔ Только фаундер или главный админ")
 
     if command is not None:
@@ -2381,7 +2422,9 @@ async def cmd_remove_role(msg: Message, command=None):
 async def cmd_roles(msg: Message, command=None):
     """Список всех назначенных ролей — фаундер и главные админы."""
     uid = msg.from_user.id
-    if not (is_owner(msg) or has_role(uid, "lead_admin", "co_admin")):
+    if not (is_owner(msg) or has_role(
+        uid, "founder_deputy", "lead_admin", "co_admin"
+    )):
         return await msg.reply("⛔ Только фаундер или главный админ")
 
     lines = ["👥 <b>Назначенные роли</b>\n"]
@@ -6665,7 +6708,7 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
         allowed = (
             is_owner(msg)
             or has_role(msg.from_user.id,
-                        "lead_admin", "co_admin", "admin", "moderator")
+                        "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
         )
         if not allowed:
             return await msg.reply("⛔ Только администрация")
@@ -7069,7 +7112,7 @@ async def cmd_anon_answer(msg: Message, command: CommandObject = None):
 async def cmd_users(msg: Message, command: CommandObject = None):
     allowed = (
         is_owner(msg)
-        or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")
+        or has_role(msg.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
         or (msg.chat.type != "private" and await is_admin(msg))
     )
     if not allowed:
@@ -7104,7 +7147,7 @@ async def cmd_users(msg: Message, command: CommandObject = None):
 async def cmd_updatesave(msg: Message):
     """Одноразово публикует фаундерское обновление о сохранении данных."""
     global _save_update_sent
-    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin")):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "founder_deputy", "lead_admin")):
         return await msg.reply("⛔ Эта команда доступна только фаундеру.")
     if _save_update_sent:
         return await msg.reply("ℹ️ Это обновление уже было опубликовано.")
@@ -7961,7 +8004,7 @@ async def cmd_bet_game(msg: Message, command: CommandObject = None):
 async def cmd_mod_logs(msg: Message):
     if msg.chat.type not in ("group", "supergroup"):
         return await msg.reply("Команда работает в групповых чатах")
-    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")):
         return await msg.reply("⛔ Только для администраторов")
     cid  = msg.chat.id
     logs = mod_logs.get(cid, [])[-20:]
@@ -8017,7 +8060,7 @@ async def cmd_report(msg: Message, command: CommandObject = None):
     )
 
 async def cmd_reports_list(msg: Message):
-    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")):
         return await msg.reply("⛔ Только для администраторов")
     cid      = msg.chat.id
     all_reps = reports_db.get(cid, [])
@@ -8060,7 +8103,7 @@ async def cmd_reports_list(msg: Message):
 
 @dp.callback_query(F.data.startswith("rep:"))
 async def cb_report_action(cb: CallbackQuery):
-    if not (is_owner(cb) or has_role(cb.from_user.id, "lead_admin", "co_admin", "admin", "moderator")):
+    if not (is_owner(cb) or has_role(cb.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")):
         return await cb.answer("⛔ Только для администраторов", show_alert=True)
     parts = cb.data.split(":")
     if len(parts) < 4:
@@ -8139,7 +8182,7 @@ async def cb_report_action(cb: CallbackQuery):
             await cb.answer(f"❌ {e}", show_alert=True)
 
 async def cmd_raid_toggle(msg: Message):
-    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin")):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin")):
         return await msg.reply("⛔ Только для администраторов")
     cid = msg.chat.id
     raid_mode[cid] = not raid_mode.get(cid, False)
@@ -8152,7 +8195,7 @@ async def cmd_raid_toggle(msg: Message):
     )
 
 async def cmd_antispam_toggle(msg: Message):
-    if not (is_owner(msg) or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin")):
+    if not (is_owner(msg) or has_role(msg.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin")):
         return await msg.reply("⛔ Только для администраторов")
     cid = msg.chat.id
     antispam_mode[cid] = not antispam_mode.get(cid, False)
@@ -9236,7 +9279,7 @@ async def cmd_shop_reservations(msg: Message, command: CommandObject = None):
     action = parts[0].casefold()
     is_staff = (
         is_owner(msg)
-        or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")
+        or has_role(msg.from_user.id, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
     )
     if action in {"добавить", "добавь", "add"}:
         if not is_staff:
@@ -9766,7 +9809,7 @@ async def _check_link_guard(msg: Message) -> bool:
 
     # ── Администрация в любом чате — разрешены ─────────────────
     uid = msg.from_user.id
-    if has_role(uid, "lead_admin", "co_admin", "admin", "moderator") or is_owner(msg):
+    if has_role(uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator") or is_owner(msg):
         return False
     try:
         member = await bot.get_chat_member(msg.chat.id, uid)
@@ -9907,7 +9950,10 @@ class PropagandaMiddleware(BaseMiddleware):
                 import hashlib as _hl
                 # Пропускаем команды и пользователей с ролями/админов
                 _is_cmd = (event.text or "").startswith("/")
-                _has_role = has_role(_uid_mw, "lead_admin", "co_admin", "admin", "moderator")
+                _has_role = has_role(
+                    _uid_mw,
+                    "founder_deputy", "lead_admin", "co_admin", "admin", "moderator",
+                )
                 if not _is_cmd and not _has_role and _uid_mw != OWNER_ID:
                     # Нормализованный хэш всего текста (не обрезаем — иначе обходится)
                     _norm = " ".join((event.text or "").lower().split())
@@ -12132,7 +12178,7 @@ async def cmd_sendlaunch(msg: Message):
 
     # Collect all admins/mods to mention (skip founder)
     mentions: list[str] = []
-    team_roles = ("lead_admin", "co_admin", "admin", "moderator")
+    team_roles = ("founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
     # From runtime ROLES dict (uid -> role)
     for uid, role in ROLES.items():
         if role in team_roles:
@@ -12313,7 +12359,7 @@ async def _check_chat_insult(msg: Message) -> bool:
     if not msg.text or not msg.from_user or msg.chat.type == "private":
         return False
     uid = msg.from_user.id
-    if uid in SUPER_IDS or has_role(uid, "lead_admin", "co_admin", "admin", "moderator"):
+    if uid in SUPER_IDS or has_role(uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator"):
         return False
     words = re.findall(r"[а-яёa-z]+", msg.text.lower())
     if not any(word in _CHAT_INSULTS for word in words):
@@ -12768,7 +12814,7 @@ async def universal_handler(msg: Message):
         if _pm_cmd in ("объявление", "announce"):
             allowed = (
                 is_owner(msg)
-                or has_role(uid, "lead_admin", "co_admin", "admin", "moderator")
+                or has_role(uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
             )
             if not allowed:
                 await msg.reply("⛔ Только администрация")
