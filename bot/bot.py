@@ -13103,6 +13103,7 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "/юзеринфо", "/овнер", "/setmodchat", "/setpubchat",
         "/setemoji", "/setemojipack", "/sendlaunch",
         "/setsiteurl", "/setchatlink", "/ownerclaim",
+        "/флюди",
         f"/{FOUNDER_BIND_CHAT_COMMAND}",
         f"/{FOUNDER_BIND_OBSERVER_COMMAND}",
     ]
@@ -13187,6 +13188,161 @@ async def cmd_founder_bind_observer_chat(msg: Message, command=None):
     )
 
 
+FOUNDER_USERS_PAGE_SIZE = 8
+
+
+def _founder_users_sorted() -> list[tuple[int, dict]]:
+    """Возвращает реестр пользователей в стабильном порядке для founder-списка."""
+    records = _known_user_records()
+    return sorted(
+        records.items(),
+        key=lambda item: (
+            str(item[1].get("username", "") or "").casefold(),
+            str(item[1].get("full_name", "") or "").casefold(),
+            int(item[0]),
+        ),
+    )
+
+
+def _founder_users_page_kb(page: int = 0) -> InlineKeyboardMarkup:
+    """Inline-список пользователей с ID и простой пагинацией."""
+    users = _founder_users_sorted()
+    total_pages = max(1, (len(users) + FOUNDER_USERS_PAGE_SIZE - 1) // FOUNDER_USERS_PAGE_SIZE)
+    page = min(max(int(page), 0), total_pages - 1)
+    start = page * FOUNDER_USERS_PAGE_SIZE
+    page_users = users[start:start + FOUNDER_USERS_PAGE_SIZE]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for uid, record in page_users:
+        label = _known_user_label(uid, record)
+        if len(label) > 24:
+            label = label[:23] + "…"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{label} · {uid}",
+                callback_data=f"founder_users:user:{uid}:{page}",
+            )
+        ])
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            text="◀️",
+            callback_data=f"founder_users:page:{page - 1}",
+        ))
+    nav.append(InlineKeyboardButton(
+        text=f"{page + 1}/{total_pages}",
+        callback_data="founder_users:noop",
+    ))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(
+            text="▶️",
+            callback_data=f"founder_users:page:{page + 1}",
+        ))
+    rows.append(nav)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _founder_users_page_text(page: int = 0) -> str:
+    users = _founder_users_sorted()
+    total_pages = max(1, (len(users) + FOUNDER_USERS_PAGE_SIZE - 1) // FOUNDER_USERS_PAGE_SIZE)
+    page = min(max(int(page), 0), total_pages - 1)
+    return (
+        "👥 <b>Пользователи, которых видел бот</b>\n\n"
+        f"Всего: <b>{len(users)}</b>\n"
+        f"Страница: <b>{page + 1}/{total_pages}</b>\n\n"
+        "Нажми на человека, чтобы открыть карточку и скопировать его ID."
+    )
+
+
+def _founder_user_detail_text(uid: int, record: dict) -> str:
+    full_name = str(record.get("full_name", "") or "").strip() or "—"
+    username = str(record.get("username", "") or "").strip().lstrip("@")
+    username_line = f"@{html.escape(username)}" if username else "—"
+    last_seen = html.escape(str(record.get("last_seen", "") or "—"))
+    private_started = "✅" if record.get("private_started") else "—"
+    return (
+        "👤 <b>Карточка пользователя</b>\n\n"
+        f"Имя: <b>{html.escape(full_name)}</b>\n"
+        f"Username: <b>{username_line}</b>\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"Последняя активность: <code>{last_seen}</code>\n"
+        f"Писал боту в ЛС: {private_started}\n\n"
+        "Готовые команды для чата наблюдения:\n"
+        f"<code>/размут {uid}</code>\n"
+        f"<code>/мут {uid} 30м</code>\n"
+        f"<code>/бан {uid}</code>\n"
+        f"<code>/разбан {uid}</code>"
+    )
+
+
+def _founder_user_detail_kb(uid: int, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="◀️ К списку",
+                callback_data=f"founder_users:page:{page}",
+            ),
+        ],
+    ])
+
+
+async def cmd_founder_users(msg: Message, command=None):
+    """Показывает founder и deputy список известных пользователей с ID."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер и заместитель фаундера")
+    await msg.answer(
+        _founder_users_page_text(),
+        parse_mode="HTML",
+        reply_markup=_founder_users_page_kb(),
+    )
+
+
+@dp.callback_query(F.data.startswith("founder_users:"))
+async def cb_founder_users(cb: CallbackQuery):
+    """Навигация по founder-списку пользователей."""
+    if not is_owner(cb):
+        return await cb.answer("⛔ Только founder", show_alert=True)
+
+    parts = (cb.data or "").split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    if action == "noop":
+        return await cb.answer()
+
+    if action == "page" and len(parts) >= 3:
+        try:
+            page = int(parts[2])
+        except (TypeError, ValueError):
+            page = 0
+        await cb.message.edit_text(
+            _founder_users_page_text(page),
+            parse_mode="HTML",
+            reply_markup=_founder_users_page_kb(page),
+        )
+        return await cb.answer()
+
+    if action == "user" and len(parts) >= 4:
+        try:
+            uid = int(parts[2])
+            page = int(parts[3])
+        except (TypeError, ValueError):
+            return await cb.answer("Пользователь не найден", show_alert=True)
+        record = _known_user_records().get(uid)
+        if not record:
+            return await cb.answer(
+                "Пользователь исчез из реестра. Обнови список.",
+                show_alert=True,
+            )
+        await cb.message.edit_text(
+            _founder_user_detail_text(uid, record),
+            parse_mode="HTML",
+            reply_markup=_founder_user_detail_kb(uid, page),
+        )
+        return await cb.answer()
+
+    await cb.answer()
+
+
 TEXT_COMMANDS.update({
     command_name: cmd_founder_extra
     for command_name in FOUNDER_EXTRA_COMMANDS
@@ -13196,6 +13352,7 @@ TEXT_COMMANDS[FOUNDER_BIND_CHAT_COMMAND] = cmd_founder_bind_main_chat
 TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_COMMAND] = cmd_founder_bind_observer_chat
 TEXT_COMMANDS[FOUNDER_BIND_CHAT_LEGACY] = cmd_founder_bind_main_chat
 TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_LEGACY] = cmd_founder_bind_observer_chat
+TEXT_COMMANDS["флюди"] = cmd_founder_users
 
 
 @dp.message(F.photo, F.chat.type == "private")
