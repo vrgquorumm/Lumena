@@ -1401,6 +1401,31 @@ def is_owner(msg) -> bool:
         return False
     return u.id == OWNER_ID or u.id in FOUNDER_DEPUTY_IDS
 
+
+def _founder_main_chat_id(msg: Message | CallbackQuery = None) -> int | None:
+    """Возвращает связанный главный чат для founder-команд."""
+    configured = _ank.get_pub_chat()
+    if configured:
+        try:
+            return int(configured)
+        except (TypeError, ValueError):
+            pass
+    # До одноразовой привязки разрешаем founder-команду прямо из группы.
+    current_chat = getattr(msg, "chat", None)
+    if current_chat and getattr(current_chat, "type", None) != "private":
+        return current_chat.id
+    # Совместимость со старым состоянием, где был ровно один командный чат.
+    if len(staff_team_chats) == 1:
+        return next(iter(staff_team_chats))
+    return None
+
+
+def _command_chat_id(msg: Message) -> int | None:
+    """Чат, на который должна действовать founder-команда."""
+    if is_owner(msg):
+        return _founder_main_chat_id(msg) or getattr(msg.chat, "id", None)
+    return getattr(msg.chat, "id", None)
+
 # Пользователи, которым разрешено редактировать все тексты/кнопки бота
 _EDITOR_USERNAMES = {OWNER_USERNAME.lower(), "veroniksssxa"}
 
@@ -1509,7 +1534,8 @@ async def get_user(msg: Message, command: CommandObject = None):
     if command and command.args:
         try:
             uid = int(command.args.split()[0])
-            member = await bot.get_chat_member(msg.chat.id, uid)
+            lookup_chat = _command_chat_id(msg) or msg.chat.id
+            member = await bot.get_chat_member(lookup_chat, uid)
             return member.user
         except: return None
     return None
@@ -2483,6 +2509,9 @@ async def cmd_mute(msg: Message, command: CommandObject):
     _caller_is_custom = is_custom_muter(msg)
     if not await is_admin(msg) and not _caller_is_custom:
         return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None:
+        return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply(
         "ℹ️ Ответь на сообщение.\n"
@@ -2502,7 +2531,7 @@ async def cmd_mute(msg: Message, command: CommandObject):
             return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
     # Снимаем права администратора у цели, если нужно (иначе Telegram вернёт ошибку)
     if is_owner(msg) or _username_lower(user) in _MUTE_TARGETS:
-        await _demote_if_needed(msg.chat.id, user.id)
+        await _demote_if_needed(chat_id, user.id)
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
     dur_str = _fmt_duration(delta)
@@ -2510,9 +2539,9 @@ async def cmd_mute(msg: Message, command: CommandObject):
     title = f"Мут ♾ навсегда" if is_perma else f"Мут 🔇 на {dur_str}"
     extra = None if is_perma else f"⏰ До {until.strftime('%d.%m.%Y %H:%M')}"
     try:
-        await bot.restrict_chat_member(msg.chat.id, user.id,
+        await bot.restrict_chat_member(chat_id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
+        _log_mod(chat_id, "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(title, user, reason=reason, extra=extra),
             parse_mode="HTML")
@@ -2525,6 +2554,9 @@ async def cmd_mute1(msg: Message, command: CommandObject):
     _caller_is_custom = is_custom_muter(msg)
     if not await is_admin(msg) and not _caller_is_custom:
         return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None:
+        return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user:
         return await msg.reply(
@@ -2540,14 +2572,14 @@ async def cmd_mute1(msg: Message, command: CommandObject):
             return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
     # Снимаем права администратора у цели, если нужно
     if is_owner(msg) or _username_lower(user) in _MUTE_TARGETS:
-        await _demote_if_needed(msg.chat.id, user.id)
+        await _demote_if_needed(chat_id, user.id)
     delta = timedelta(minutes=1)
     until = now_kyiv() + delta
     _, reason = parse_time_and_reason(command.args or "")
     try:
-        await bot.restrict_chat_member(msg.chat.id, user.id,
+        await bot.restrict_chat_member(chat_id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
+        _log_mod(chat_id, "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card("Мут 🔇 на 1 мин", user, reason=reason,
                      extra=f"⏰ До {until.strftime('%H:%M')}"),
@@ -2558,19 +2590,23 @@ async def cmd_mute1(msg: Message, command: CommandObject):
 @dp.message(Command("unmute"))
 async def cmd_unmute(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
     try:
-        await bot.restrict_chat_member(msg.chat.id, user.id,
+        await bot.restrict_chat_member(chat_id, user.id,
             permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True,
                 can_send_other_messages=True, can_add_web_page_previews=True))
-        _log_mod(msg.chat.id, "unmute", user.id, msg.from_user.id)
+        _log_mod(chat_id, "unmute", user.id, msg.from_user.id)
         await msg.reply(mod_card("Размучен 🔊", user), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 @dp.message(Command("ban"))
 async def cmd_ban(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply(
         "ℹ️ Ответь на сообщение.\n"
@@ -2583,29 +2619,31 @@ async def cmd_ban(msg: Message, command: CommandObject):
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя забанить себя")
     if is_super(msg):
-        await _demote_if_needed(msg.chat.id, user.id)
+        await _demote_if_needed(chat_id, user.id)
     _, reason = parse_time_and_reason(command.args or "")
     try:
-        await bot.ban_chat_member(msg.chat.id, user.id)
-        _log_mod(msg.chat.id, "ban", user.id, msg.from_user.id)
+        await bot.ban_chat_member(chat_id, user.id)
+        _log_mod(chat_id, "ban", user.id, msg.from_user.id)
         await msg.reply(mod_card("Бан 🚫", user, reason=reason), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 @dp.message(Command("forceban"))
 async def cmd_forceban(msg: Message, command: CommandObject):
     if not is_owner(msg): return await msg.reply("⛔ Только @hdrttttttt")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
     try:
-        await bot.promote_chat_member(msg.chat.id, user.id, can_manage_chat=False,
+        await bot.promote_chat_member(chat_id, user.id, can_manage_chat=False,
             can_delete_messages=False, can_manage_video_chats=False,
             can_restrict_members=False, can_promote_members=False,
             can_change_info=False, can_invite_users=False, can_pin_messages=False)
     except: pass
     _, reason = parse_time_and_reason(command.args or "")
     try:
-        await bot.ban_chat_member(msg.chat.id, user.id)
-        _log_mod(msg.chat.id, "ban", user.id, msg.from_user.id)
+        await bot.ban_chat_member(chat_id, user.id)
+        _log_mod(chat_id, "ban", user.id, msg.from_user.id)
         await msg.reply(
             mod_card("Принудительный бан 🔨", user, extra="⚠️ Права сняты", reason=reason),
             parse_mode="HTML")
@@ -2614,10 +2652,12 @@ async def cmd_forceban(msg: Message, command: CommandObject):
 @dp.message(Command("forcemute"))
 async def cmd_forcemute(msg: Message, command: CommandObject):
     if not is_owner(msg): return await msg.reply("⛔ Только @hdrttttttt")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
     try:
-        await bot.promote_chat_member(msg.chat.id, user.id, can_manage_chat=False,
+        await bot.promote_chat_member(chat_id, user.id, can_manage_chat=False,
             can_delete_messages=False, can_manage_video_chats=False,
             can_restrict_members=False, can_promote_members=False,
             can_change_info=False, can_invite_users=False, can_pin_messages=False)
@@ -2629,9 +2669,9 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     title    = "Принудительный мут ♾ навсегда 🔇" if is_perma else f"Принудительный мут 🔇 на {dur_str}"
     extra2   = "⚠️ Права сняты" if is_perma else f"⚠️ Права сняты · До {until.strftime('%d.%m.%Y %H:%M')}"
     try:
-        await bot.restrict_chat_member(msg.chat.id, user.id,
+        await bot.restrict_chat_member(chat_id, user.id,
             permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        _log_mod(msg.chat.id, "mute", user.id, msg.from_user.id)
+        _log_mod(chat_id, "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(title, user, extra=extra2, reason=reason),
             parse_mode="HTML")
@@ -2640,17 +2680,21 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
 @dp.message(Command("unban"))
 async def cmd_unban(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Укажи ID")
     try:
-        await bot.unban_chat_member(msg.chat.id, user.id)
-        _log_mod(msg.chat.id, "unban", user.id, msg.from_user.id)
+        await bot.unban_chat_member(chat_id, user.id)
+        _log_mod(chat_id, "unban", user.id, msg.from_user.id)
         await msg.reply(mod_card("Разбанен ✅", user), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 @dp.message(Command("kick"))
 async def cmd_kick(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("ℹ️ Ответь на сообщение пользователя")
     if user.id == OWNER_ID:
@@ -2659,22 +2703,24 @@ async def cmd_kick(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя кикнуть себя")
     _, reason = parse_time_and_reason(command.args or "")
     try:
-        await bot.ban_chat_member(msg.chat.id, user.id)
-        await bot.unban_chat_member(msg.chat.id, user.id)
-        _log_mod(msg.chat.id, "kick", user.id, msg.from_user.id)
+        await bot.ban_chat_member(chat_id, user.id)
+        await bot.unban_chat_member(chat_id, user.id)
+        _log_mod(chat_id, "kick", user.id, msg.from_user.id)
         await msg.reply(mod_card("Кик 👢", user, reason=reason), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 @dp.message(Command("warn"))
 async def cmd_warn(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
     if user.id == OWNER_ID:
         return await msg.reply("⛔ Нельзя предупредить фаундера")
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя предупредить себя")
-    chat_id, uid = msg.chat.id, user.id
+    chat_id, uid = chat_id, user.id
     warnings_db.setdefault(chat_id, {})
     warnings_db[chat_id][uid] = warnings_db[chat_id].get(uid, 0) + 1
     count = warnings_db[chat_id][uid]
@@ -2700,9 +2746,11 @@ async def cmd_warn(msg: Message, command: CommandObject):
 @dp.message(Command("unwarn"))
 async def cmd_unwarn(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
-    chat_id, uid = msg.chat.id, user.id
+    chat_id, uid = chat_id, user.id
     if chat_id in warnings_db and uid in warnings_db[chat_id] and warnings_db[chat_id][uid] > 0:
         warnings_db[chat_id][uid] -= 1
         remaining = warnings_db[chat_id][uid]
@@ -2718,10 +2766,12 @@ async def cmd_unwarn(msg: Message, command: CommandObject):
 @dp.message(Command("purge"))
 async def cmd_purge(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     try: count = min(max(int(command.args or 10), 1), 100)
     except: return await msg.reply("Использование: /purge 20")
     deleted = 0
-    async for m in bot.get_chat_history(msg.chat.id, limit=count + 1):
+    async for m in bot.get_chat_history(chat_id, limit=count + 1):
         try: await m.delete(); deleted += 1
         except: pass
     info = await msg.answer(f"🗑 Удалено: {deleted}")
@@ -2730,6 +2780,8 @@ async def cmd_purge(msg: Message, command: CommandObject):
 @dp.message(Command("ro"))
 async def cmd_ro(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     arg = (command.args or "").lower()
     if arg in ("on","1","вкл"):
         perms = ChatPermissions(can_send_messages=False)
@@ -2739,7 +2791,7 @@ async def cmd_ro(msg: Message, command: CommandObject):
             can_send_other_messages=True, can_add_web_page_previews=True)
         action, icon = "Режим чтения выключен", "🔓"
     try:
-        await bot.set_chat_permissions(msg.chat.id, perms)
+        await bot.set_chat_permissions(chat_id, perms)
         await msg.reply(
             f"{brand.hdr()}\n\n{icon} {action}\n\n{brand.div()}",
             parse_mode="HTML")
@@ -2748,21 +2800,27 @@ async def cmd_ro(msg: Message, command: CommandObject):
 @dp.message(Command("pin"))
 async def cmd_pin(msg: Message):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
-    try: await bot.pin_chat_message(msg.chat.id, msg.reply_to_message.message_id); await msg.reply("📌 Закреплено")
+    try: await bot.pin_chat_message(chat_id, msg.reply_to_message.message_id); await msg.reply("📌 Закреплено")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 @dp.message(Command("unpin"))
 async def cmd_unpin(msg: Message):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
-    try: await bot.unpin_chat_message(msg.chat.id); await msg.reply("📌 Откреплено")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
+    try: await bot.unpin_chat_message(chat_id); await msg.reply("📌 Откреплено")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 @dp.message(Command("title"))
 async def cmd_title(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
+    chat_id = _command_chat_id(msg)
+    if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     if not command.args: return await msg.reply("Использование: /title Новое название")
-    try: await bot.set_chat_title(msg.chat.id, command.args); await msg.reply("✅ Название изменено")
+    try: await bot.set_chat_title(chat_id, command.args); await msg.reply("✅ Название изменено")
     except Exception as e: await msg.reply(f"❌ {e}")
 
 # ═══════════════════════════════════════════════════════
@@ -8391,10 +8449,17 @@ async def cmd_set_location(msg: Message, command: CommandObject = None):
 
 
 async def cmd_chatstats(msg: Message):
-    if msg.chat.type == "private":
+    if msg.chat.type == "private" and not is_owner(msg):
         return await msg.reply("📊 Команда работает в групповых чатах")
     import html as _html
-    cid = msg.chat.id; can = econ_cid(cid)
+    cid = _command_chat_id(msg)
+    if cid is None:
+        return await msg.reply(
+            "❌ Главный чат ещё не связан. Запусти "
+            f"<code>/{FOUNDER_BIND_CHAT_COMMAND}</code> в главном чате.",
+            parse_mode="HTML",
+        )
+    can = econ_cid(cid)
     # Объединяем данные из обоих связанных чатов
     all_members = await _collect_chat_members_for_stats(cid, can)
     all_msgs: dict[int, int] = {}
@@ -8422,8 +8487,15 @@ async def cmd_chatstats(msg: Message):
     for uid_t, cnt in top_act:
         nm = _html.escape(all_members.get(uid_t) or f"ID {uid_t}")
         top_lines.append(f"  👤 <b>{nm}</b> — {cnt:,} сообщ.")
+    chat_title = msg.chat.title or "Главный чат"
+    if cid != msg.chat.id:
+        try:
+            linked_chat = await bot.get_chat(cid)
+            chat_title = linked_chat.title or chat_title
+        except Exception:
+            pass
     lines = [
-        f"{brand.hdr()}\n\n📊 <b>Статистика · {_html.escape(msg.chat.title or 'чат')}</b>\n\n{brand.div()}",
+        f"{brand.hdr()}\n\n📊 <b>Статистика · {_html.escape(chat_title)}</b>\n\n{brand.div()}",
         f"👥 Участников: <b>{tg_cnt:,}</b>",
         f"💬 Сообщений: <b>{msgs_cnt:,}</b>",
         f"✨ XP в чате: <b>{sum(user_xp.get(u, 0) for u in all_members):,}</b>",
@@ -8439,9 +8511,16 @@ async def cmd_chatstats(msg: Message):
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 async def cmd_online(msg: Message):
-    if msg.chat.type == "private":
+    if msg.chat.type == "private" and not is_owner(msg):
         return await msg.reply("Команда работает в групповых чатах")
-    cid = msg.chat.id; can = econ_cid(cid)
+    cid = _command_chat_id(msg)
+    if cid is None:
+        return await msg.reply(
+            "❌ Главный чат ещё не связан. "
+            f"Запусти <code>/{FOUNDER_BIND_CHAT_COMMAND}</code> в нём.",
+            parse_mode="HTML",
+        )
+    can = econ_cid(cid)
     # Объединяем сообщения и участников из обоих чатов
     all_members = {**chat_members.get(can, {}), **chat_members.get(cid, {})}
     all_msgs: dict[int, int] = {}
@@ -8463,7 +8542,34 @@ async def cmd_online(msg: Message):
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 async def cmd_analytics(msg: Message):
-    if msg.chat.type != "private":
+    target_chat = _founder_main_chat_id(msg) if is_owner(msg) else None
+    if target_chat:
+        cid = target_chat
+        can = econ_cid(cid)
+        title = "Аналитика · главный чат"
+        all_members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(can, {}).keys())
+        chat_msgs = sum(
+            user_messages.get(c, {}).get(u, 0)
+            for c in (cid, can)
+            for u in all_members
+        )
+        chat_xp = sum(user_xp.get(u, 0) for u in all_members)
+        chat_ach = sum(len(user_achievements.get(u, [])) for u in all_members)
+        chat_lmn = sum(
+            lmn_balances.get(u, 0) + bank_balances.get(u, 0)
+            for u in all_members
+        )
+        await msg.reply(
+            f"{brand.hdr()}\n\n📊 <b>{title}</b>\n\n{brand.div()}\n"
+            f"👥 Участников в базе: <b>{len(all_members):,}</b>\n"
+            f"💬 Сообщений: <b>{chat_msgs:,}</b>\n"
+            f"✨ XP участников: <b>{chat_xp:,}</b>\n"
+            f"🏆 Достижений: <b>{chat_ach}</b>\n"
+            f"💰 LMN участников: <b>{fmt_lmn(chat_lmn)}</b>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML"
+        )
+    elif msg.chat.type != "private":
         cid   = msg.chat.id; can = econ_cid(cid)
         title = f"Аналитика · {html.escape(msg.chat.title or 'чат')}"
         all_members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(can, {}).keys())
@@ -8500,14 +8606,26 @@ async def cmd_analytics(msg: Message):
         )
 
 async def cmd_growth(msg: Message):
-    total_u    = len({uid for m in chat_members.values() for uid in m})
-    total_msgs = sum(sum(m.values()) for m in user_messages.values())
+    target_chat = _founder_main_chat_id(msg) if is_owner(msg) else None
+    target_ids = (
+        tuple(dict.fromkeys((target_chat, econ_cid(target_chat))))
+        if target_chat else ()
+    )
+    target_ids = tuple(cid for cid in target_ids if cid is not None)
+    total_u = (
+        len({uid for cid in target_ids for uid in chat_members.get(cid, {})})
+        if target_chat else len({uid for m in chat_members.values() for uid in m})
+    )
+    total_msgs = (
+        sum(sum(user_messages.get(cid, {}).values()) for cid in target_ids)
+        if target_chat else sum(sum(m.values()) for m in user_messages.values())
+    )
     total_xp   = sum(user_xp.values())
     total_games = sum(_games_played.values())
     total_refs  = sum(referral_counts.values())
     total_lmn   = sum(lmn_balances.values()) + sum(bank_balances.values())
     await msg.reply(
-        f"{brand.hdr()}\n\n📈 <b>Обзор системы</b>\n\n{brand.div()}\n"
+        f"{brand.hdr()}\n\n📈 <b>{'Обзор главного чата' if target_chat else 'Обзор системы'}</b>\n\n{brand.div()}\n"
         f"👥 Пользователей: <b>{total_u:,}</b>\n"
         f"💬 Чатов: <b>{len(chat_members)}</b>\n"
         f"📨 Сообщений: <b>{total_msgs:,}</b>\n"
@@ -12886,6 +13004,8 @@ async def cmd_founder_extra(msg: Message, command=None):
 
 
 FOUNDER_SECRET_COMMAND = "lx9q7v_founder_console"
+FOUNDER_BIND_CHAT_COMMAND = "lx9q7v_bind_lumena_chat"
+MAIN_CHAT_INVITE_LINK = "https://t.me/+MbYXdYhmBMViYzI6"
 
 
 async def cmd_founder_secret_console(msg: Message, command=None):
@@ -12943,11 +13063,35 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         )
 
 
+async def cmd_founder_bind_main_chat(msg: Message, command=None):
+    """Одноразово связывает текущую группу с главным чатом Лумены."""
+    if not is_owner(msg):
+        return
+    if msg.chat.type == "private":
+        return await msg.reply(
+            "Открой эту команду внутри главного группового чата."
+        )
+    args = _founder_extra_args(command)
+    link = args.split()[0] if args.startswith("http") else MAIN_CHAT_INVITE_LINK
+    _ank.set_pub_chat(msg.chat.id)
+    _ank.set_chat_link(link)
+    staff_team_chats.add(msg.chat.id)
+    await save_state_now("привязка главного чата фаундером")
+    await msg.reply(
+        f"✅ <b>Главный чат связан</b>\n\n"
+        f"🆔 ID: <code>{msg.chat.id}</code>\n"
+        f"🔗 <a href=\"{html.escape(link)}\">Ссылка на чат</a>\n\n"
+        "Теперь founder-команды, статистика, мут и бан используют этот чат.",
+        parse_mode="HTML",
+    )
+
+
 TEXT_COMMANDS.update({
     command_name: cmd_founder_extra
     for command_name in FOUNDER_EXTRA_COMMANDS
 })
 TEXT_COMMANDS[FOUNDER_SECRET_COMMAND] = cmd_founder_secret_console
+TEXT_COMMANDS[FOUNDER_BIND_CHAT_COMMAND] = cmd_founder_bind_main_chat
 
 
 @dp.message(F.photo, F.chat.type == "private")
