@@ -13378,11 +13378,137 @@ def _founder_user_detail_kb(uid: int, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
+                text="🔇 Мут 30м",
+                callback_data=f"founder_users:mod:mute:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="🔊 Размут",
+                callback_data=f"founder_users:mod:unmute:{uid}:{page}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🚫 Бан",
+                callback_data=f"founder_users:askban:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="✅ Разбан",
+                callback_data=f"founder_users:mod:unban:{uid}:{page}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text="◀️ К списку",
                 callback_data=f"founder_users:page:{page}",
             ),
         ],
     ])
+
+
+def _founder_callback_user(uid: int, record: dict) -> User:
+    """Создаёт безопасный User-объект из сохранённой карточки."""
+    full_name = str(record.get("full_name", "") or "").strip()
+    username = str(record.get("username", "") or "").strip().lstrip("@")
+    first_name, _, last_name = full_name.partition(" ")
+    return User(
+        id=int(uid),
+        is_bot=False,
+        first_name=first_name or username or str(uid),
+        last_name=last_name or None,
+        username=username or None,
+    )
+
+
+def _founder_ban_confirm_kb(uid: int, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🚫 Подтвердить бан",
+                callback_data=f"founder_users:confirmban:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="Отмена",
+                callback_data=f"founder_users:cancel:{uid}:{page}",
+            ),
+        ],
+    ])
+
+
+async def _founder_apply_user_mod(
+    cb: CallbackQuery,
+    action: str,
+    uid: int,
+    page: int,
+) -> None:
+    """Прямо применяет founder-модерацию без текстовой команды."""
+    record = _known_user_records().get(uid)
+    if not record:
+        return await cb.answer("Пользователь исчез из реестра.", show_alert=True)
+
+    target_chat = _founder_main_chat_id(cb.message)
+    if target_chat is None:
+        return await cb.answer(
+            "Чат общения ещё не связан. Сначала выполни sync_a в нём.",
+            show_alert=True,
+        )
+
+    if uid in {OWNER_ID, *FOUNDER_DEPUTY_IDS}:
+        return await cb.answer(
+            "Нельзя применить модерацию к founder-equivalent пользователю.",
+            show_alert=True,
+        )
+
+    user = _founder_callback_user(uid, record)
+    try:
+        if action == "mute":
+            if is_owner(cb):
+                await _demote_if_needed(target_chat, uid)
+            until = now_kyiv() + timedelta(minutes=30)
+            await bot.restrict_chat_member(
+                target_chat,
+                uid,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=until,
+            )
+            title = "Мут 30м 🔇"
+            log_action = "mute"
+        elif action == "unmute":
+            await bot.restrict_chat_member(
+                target_chat,
+                uid,
+                permissions=ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True,
+                ),
+            )
+            title = "Размучен 🔊"
+            log_action = "unmute"
+        elif action == "ban":
+            if is_owner(cb):
+                await _demote_if_needed(target_chat, uid)
+            await bot.ban_chat_member(target_chat, uid)
+            title = "Заблокирован 🚫"
+            log_action = "ban"
+        elif action == "unban":
+            await bot.unban_chat_member(target_chat, uid)
+            title = "Разбанен ✅"
+            log_action = "unban"
+        else:
+            return await cb.answer("Неизвестное действие.", show_alert=True)
+    except Exception as error:
+        return await cb.answer(f"❌ {str(error)[:180]}", show_alert=True)
+
+    _log_mod(target_chat, log_action, uid, cb.from_user.id)
+    schedule_state_save(f"founder-модерация: {log_action}")
+    await cb.message.edit_text(
+        _founder_user_detail_text(uid, record)
+        + f"\n\n✅ <b>{title}</b>\nЧат: <code>{target_chat}</code>",
+        parse_mode="HTML",
+        reply_markup=_founder_user_detail_kb(uid, page),
+    )
+    await cb.answer(f"{title}: {user.full_name}")
 
 
 async def cmd_founder_users(msg: Message, command=None):
@@ -13418,6 +13544,45 @@ async def cb_founder_users(cb: CallbackQuery):
             reply_markup=_founder_users_page_kb(page),
         )
         return await cb.answer()
+
+    if action in {"mod", "askban", "confirmban", "cancel"}:
+        try:
+            if action == "mod":
+                if len(parts) < 5:
+                    raise ValueError
+                mod_action = parts[2]
+                uid = int(parts[3])
+                page = int(parts[4])
+            else:
+                if len(parts) < 4:
+                    raise ValueError
+                mod_action = ""
+                uid = int(parts[2])
+                page = int(parts[3])
+        except (TypeError, ValueError):
+            return await cb.answer("Пользователь не найден", show_alert=True)
+        record = _known_user_records().get(uid)
+        if not record:
+            return await cb.answer("Пользователь исчез из реестра.", show_alert=True)
+        if action == "askban":
+            await cb.message.edit_text(
+                _founder_user_detail_text(uid, record)
+                + "\n\n⚠️ <b>Подтвердить блокировку пользователя?</b>",
+                parse_mode="HTML",
+                reply_markup=_founder_ban_confirm_kb(uid, page),
+            )
+            return await cb.answer()
+        if action == "cancel":
+            await cb.message.edit_text(
+                _founder_user_detail_text(uid, record),
+                parse_mode="HTML",
+                reply_markup=_founder_user_detail_kb(uid, page),
+            )
+            return await cb.answer()
+        if action == "confirmban":
+            return await _founder_apply_user_mod(cb, "ban", uid, page)
+        if action == "mod":
+            return await _founder_apply_user_mod(cb, mod_action, uid, page)
 
     if action == "user" and len(parts) >= 4:
         try:
