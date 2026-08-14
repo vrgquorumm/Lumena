@@ -2232,6 +2232,80 @@ async def cmd_set_role(msg: Message, command=None):
     )
 
 
+def _normalize_promote_args(raw_args: str, has_reply: bool) -> str:
+    """Приводит разговорный формат «до лид админа» к формату /роль."""
+    parts = raw_args.strip().split()
+    if has_reply:
+        target_part = ""
+        role_parts = parts
+    else:
+        if len(parts) < 2:
+            return ""
+        target_part = parts[0]
+        role_parts = parts[1:]
+
+    if role_parts and role_parts[0].casefold() in {"до", "to"}:
+        role_parts = role_parts[1:]
+    if not role_parts:
+        return ""
+
+    role_text = " ".join(role_parts).casefold()
+    role_aliases = {
+        "лид админ": "lead_admin",
+        "лид админа": "lead_admin",
+        "лид администратора": "lead_admin",
+        "главный админ": "lead_admin",
+        "главного админа": "lead_admin",
+        "главного администратора": "lead_admin",
+        "lead admin": "lead_admin",
+        "ко админ": "co_admin",
+        "ко админа": "co_admin",
+        "ко-админ": "co_admin",
+        "ко-админа": "co_admin",
+        "зам админ": "co_admin",
+        "зам админа": "co_admin",
+        "заместитель админа": "co_admin",
+        "co admin": "co_admin",
+        "администратор": "admin",
+        "админа": "admin",
+        "администраторa": "admin",
+        "администратору": "admin",
+        "модератора": "moderator",
+        "модер": "moderator",
+    }
+    role = role_aliases.get(role_text) or _ROLE_ALIASES.get(role_text)
+    if not role:
+        compact_role = "".join(role_parts).casefold()
+        role = role_aliases.get(compact_role) or _ROLE_ALIASES.get(compact_role, compact_role)
+    return f"{target_part} {role}".strip() if target_part else role
+
+
+@dp.message(Command("повысить", "повыситьдо", "promote"))
+async def cmd_promote(msg: Message, command: CommandObject = None):
+    """Разговорный алиас для назначения роли: «повысить до ...»."""
+    raw_args = ((command.args if command else "") or "").strip()
+    normalized = _normalize_promote_args(
+        raw_args,
+        bool(getattr(msg, "reply_to_message", None)),
+    )
+    if not normalized:
+        return await msg.reply(
+            "👥 <b>Повышение роли</b>\n\n"
+            "Ответь на сообщение пользователя:\n"
+            "<code>/повысить до лид админа</code>\n"
+            "<code>/повысить до админа</code>\n"
+            "<code>/повысить до модератора</code>\n\n"
+            "Или укажи username:\n"
+            "<code>/повысить @username до лид админа</code>",
+            parse_mode="HTML",
+        )
+
+    class PromoteCommand:
+        args = normalized
+
+    await cmd_set_role(msg, PromoteCommand())
+
+
 async def cmd_remove_role(msg: Message, command=None):
     """Снять роль. Фаундер — любую. Lead/co_admin — только admin и moderator."""
     uid = msg.from_user.id
@@ -9459,6 +9533,7 @@ TEXT_COMMANDS.update({
     "развод": cmd_divorce,
     # Роли
     "роль": cmd_set_role, "setrole": cmd_set_role,
+    "повысить": cmd_promote, "повыситьдо": cmd_promote, "promote": cmd_promote,
     "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
     "роли": cmd_roles, "roles": cmd_roles,
     "командныйчат": cmd_staff_chat, "чаткоманды": cmd_staff_chat, "staffchat": cmd_staff_chat,
