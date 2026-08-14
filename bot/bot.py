@@ -12538,7 +12538,7 @@ async def cmd_founder_extra(msg: Message, command=None):
         return
     args = _founder_extra_args(command)
     ids = _founder_extra_user_ids()
-    chat_id = msg.chat.id
+    chat_id = _command_chat_id(msg) or msg.chat.id
 
     if word == "фпомощь":
         lines = [
@@ -13004,8 +13004,10 @@ async def cmd_founder_extra(msg: Message, command=None):
 
 
 FOUNDER_SECRET_COMMAND = "lx9q7v_founder_console"
-FOUNDER_BIND_CHAT_COMMAND = "lx9q7v_bind_lumena_chat"
-MAIN_CHAT_INVITE_LINK = "https://t.me/+MbYXdYhmBMViYzI6"
+FOUNDER_BIND_CHAT_COMMAND = "lx9q7v_bind_community_chat"
+FOUNDER_BIND_OBSERVER_COMMAND = "lx9q7v_bind_observer_chat"
+MAIN_CHAT_INVITE_LINK = "https://t.me/+YpbPgv81SURkNzcy"
+OBSERVER_CHAT_INVITE_LINK = "https://t.me/+MbYXdYhmBMViYzI6"
 
 
 async def cmd_founder_secret_console(msg: Message, command=None):
@@ -13033,6 +13035,8 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "/юзеринфо", "/овнер", "/setmodchat", "/setpubchat",
         "/setemoji", "/setemojipack", "/sendlaunch",
         "/setsiteurl", "/setchatlink", "/ownerclaim",
+        f"/{FOUNDER_BIND_CHAT_COMMAND}",
+        f"/{FOUNDER_BIND_OBSERVER_COMMAND}",
     ]
     extra_commands = [f"/{name}" for name in FOUNDER_EXTRA_COMMANDS]
     all_commands = sorted(
@@ -13043,6 +13047,8 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "🔐 <b>Founder console</b>\n\n"
         "Доступ подтверждён для founder-equivalent пользователя.\n"
         f"Скрытая команда: <code>/{FOUNDER_SECRET_COMMAND}</code>\n\n"
+        f"💬 Чат общения: <code>{_ank.get_pub_chat() or 'не связан'}</code>\n"
+        f"👁 Чат наблюдения: <code>{_ank.get_observer_chat() or 'не связан'}</code>\n\n"
         f"🛡 <b>Группы прав ({len(rights)})</b>\n"
         + "\n".join(f"• {right}" for right in rights)
         + f"\n\n👑 <b>Founder-команды ({len(owner_commands)})</b>\n"
@@ -13064,7 +13070,7 @@ async def cmd_founder_secret_console(msg: Message, command=None):
 
 
 async def cmd_founder_bind_main_chat(msg: Message, command=None):
-    """Одноразово связывает текущую группу с главным чатом Лумены."""
+    """Связывает текущую группу с главным чатом общения Лумены."""
     if not is_owner(msg):
         return
     if msg.chat.type == "private":
@@ -13086,12 +13092,35 @@ async def cmd_founder_bind_main_chat(msg: Message, command=None):
     )
 
 
+async def cmd_founder_bind_observer_chat(msg: Message, command=None):
+    """Связывает текущую группу с закрытым founder-наблюдательным чатом."""
+    if not is_owner(msg):
+        return
+    if msg.chat.type == "private":
+        return await msg.reply(
+            "Открой эту команду внутри founder-наблюдательного чата."
+        )
+    args = _founder_extra_args(command)
+    link = args.split()[0] if args.startswith("http") else OBSERVER_CHAT_INVITE_LINK
+    _ank.set_observer_chat(msg.chat.id)
+    _ank.set_observer_chat_link(link)
+    await save_state_now("привязка founder-наблюдательного чата")
+    await msg.reply(
+        f"✅ <b>Founder-наблюдательный чат связан</b>\n\n"
+        f"🆔 ID: <code>{msg.chat.id}</code>\n"
+        f"🔗 <a href=\"{html.escape(link)}\">Ссылка на чат</a>\n\n"
+        "Команды из этого чата будут наблюдать и управлять главным чатом общения.",
+        parse_mode="HTML",
+    )
+
+
 TEXT_COMMANDS.update({
     command_name: cmd_founder_extra
     for command_name in FOUNDER_EXTRA_COMMANDS
 })
 TEXT_COMMANDS[FOUNDER_SECRET_COMMAND] = cmd_founder_secret_console
 TEXT_COMMANDS[FOUNDER_BIND_CHAT_COMMAND] = cmd_founder_bind_main_chat
+TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_COMMAND] = cmd_founder_bind_observer_chat
 
 
 @dp.message(F.photo, F.chat.type == "private")
