@@ -109,6 +109,13 @@ hangman_games = {}
 roulette_players = {}
 profiles = {}
 user_locations: dict[int, str] = {}  # uid → явное место проживания для геостатистики
+# Пользователи, которые хотя бы раз взаимодействовали с ботом/чатом.
+# private_started позволяет безопасно отличать тех, кому Telegram разрешит
+# отправить личное сообщение после /start.
+known_users: dict[int, dict] = {}
+anon_questions: dict[str, dict] = {}
+anon_answer_sessions: dict[int, str] = {}
+anon_ask_sessions: dict[int, int] = {}
 chat_members = {}
 support_sessions = {}
 _active_rain: dict = {}
@@ -292,6 +299,9 @@ def _build_main_payload() -> dict:
         "reputation":   {str(c): {str(u): v for u, v in r.items()} for c, r in reputation.items()},
         "profiles":     {str(u): v for u, v in profiles.items()},
         "user_locations": {str(u): value for u, value in user_locations.items()},
+        "known_users":  {str(u): v for u, v in known_users.items()},
+        "anon_questions": {str(qid): q for qid, q in anon_questions.items()},
+        "anon_answer_sessions": {str(u): qid for u, qid in anon_answer_sessions.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
         "chat_rules":   {str(c): r for c, r in chat_rules.items()},
@@ -467,6 +477,72 @@ def schedule_state_save(reason: str = "оновлення") -> None:
     except RuntimeError:
         # Позa event loop лишається синхронний локальний кеш.
         save_data()
+
+
+def _remember_user(user, *, private_started: bool = False) -> bool:
+    """Запоминает пользователя для анонимных вопросов и админской рассылки."""
+    if not user or getattr(user, "is_bot", False):
+        return False
+    uid = int(user.id)
+    record = known_users.setdefault(uid, {})
+    changed = False
+    full_name = (getattr(user, "full_name", "") or "").strip()[:160]
+    username = (getattr(user, "username", "") or "").strip().lstrip("@")[:64]
+    if full_name and record.get("full_name") != full_name:
+        record["full_name"] = full_name
+        changed = True
+    if username != record.get("username", ""):
+        record["username"] = username
+        changed = True
+    if private_started and not record.get("private_started", False):
+        record["private_started"] = True
+        changed = True
+    if "private_started" not in record:
+        record["private_started"] = bool(private_started)
+        changed = True
+    if changed:
+        record["last_seen"] = now_kyiv().isoformat(timespec="seconds")
+    return changed
+
+
+def _known_user_records() -> dict[int, dict]:
+    """Объединяет новый реестр с историческими источниками старых версий."""
+    records = {uid: dict(value) for uid, value in known_users.items()}
+
+    def add_legacy(uid: int, name: str = "") -> None:
+        record = records.setdefault(int(uid), {
+            "full_name": "",
+            "username": "",
+            "private_started": False,
+        })
+        if name and not record.get("full_name"):
+            record["full_name"] = str(name)[:160]
+
+    for uid, value in profiles.items():
+        add_legacy(uid, value.get("full_name", "") if isinstance(value, dict) else "")
+    for uid in lmn_balances:
+        add_legacy(uid)
+    for uid in user_xp:
+        add_legacy(uid)
+    for members in user_messages.values():
+        for user_id in members:
+            add_legacy(user_id)
+    for members in chat_members.values():
+        for user_id, name in members.items():
+            add_legacy(user_id, name)
+    for uid in _ank._approved_data:
+        add_legacy(uid)
+    return records
+
+
+def _known_user_label(uid: int, record: dict) -> str:
+    username = str(record.get("username", "") or "").lstrip("@")
+    full_name = str(record.get("full_name", "") or "").strip()
+    if username:
+        return f"@{username}"
+    if full_name:
+        return full_name
+    return f"ID {uid}"
 
 
 async def restore_bot_data() -> None:
@@ -6292,6 +6368,285 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
         )
 
 
+def _find_known_user(username: str) -> tuple[int, dict] | None:
+    wanted = username.strip().lstrip("@").lower()
+    if not wanted:
+        return None
+    for uid, record in _known_user_records().items():
+        if str(record.get("username", "")).lower().lstrip("@") == wanted:
+            return uid, record
+    return None
+
+
+def _anon_answer_keyboard(qid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="✍️ Ответить анонимно",
+            callback_data=f"anon_answer:{qid}",
+        )
+    ]])
+
+
+async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
+    """Передаёт ответ автору вопроса, не раскрывая отправителя."""
+    uid = msg.from_user.id
+    qid = anon_answer_sessions.get(uid)
+    question = anon_questions.get(qid or "")
+    if not question or question.get("target_id") != uid:
+        anon_answer_sessions.pop(uid, None)
+        await msg.reply("ℹ️ Сейчас нет вопроса, на который нужно ответить.")
+        return False
+    if question.get("status") != "pending":
+        anon_answer_sessions.pop(uid, None)
+        await msg.reply("ℹ️ На этот вопрос уже ответили или он закрыт.")
+        return False
+
+    answer = answer.strip()[:1000]
+    if not answer:
+        return await msg.reply("Напиши текст ответа.")
+
+    question["status"] = "answered"
+    question["answer"] = answer
+    question["answered_at"] = now_kyiv().isoformat(timespec="seconds")
+    anon_answer_sessions.pop(uid, None)
+    schedule_state_save("анонимный ответ")
+
+    sender_id = int(question["sender_id"])
+    try:
+        await bot.send_message(
+            sender_id,
+            "📩 <b>Получен анонимный ответ</b>\n\n"
+            f"{html.escape(answer)}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        await msg.reply(
+            "⚠️ Ответ сохранён, но автор вопроса сейчас не может получить сообщение."
+        )
+        return False
+
+    await msg.reply("✅ Ответ отправлен анонимно.")
+    return True
+
+
+async def _create_anon_question(
+    msg: Message,
+    target_id: int,
+    target_record: dict,
+    question_text: str,
+) -> bool:
+    if target_id == msg.from_user.id:
+        await msg.reply("Нельзя отправить анонимный вопрос самому себе.")
+        return False
+    if not target_record.get("private_started", False):
+        await msg.reply(
+            "⚠️ Этот пользователь ещё не запускал бота в личных сообщениях.\n"
+            "Попроси его открыть бота и нажать /start."
+        )
+        return False
+
+    pending_from_sender = sum(
+        1
+        for item in anon_questions.values()
+        if item.get("sender_id") == msg.from_user.id
+        and item.get("status") == "pending"
+    )
+    if pending_from_sender >= 10:
+        await msg.reply("⚠️ У тебя уже 10 вопросов ожидают ответа.")
+        return False
+
+    question_text = question_text.strip()[:1000]
+    if not question_text:
+        await msg.reply("Напиши текст вопроса после имени пользователя.")
+        return False
+
+    qid = uuid.uuid4().hex[:12]
+    anon_questions[qid] = {
+        "sender_id": msg.from_user.id,
+        "target_id": target_id,
+        "question": question_text,
+        "status": "pending",
+        "answer": "",
+        "created_at": now_kyiv().isoformat(timespec="seconds"),
+        "answered_at": "",
+    }
+    target_label = _known_user_label(target_id, target_record)
+    try:
+        await bot.send_message(
+            target_id,
+            "📩 <b>Тебе пришёл анонимный вопрос</b>\n\n"
+            f"{html.escape(question_text)}",
+            parse_mode="HTML",
+            reply_markup=_anon_answer_keyboard(qid),
+        )
+    except Exception:
+        anon_questions.pop(qid, None)
+        await msg.reply(
+            f"⚠️ Не удалось доставить вопрос пользователю {html.escape(target_label)}.\n"
+            "Возможно, он заблокировал бота."
+        )
+        return False
+
+    if msg.chat.type != "private":
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+        await bot.send_message(
+            msg.from_user.id,
+            f"✅ Анонимный вопрос отправлен пользователю {html.escape(target_label)}."
+        )
+    else:
+        await msg.reply(
+            f"✅ Анонимный вопрос отправлен пользователю {html.escape(target_label)}."
+        )
+    schedule_state_save("анонимный вопрос")
+    return True
+
+
+@dp.message(Command("ask", "спросить", "анонимныйвопрос"))
+async def cmd_ask(msg: Message, command: CommandObject = None):
+    args = (command.args if command else "") or ""
+    args = args.strip()
+    target_user = None
+    question_text = ""
+
+    if args:
+        parts = args.split(maxsplit=1)
+        if parts[0].startswith("@"):
+            target_user = _find_known_user(parts[0])
+            question_text = parts[1] if len(parts) > 1 else ""
+        else:
+            await msg.reply(
+                "Используй формат:\n"
+                "<code>/ask @username вопрос</code>",
+                parse_mode="HTML",
+            )
+            return
+    elif msg.reply_to_message and msg.reply_to_message.from_user:
+        target_id = msg.reply_to_message.from_user.id
+        target_user = (target_id, known_users.get(target_id, {
+            "full_name": msg.reply_to_message.from_user.full_name,
+            "username": msg.reply_to_message.from_user.username or "",
+            "private_started": False,
+        }))
+
+    if not target_user:
+        await msg.reply(
+            "Не нашёл этого пользователя в реестре бота.\n"
+            "Он должен хотя бы раз открыть бота и нажать /start.\n\n"
+            "Пример: <code>/ask @username Как настроение?</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    target_id, target_record = target_user
+    if not question_text:
+        if not target_record.get("private_started", False):
+            await msg.reply(
+                "⚠️ Сначала этот пользователь должен открыть бота и нажать /start."
+            )
+            return
+        if msg.chat.type != "private":
+            await msg.reply(
+                "Для анонимности продолжи в личке с ботом:\n"
+                f"<code>/ask @{html.escape(str(target_record.get('username', '')).lstrip('@'))}</code>",
+                parse_mode="HTML",
+            )
+            return
+        anon_ask_sessions[msg.from_user.id] = target_id
+        await msg.reply(
+            "✍️ Напиши вопрос следующим сообщением — он будет отправлен анонимно."
+        )
+        return
+    await _create_anon_question(msg, target_id, target_record, question_text)
+
+
+@dp.message(Command("answer", "ответить"))
+async def cmd_anon_answer(msg: Message, command: CommandObject = None):
+    answer = ((command.args if command else "") or "").strip()
+    if not answer:
+        if msg.from_user.id in anon_answer_sessions:
+            return await msg.reply("Напиши ответ после команды <code>/answer</code>.")
+        return await msg.reply("Сейчас нет активного анонимного вопроса.")
+    await _deliver_anon_answer(msg, answer)
+
+
+@dp.message(Command("users", "пользователи", "юзеры"))
+async def cmd_users(msg: Message, command: CommandObject = None):
+    allowed = (
+        is_owner(msg)
+        or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")
+        or (msg.chat.type != "private" and await is_admin(msg))
+    )
+    if not allowed:
+        return await msg.reply("⛔ Только администрация.")
+    records = _known_user_records()
+    try:
+        page = max(1, int(((command.args if command else "") or "1").strip()))
+    except ValueError:
+        page = 1
+    page_size = 40
+    ordered = sorted(records.items(), key=lambda item: _known_user_label(*item).lower())
+    pages = max(1, (len(ordered) + page_size - 1) // page_size)
+    page = min(page, pages)
+    start = (page - 1) * page_size
+    lines = []
+    for index, (uid, record) in enumerate(ordered[start:start + page_size], start=start + 1):
+        status = "✅ ЛС" if record.get("private_started") else "⚠️ без /start"
+        lines.append(
+            f"{index}. {html.escape(_known_user_label(uid, record))} "
+            f"— <code>{uid}</code> · {status}"
+        )
+    await msg.reply(
+        f"👥 <b>Пользователи, известные боту</b>: {len(ordered)}\n"
+        f"📄 Страница {page}/{pages}\n\n"
+        + ("\n".join(lines) or "Пока нет записей.")
+        + "\n\nДля рассылки: <code>/broadcast Текст анонса</code>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("broadcast", "рассылка", "анонс", "рассылкапользователям"))
+async def cmd_broadcast_users(msg: Message, command: CommandObject = None):
+    allowed = (
+        is_owner(msg)
+        or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")
+        or (msg.chat.type != "private" and await is_admin(msg))
+    )
+    if not allowed:
+        return await msg.reply("⛔ Только администрация.")
+    text = ((command.args if command else "") or "").strip()
+    if not text:
+        return await msg.reply(
+            "Укажи текст:\n<code>/broadcast Важное объявление https://example.com</code>",
+            parse_mode="HTML",
+        )
+
+    records = _known_user_records()
+    if not records:
+        return await msg.reply("В реестре пока нет пользователей.")
+    broadcast_text = (
+        f"📢 <b>АНОНС</b>\n{brand.div()}\n"
+        f"{_format_announcement_text(text)}\n{brand.div()}"
+    )
+    sent = failed = 0
+    for uid in sorted(records):
+        try:
+            await bot.send_message(uid, broadcast_text, parse_mode="HTML")
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.04)
+    await msg.reply(
+        f"📣 Рассылка завершена.\n"
+        f"✅ Доставлено: <b>{sent}</b>\n"
+        f"⚠️ Не доставлено: <b>{failed}</b>\n\n"
+        "Telegram не позволяет боту писать тем, кто не запускал его в личке "
+        "или заблокировал бота."
+    )
+
+
 @dp.message(Command("updatesave"))
 async def cmd_updatesave(msg: Message):
     """Одноразово публикует фаундерское обновление о сохранении данных."""
@@ -7705,7 +8060,8 @@ async def cb_owner(cb: CallbackQuery):
     elif sec == "broadcast":
         await cb.message.edit_text(
             "📢 <b>Рассылка</b>\n\nИспользуй: <code>/рассылка [текст]</code>\n"
-            "Будет отправлено во все активные чаты.",
+            "Будет отправлено зарегистрированным пользователям.\n"
+            "Для групповых чатов: <code>/рассылкачатам [текст]</code>.",
             parse_mode="HTML", reply_markup=back_kb
         )
     elif sec == "stats":
@@ -7728,8 +8084,8 @@ async def cb_owner(cb: CallbackQuery):
         )
     await cb.answer()
 
-@dp.message(Command("рассылка", "broadcast"))
-async def cmd_broadcast(msg: Message, command: CommandObject = None):
+@dp.message(Command("рассылкачатам", "broadcast_chats"))
+async def cmd_broadcast_chats(msg: Message, command: CommandObject = None):
     if not is_owner(msg): return await msg.reply("⛔ Только для фаундера")
     text = (command.args or "").strip() if command else ""
     if not text: return await msg.reply("Использование: <b>рассылка [текст]</b>", parse_mode="HTML")
@@ -8177,6 +8533,9 @@ _HELP_SECTIONS = {
         "<code>сетзвание [текст]</code> — своё звание\n\n"
         "💌 <b>Анкеты знакомств:</b>\n"
         "<code>/анкета</code> — заполнить в личке с ботом\n\n"
+        "🕶 <b>Анонимные вопросы:</b>\n"
+        "<code>/ask @username вопрос</code> — отправить вопрос анонимно\n"
+        "<code>/answer текст</code> — ответить анонимно на полученный вопрос\n\n"
         "📩 <b>Поддержка:</b>\n"
         "<code>помощь</code> — обращение администрации\n\n"
         f"{brand.div()}"
@@ -8578,6 +8937,12 @@ TEXT_COMMANDS.update({
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
     "правила": cmd_rules, "сетправила": cmd_setrules,
     "объявление": cmd_announce,
+    "ask": cmd_ask, "спросить": cmd_ask, "анонимныйвопрос": cmd_ask,
+    "answer": cmd_anon_answer, "ответить": cmd_anon_answer,
+    "users": cmd_users, "пользователи": cmd_users, "юзеры": cmd_users,
+    "broadcast": cmd_broadcast_users,
+    "рассылка": cmd_broadcast_users, "анонс": cmd_broadcast_users,
+    "рассылкапользователям": cmd_broadcast_users,
     # Помощь
     "помощь": cmd_support, "команды": cmd_help, "хелп": cmd_help,
     # Фарм (скоро)
@@ -8822,6 +9187,12 @@ class PropagandaMiddleware(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
+        if isinstance(event, Message) and event.from_user and not event.from_user.is_bot:
+            if _remember_user(
+                event.from_user,
+                private_started=event.chat.type == "private",
+            ):
+                schedule_state_save("реестр пользователей")
         # Трекинг участников — здесь, чтобы ловить ВСЕХ кто пишет
         if (isinstance(event, Message)
                 and event.from_user
@@ -8923,6 +9294,26 @@ dp.message.middleware(PropagandaMiddleware())
 # ═══════════════════════════════════════════════════════
 # АНКЕТИ — CALLBACKS МОДЕРАЦІЇ
 # ═══════════════════════════════════════════════════════
+@dp.callback_query(F.data.startswith("anon_answer:"))
+async def cb_anon_answer(cb: CallbackQuery):
+    qid = cb.data.split(":", 1)[1]
+    question = anon_questions.get(qid)
+    if not question:
+        return await cb.answer("Вопрос уже недоступен", show_alert=True)
+    if int(question.get("target_id", 0)) != cb.from_user.id:
+        return await cb.answer("Это не твой вопрос", show_alert=True)
+    if question.get("status") != "pending":
+        return await cb.answer("На этот вопрос уже ответили", show_alert=True)
+    anon_answer_sessions[cb.from_user.id] = qid
+    await cb.answer("Напиши ответ следующим сообщением")
+    if cb.message:
+        await cb.message.answer(
+            "✍️ Напиши ответ следующим сообщением — автор получит его анонимно.\n"
+            "Или используй <code>/answer Текст ответа</code>.",
+            parse_mode="HTML",
+        )
+
+
 @dp.callback_query(F.data.startswith("ank_lang:"))
 async def cb_ank_lang(cb: CallbackQuery):
     """Вибір мови анкети."""
@@ -11564,6 +11955,18 @@ async def universal_handler(msg: Message):
     uid  = msg.from_user.id
     text = msg.text.strip()
 
+    # Следующее сообщение после /ask @user становится вопросом.
+    if msg.chat.type == "private" and uid in anon_ask_sessions and not text.startswith("/"):
+        target_id = anon_ask_sessions.pop(uid)
+        target_record = _known_user_records().get(target_id, {})
+        await _create_anon_question(msg, target_id, target_record, text)
+        return
+
+    # Следующее обычное сообщение после кнопки ответа отправляется анонимно.
+    if msg.chat.type == "private" and uid in anon_answer_sessions and not text.startswith("/"):
+        await _deliver_anon_answer(msg, text)
+        return
+
     # ── Поддержка: пользователь отправляет обращение администрации
     if msg.chat.type == "private" and uid in support_sessions and not text.startswith("/"):
         mod_chat = _ank.get_mod_chat()
@@ -12227,6 +12630,39 @@ def _apply_data(data: dict) -> None:
     for u, value in data.get("user_locations", {}).items():
         if isinstance(value, str) and value.strip():
             user_locations[int(u)] = value.strip()[:80]
+    for u, value in data.get("known_users", {}).items():
+        try:
+            uid = int(u)
+            if isinstance(value, dict):
+                known_users[uid] = {
+                    "full_name": str(value.get("full_name", "") or "")[:160],
+                    "username": str(value.get("username", "") or "").lstrip("@")[:64],
+                    "private_started": bool(value.get("private_started", False)),
+                    "last_seen": str(value.get("last_seen", "") or "")[:40],
+                }
+        except (TypeError, ValueError):
+            pass
+    for qid, value in data.get("anon_questions", {}).items():
+        try:
+            if not isinstance(value, dict):
+                continue
+            anon_questions[str(qid)] = {
+                "sender_id": int(value["sender_id"]),
+                "target_id": int(value["target_id"]),
+                "question": str(value.get("question", ""))[:1000],
+                "status": str(value.get("status", "pending")),
+                "answer": str(value.get("answer", ""))[:1000],
+                "created_at": str(value.get("created_at", ""))[:40],
+                "answered_at": str(value.get("answered_at", ""))[:40],
+            }
+        except (KeyError, TypeError, ValueError):
+            pass
+    for u, qid in data.get("anon_answer_sessions", {}).items():
+        try:
+            if str(qid) in anon_questions:
+                anon_answer_sessions[int(u)] = str(qid)
+        except (TypeError, ValueError):
+            pass
     for cid, w in data.get("warnings_db", {}).items():
         warnings_db[int(cid)] = {int(u): v for u, v in w.items()}
     for cid, w in data.get("ru_army_warns", {}).items():
