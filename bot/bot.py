@@ -117,6 +117,10 @@ anon_questions: dict[str, dict] = {}
 anon_answer_sessions: dict[int, str] = {}
 anon_reply_sessions: dict[int, str] = {}
 anon_ask_sessions: dict[int, int] = {}
+shop_reservations: dict[str, dict[str, int]] = {
+    "Ника": {"Telegram Premium на 1 год": 2},
+    "Алла": {"Telegram Premium на 1 год": 1},
+}
 chat_members = {}
 support_sessions = {}
 _active_rain: dict = {}
@@ -305,6 +309,15 @@ def _build_main_payload() -> dict:
         "anon_answer_sessions": {str(u): qid for u, qid in anon_answer_sessions.items()},
         "anon_reply_sessions": {str(u): qid for u, qid in anon_reply_sessions.items()},
         "anon_ask_sessions": {str(u): target for u, target in anon_ask_sessions.items()},
+        "shop_reservations": {
+            str(owner): {
+                str(item): max(0, int(quantity))
+                for item, quantity in items.items()
+                if int(quantity) > 0
+            }
+            for owner, items in shop_reservations.items()
+            if items
+        },
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
         "chat_rules":   {str(c): r for c, r in chat_rules.items()},
@@ -8901,6 +8914,7 @@ async def _shop_soon(msg: Message):
             f"• ⚡ Буст заработка на смене\n"
             f"• 🔥 Щит для стрика\n"
             f"• 🎁 Уникальные предметы\n\n"
+            f"📋 Посмотреть зарезервированные товары: <code>/резервации</code>\n\n"
             f"<i>Следи за обновлениями!</i>\n\n"
             f"{brand.div()}"
         )
@@ -8917,6 +8931,105 @@ async def _inventory_soon(msg: Message):
             f"<i>Пока пусто — дождись открытия магазина 🛒</i>\n\n"
             f"{brand.div()}"
         ),
+        parse_mode="HTML",
+    )
+
+
+def _shop_reservations_text(owner_filter: str = "") -> str:
+    """Формирует список зарезервированных товаров магазина."""
+    rows: list[str] = []
+    total = 0
+    wanted = owner_filter.strip().casefold()
+    for owner, items in shop_reservations.items():
+        if wanted and owner.casefold() != wanted:
+            continue
+        for item, quantity in items.items():
+            amount = max(0, int(quantity))
+            if amount <= 0:
+                continue
+            rows.append(
+                f"👤 <b>{html.escape(owner)}</b> — "
+                f"{html.escape(item)}: <b>{amount} шт.</b>"
+            )
+            total += amount
+
+    if not rows:
+        rows.append("📭 Зарезервированных товаров пока нет.")
+    else:
+        rows.insert(0, "⭐ <b>Telegram Premium на 1 год</b>")
+
+    return (
+        f"{brand.hdr()}\n\n"
+        "🛒 <b>Резервации магазина</b>\n\n"
+        + "\n".join(rows)
+        + f"\n\n📦 Всего зарезервировано: <b>{total} шт.</b>\n\n"
+        f"{brand.div()}"
+    )
+
+
+@dp.message(Command(
+    "резервация", "резервации", "резерв",
+    "reservations", "reservation", "reserve",
+))
+async def cmd_shop_reservations(msg: Message, command: CommandObject = None):
+    args = ((command.args if command else "") or "").strip()
+    parts = args.split(maxsplit=3)
+
+    if not args:
+        return await msg.reply(_shop_reservations_text(), parse_mode="HTML")
+
+    # Администратор может обновить список без редактирования кода:
+    # /резервация добавить Ника 2 Telegram Premium на 1 год
+    action = parts[0].casefold()
+    is_staff = (
+        is_owner(msg)
+        or has_role(msg.from_user.id, "lead_admin", "co_admin", "admin", "moderator")
+    )
+    if action in {"добавить", "добавь", "add"}:
+        if not is_staff:
+            return await msg.reply("⛔ Изменять резервации могут только администраторы.")
+        if len(parts) < 4:
+            return await msg.reply(
+                "Формат:\n"
+                "<code>/резервация добавить Ника 2 Telegram Premium на 1 год</code>",
+                parse_mode="HTML",
+            )
+        owner, raw_amount, item = parts[1], parts[2], parts[3].strip()
+        try:
+            amount = int(raw_amount)
+        except ValueError:
+            return await msg.reply("Количество должно быть целым числом.")
+        if amount <= 0 or not item:
+            return await msg.reply("Укажи положительное количество и название товара.")
+        shop_reservations.setdefault(owner[:120], {})[item[:120]] = amount
+        schedule_state_save("обновление резервации магазина")
+        return await msg.reply(
+            f"✅ Резервация сохранена: <b>{html.escape(owner)}</b> — "
+            f"{html.escape(item)}: <b>{amount} шт.</b>",
+            parse_mode="HTML",
+        )
+
+    if action in {"удалить", "убрать", "remove", "delete"}:
+        if not is_staff:
+            return await msg.reply("⛔ Изменять резервации могут только администраторы.")
+        if len(parts) < 3:
+            return await msg.reply(
+                "Формат:\n"
+                "<code>/резервация удалить Ника Telegram Premium на 1 год</code>",
+                parse_mode="HTML",
+            )
+        owner, item = parts[1], parts[2].strip()
+        owner_items = shop_reservations.get(owner)
+        if not owner_items or item not in owner_items:
+            return await msg.reply("⚠️ Такая резервация не найдена.")
+        del owner_items[item]
+        if not owner_items:
+            shop_reservations.pop(owner, None)
+        schedule_state_save("удаление резервации магазина")
+        return await msg.reply("✅ Резервация удалена.")
+
+    return await msg.reply(
+        _shop_reservations_text(args),
         parse_mode="HTML",
     )
 
@@ -9121,6 +9234,9 @@ TEXT_COMMANDS.update({
     "ферма": _farm_soon, "фарм": _farm_soon, "farm": _farm_soon,
     "магазин": _shop_soon, "крамниця": _shop_soon, "shop": _shop_soon,
     "інвентар": _inventory_soon, "инвентарь": _inventory_soon, "inv": _inventory_soon,
+    "резервация": cmd_shop_reservations, "резервации": cmd_shop_reservations,
+    "резерв": cmd_shop_reservations, "reservation": cmd_shop_reservations,
+    "reservations": cmd_shop_reservations, "reserve": cmd_shop_reservations,
     "премиум": _premium_soon, "тгпремиум": _premium_soon, "premium": _premium_soon,
     "остатокпремиум": cmd_premium_stock, "премиумостаток": cmd_premium_stock,
     "остаток премиум": cmd_premium_stock, "premiumstock": cmd_premium_stock,
@@ -12934,6 +13050,19 @@ def _apply_data(data: dict) -> None:
             anon_ask_sessions[int(u)] = int(target)
         except (TypeError, ValueError):
             pass
+    for owner, items in data.get("shop_reservations", {}).items():
+        if not isinstance(items, dict):
+            continue
+        clean_items: dict[str, int] = {}
+        for item, quantity in items.items():
+            try:
+                amount = int(quantity)
+            except (TypeError, ValueError):
+                continue
+            if amount > 0:
+                clean_items[str(item)[:120]] = amount
+        if clean_items:
+            shop_reservations[str(owner)[:120]] = clean_items
     for cid, w in data.get("warnings_db", {}).items():
         warnings_db[int(cid)] = {int(u): v for u, v in w.items()}
     for cid, w in data.get("ru_army_warns", {}).items():
