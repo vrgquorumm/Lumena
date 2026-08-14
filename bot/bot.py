@@ -1732,16 +1732,29 @@ async def do_checkin(chat_id: int, user_id: int, reply_msg: Message = None):
 # ADMIN КОМАНДЫ
 # ═══════════════════════════════════════════════════════
 async def _demote_if_needed(chat_id: int, user_id: int):
-    """Снимает права если пользователь является администратором (для суперпользователей)."""
+    """Снимает права администратора перед баном.
+
+    Возвращает (успех, причина). Создателя группы Telegram демотировать
+    запрещает — такого пользователя нельзя ограничить через Bot API.
+    """
     try:
         member = await bot.get_chat_member(chat_id, user_id)
-        if member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR):
+        if member.status == ChatMemberStatus.CREATOR:
+            return False, "пользователь является создателем чата"
+        if member.status == ChatMemberStatus.ADMINISTRATOR:
             await bot.promote_chat_member(chat_id, user_id,
                 can_manage_chat=False, can_delete_messages=False,
                 can_manage_video_chats=False, can_restrict_members=False,
                 can_promote_members=False, can_change_info=False,
                 can_invite_users=False, can_pin_messages=False)
-    except: pass
+            check = await bot.get_chat_member(chat_id, user_id)
+            if check.status == ChatMemberStatus.ADMINISTRATOR:
+                return False, "бот не смог снять права администратора"
+        return True, ""
+    except Exception as error:
+        logging.warning("Не удалось снять права администратора %s в %s: %s",
+                        user_id, chat_id, error)
+        return False, str(error)
 
 # ── Премиум-карточки ────────────────────────────────────
 _LMN_HDR = "🖤  L U M E N A  🖤"  # plain fallback для legacy-мест
@@ -2581,8 +2594,6 @@ async def cmd_mute(msg: Message, command: CommandObject):
         if _username_lower(user) not in _MUTE_TARGETS:
             return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
     # Снимаем права администратора у цели, если нужно (иначе Telegram вернёт ошибку)
-    if is_owner(msg) or _username_lower(user) in _MUTE_TARGETS:
-        await _demote_if_needed(chat_id, user.id)
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
     dur_str = _fmt_duration(delta)
@@ -2622,8 +2633,6 @@ async def cmd_mute1(msg: Message, command: CommandObject):
         if _username_lower(user) not in _MUTE_TARGETS:
             return await msg.reply("⛔ У тебя нет прав мутить этого пользователя")
     # Снимаем права администратора у цели, если нужно
-    if is_owner(msg) or _username_lower(user) in _MUTE_TARGETS:
-        await _demote_if_needed(chat_id, user.id)
     delta = timedelta(minutes=1)
     until = now_kyiv() + delta
     _, reason = parse_time_and_reason(command.args or "")
@@ -2670,7 +2679,9 @@ async def cmd_ban(msg: Message, command: CommandObject):
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя забанить себя")
     if is_super(msg):
-        await _demote_if_needed(chat_id, user.id)
+        demoted, demote_error = await _demote_if_needed(chat_id, user.id)
+        if not demoted:
+            return await msg.reply(f"❌ Не удалось снять права администратора: {demote_error}")
     _, reason = parse_time_and_reason(command.args or "")
     try:
         await bot.ban_chat_member(chat_id, user.id)
@@ -13285,6 +13296,14 @@ async def cmd_founder_bind_observer_chat(msg: Message, command=None):
 
 
 FOUNDER_USERS_PAGE_SIZE = 8
+FOUNDER_MUTE_DURATIONS = {
+    "1m": (timedelta(minutes=1), "1 минута"),
+    "5m": (timedelta(minutes=5), "5 минут"),
+    "10m": (timedelta(minutes=10), "10 минут"),
+    "30m": (timedelta(minutes=30), "30 минут"),
+    "90m": (timedelta(minutes=90), "1 час 30 минут"),
+    "777d": (timedelta(days=777), "777 дней"),
+}
 
 
 def _founder_users_sorted() -> list[tuple[int, dict]]:
@@ -13378,8 +13397,8 @@ def _founder_user_detail_kb(uid: int, page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🔇 Мут 30м",
-                callback_data=f"founder_users:mod:mute:{uid}:{page}",
+                text="🔇 Выбрать мут",
+                callback_data=f"founder_users:duration:{uid}:{page}",
             ),
             InlineKeyboardButton(
                 text="🔊 Размут",
@@ -13400,6 +13419,45 @@ def _founder_user_detail_kb(uid: int, page: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text="◀️ К списку",
                 callback_data=f"founder_users:page:{page}",
+            ),
+        ],
+    ])
+
+
+def _founder_mute_duration_kb(uid: int, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="1 мин",
+                callback_data=f"founder_users:applymute:1m:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="5 мин",
+                callback_data=f"founder_users:applymute:5m:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="10 мин",
+                callback_data=f"founder_users:applymute:10m:{uid}:{page}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="30 мин",
+                callback_data=f"founder_users:applymute:30m:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="1:30",
+                callback_data=f"founder_users:applymute:90m:{uid}:{page}",
+            ),
+            InlineKeyboardButton(
+                text="777 дней",
+                callback_data=f"founder_users:applymute:777d:{uid}:{page}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="◀️ Назад",
+                callback_data=f"founder_users:user:{uid}:{page}",
             ),
         ],
     ])
@@ -13439,6 +13497,7 @@ async def _founder_apply_user_mod(
     action: str,
     uid: int,
     page: int,
+    duration_key: str = "30m",
 ) -> None:
     """Прямо применяет founder-модерацию без текстовой команды."""
     record = _known_user_records().get(uid)
@@ -13461,16 +13520,18 @@ async def _founder_apply_user_mod(
     user = _founder_callback_user(uid, record)
     try:
         if action == "mute":
-            if is_owner(cb):
-                await _demote_if_needed(target_chat, uid)
-            until = now_kyiv() + timedelta(minutes=30)
+            duration_data = FOUNDER_MUTE_DURATIONS.get(duration_key)
+            if not duration_data:
+                raise RuntimeError("Неизвестная длительность мута")
+            delta, duration_label = duration_data
+            until = now_kyiv() + delta
             await bot.restrict_chat_member(
                 target_chat,
                 uid,
                 permissions=ChatPermissions(can_send_messages=False),
                 until_date=until,
             )
-            title = "Мут 30м 🔇"
+            title = f"Мут 🔇 на {duration_label}"
             log_action = "mute"
         elif action == "unmute":
             await bot.restrict_chat_member(
@@ -13487,7 +13548,11 @@ async def _founder_apply_user_mod(
             log_action = "unmute"
         elif action == "ban":
             if is_owner(cb):
-                await _demote_if_needed(target_chat, uid)
+                demoted, demote_error = await _demote_if_needed(target_chat, uid)
+                if not demoted:
+                    raise RuntimeError(
+                        f"Не удалось снять права администратора: {demote_error}"
+                    )
             await bot.ban_chat_member(target_chat, uid)
             title = "Заблокирован 🚫"
             log_action = "ban"
@@ -13545,7 +13610,7 @@ async def cb_founder_users(cb: CallbackQuery):
         )
         return await cb.answer()
 
-    if action in {"mod", "askban", "confirmban", "cancel"}:
+    if action in {"mod", "duration", "applymute", "askban", "confirmban", "cancel"}:
         try:
             if action == "mod":
                 if len(parts) < 5:
@@ -13553,10 +13618,24 @@ async def cb_founder_users(cb: CallbackQuery):
                 mod_action = parts[2]
                 uid = int(parts[3])
                 page = int(parts[4])
+            elif action == "duration":
+                if len(parts) < 4:
+                    raise ValueError
+                mod_action = ""
+                uid = int(parts[2])
+                page = int(parts[3])
+            elif action == "applymute":
+                if len(parts) < 5:
+                    raise ValueError
+                mod_action = "mute"
+                duration_key = parts[2]
+                uid = int(parts[3])
+                page = int(parts[4])
             else:
                 if len(parts) < 4:
                     raise ValueError
                 mod_action = ""
+                duration_key = "30m"
                 uid = int(parts[2])
                 page = int(parts[3])
         except (TypeError, ValueError):
@@ -13564,6 +13643,14 @@ async def cb_founder_users(cb: CallbackQuery):
         record = _known_user_records().get(uid)
         if not record:
             return await cb.answer("Пользователь исчез из реестра.", show_alert=True)
+        if action == "duration":
+            await cb.message.edit_text(
+                _founder_user_detail_text(uid, record)
+                + "\n\n⏱ <b>Выбери длительность мута:</b>",
+                parse_mode="HTML",
+                reply_markup=_founder_mute_duration_kb(uid, page),
+            )
+            return await cb.answer()
         if action == "askban":
             await cb.message.edit_text(
                 _founder_user_detail_text(uid, record)
@@ -13583,6 +13670,10 @@ async def cb_founder_users(cb: CallbackQuery):
             return await _founder_apply_user_mod(cb, "ban", uid, page)
         if action == "mod":
             return await _founder_apply_user_mod(cb, mod_action, uid, page)
+        if action == "applymute":
+            return await _founder_apply_user_mod(
+                cb, mod_action, uid, page, duration_key
+            )
 
     if action == "user" and len(parts) >= 4:
         try:
