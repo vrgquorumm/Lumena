@@ -6476,7 +6476,8 @@ async def _create_anon_question(
         anon_questions.pop(qid, None)
         await msg.reply(
             f"⚠️ Не удалось доставить вопрос пользователю {html.escape(target_label)}.\n"
-            "Возможно, он заблокировал бота."
+            "Telegram не разрешил боту написать этому пользователю первым. "
+            "Это ограничение личных сообщений Telegram."
         )
         return False
 
@@ -6515,10 +6516,9 @@ def _anon_ask_user_keyboard(viewer_id: int, page: int = 1) -> tuple[str, InlineK
         label = _known_user_label(uid, record)
         if len(label) > 24:
             label = label[:23] + "…"
-        status = "✅" if record.get("private_started") else "⚠️"
         current_row.append(
             InlineKeyboardButton(
-                text=f"{status} {label}",
+                text=label,
                 callback_data=f"anon_ask_target:{uid}",
             )
         )
@@ -6547,7 +6547,7 @@ def _anon_ask_user_keyboard(viewer_id: int, page: int = 1) -> tuple[str, InlineK
         "Выбери человека из списка. После выбора напиши вопрос следующим сообщением.\n\n"
         f"👥 Пользователей в реестре: <b>{len(ordered)}</b>\n"
         f"📄 Страница {page}/{pages}\n"
-        "✅ — пользователь уже запускал бота · ⚠️ — нужно нажать /start"
+        "Можно выбрать любого участника из списка."
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
