@@ -6318,6 +6318,62 @@ def _format_announcement_text(value: str) -> str:
     return escaped
 
 
+_ANNOUNCE_BUTTON_LINE_RE = re.compile(
+    r"^\s*(?:кнопка|button)\s*:\s*([^|]{1,64}?)\s*\|\s*"
+    r"((?:https?://|t\.me/)[^\s<>]+)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _announcement_keyboard(value: str) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Извлекает кнопки из анонса и добавляет основные кнопки проекта."""
+    custom_specs: list[tuple[str, str]] = []
+    body_lines: list[str] = []
+
+    for line in value.splitlines():
+        match = _ANNOUNCE_BUTTON_LINE_RE.match(line)
+        if match:
+            custom_specs.append((match.group(1).strip(), match.group(2).rstrip(".,!?;:")))
+            continue
+        markdown = _ANNOUNCE_MD_LINK_RE.fullmatch(line.strip())
+        if markdown:
+            custom_specs.append((markdown.group(1).strip(), markdown.group(2).rstrip(".,!?;:")))
+            continue
+        body_lines.append(line)
+
+    specs: list[tuple[str, str]] = []
+    for key in ("main_chat", "main_channel"):
+        url = brand.btn_url(key)
+        if url and url not in {"https://t.me/", "http://t.me/"}:
+            specs.append((brand.btn_label(key), url))
+    if LUMENA_SITE_URL:
+        specs.append(("🌐 Сайт Лумены", LUMENA_SITE_URL))
+    specs.extend(custom_specs)
+
+    unique_specs: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+    for label, url in specs[:12]:
+        label = label[:64].strip()
+        if not label:
+            continue
+        href = f"https://{url}" if url.lower().startswith("t.me/") else url
+        if href in seen_urls:
+            continue
+        seen_urls.add(href)
+        unique_specs.append((label, href))
+
+    if not unique_specs:
+        return "\n".join(body_lines).strip(), None
+    rows = [
+        [
+            InlineKeyboardButton(text=label, url=url)
+            for label, url in unique_specs[index:index + 2]
+        ]
+        for index in range(0, len(unique_specs), 2)
+    ]
+    return "\n".join(body_lines).strip(), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @dp.message(Command("объявление", "announce", "анонс"))
 async def cmd_announce(msg: Message, command: CommandObject = None):
     import re as _re
@@ -6344,8 +6400,8 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
         return await msg.reply(
             "📢 <b>Отправь объявление:</b>\n\n"
             "<code>объявление Сегодня в 20:00 — ивент!</code>\n"
-            "или\n"
-            "<code>/объявление Текст</code>\n\n"
+            "<code>Кнопка: Чат | https://t.me/example</code>\n"
+            "<code>Кнопка: Правила | https://t.me/rules</code>\n\n"
             "Сообщение уйдёт в паб-чат.",
             parse_mode="HTML"
         )
@@ -6355,15 +6411,23 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
     pub = _ank.get_pub_chat()
     target = pub if pub else cid
 
+    clean_text, announce_kb = _announcement_keyboard(text)
+    if not clean_text:
+        clean_text = "Ознакомьтесь с важной информацией ниже."
     announce_text = (
         f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n"
         f"{brand.div()}\n"
-        f"{_format_announcement_text(text)}\n"
+        f"{_format_announcement_text(clean_text)}\n"
         f"{brand.div()}"
     )
 
     try:
-        await bot.send_message(target, announce_text, parse_mode="HTML")
+        await bot.send_message(
+            target,
+            announce_text,
+            parse_mode="HTML",
+            reply_markup=announce_kb,
+        )
         # В приватном чате — подтверждение с указанием куда ушло
         if msg.chat.type == "private":
             chat_name = "паб-чат" if pub else "чат"
@@ -6412,18 +6476,22 @@ async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
         anon_answer_sessions.pop(uid, None)
         await msg.reply("ℹ️ Сейчас нет вопроса, на который нужно ответить.")
         return False
-    if question.get("status") != "pending":
+    if question.get("status") not in {"pending", "open", "answered"}:
         anon_answer_sessions.pop(uid, None)
-        await msg.reply("ℹ️ На этот вопрос уже ответили или он закрыт.")
+        await msg.reply("ℹ️ Этот анонимный вопрос уже закрыт.")
         return False
 
     answer = answer.strip()[:1000]
     if not answer:
         return await msg.reply("Напиши текст ответа.")
 
-    question["status"] = "answered"
+    question["status"] = "open"
     question["answer"] = answer
     question["answered_at"] = now_kyiv().isoformat(timespec="seconds")
+    question.setdefault("answers", []).append({
+        "text": answer,
+        "created_at": question["answered_at"],
+    })
     anon_answer_sessions.pop(uid, None)
     schedule_state_save("анонимный ответ")
 
@@ -6432,6 +6500,7 @@ async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
         await bot.send_message(
             sender_id,
             "📩 <b>Получен анонимный ответ</b>\n\n"
+            "👋🏻\n"
             f"{html.escape(answer)}",
             parse_mode="HTML",
         )
@@ -6441,7 +6510,11 @@ async def _deliver_anon_answer(msg: Message, answer: str) -> bool:
         )
         return False
 
-    await msg.reply("✅ Ответ отправлен анонимно.")
+    await msg.reply(
+        "✅ Ответ отправлен анонимно.\n\n"
+        "Можно отвечать на этот вопрос сколько угодно раз.",
+        reply_markup=_anon_answer_keyboard(qid),
+    )
     return True
 
 
@@ -6458,7 +6531,7 @@ async def _create_anon_question(
         1
         for item in anon_questions.values()
         if item.get("sender_id") == msg.from_user.id
-        and item.get("status") == "pending"
+        and item.get("status") in {"pending", "open"}
     )
     if pending_from_sender >= 10:
         await msg.reply("⚠️ У тебя уже 10 вопросов ожидают ответа.")
@@ -6476,6 +6549,7 @@ async def _create_anon_question(
         "question": question_text,
         "status": "pending",
         "answer": "",
+        "answers": [],
         "created_at": now_kyiv().isoformat(timespec="seconds"),
         "answered_at": "",
     }
@@ -9310,9 +9384,10 @@ async def cb_anon_answer(cb: CallbackQuery):
         return await cb.answer("Вопрос уже недоступен", show_alert=True)
     if int(question.get("target_id", 0)) != cb.from_user.id:
         return await cb.answer("Это не твой вопрос", show_alert=True)
-    if question.get("status") != "pending":
-        return await cb.answer("На этот вопрос уже ответили", show_alert=True)
+    if question.get("status") not in {"pending", "open", "answered"}:
+        return await cb.answer("Этот вопрос уже закрыт", show_alert=True)
     anon_answer_sessions[cb.from_user.id] = qid
+    schedule_state_save("подготовка анонимного ответа")
     await cb.answer("Напиши ответ следующим сообщением")
     if cb.message:
         await cb.message.answer(
@@ -12711,6 +12786,14 @@ def _apply_data(data: dict) -> None:
                 "question": str(value.get("question", ""))[:1000],
                 "status": str(value.get("status", "pending")),
                 "answer": str(value.get("answer", ""))[:1000],
+                "answers": [
+                    {
+                        "text": str(item.get("text", ""))[:1000],
+                        "created_at": str(item.get("created_at", ""))[:40],
+                    }
+                    for item in (value.get("answers", []) or [])
+                    if isinstance(item, dict)
+                ],
                 "created_at": str(value.get("created_at", ""))[:40],
                 "answered_at": str(value.get("answered_at", ""))[:40],
             }
