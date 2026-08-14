@@ -2863,6 +2863,47 @@ async def cmd_unwarn_ru_slash(msg: Message, command: CommandObject):
     return await cmd_unwarn(msg, command)
 
 
+_MODERATION_SLASH_HANDLERS = {
+    "мут": cmd_mute,
+    "замутить": cmd_mute,
+    "замут": cmd_mute,
+    "бан": cmd_ban,
+    "забанить": cmd_ban,
+    "забан": cmd_ban,
+    "форсбан": cmd_forceban,
+    "форсмут": cmd_forcemute,
+    "размут": cmd_unmute,
+    "разбан": cmd_unban,
+    "кик": cmd_kick,
+    "варн": cmd_warn,
+    "снятьварн": cmd_unwarn,
+}
+
+
+def _is_moderation_slash_text(msg: Message) -> bool:
+    """Ловит кириллический slash даже без Telegram bot_command entity."""
+    text = (msg.text or "").strip()
+    if not text.startswith("/"):
+        return False
+    first = text[1:].split(maxsplit=1)[0].split("@", 1)[0].casefold()
+    return first in _MODERATION_SLASH_HANDLERS
+
+
+@dp.message(F.func(_is_moderation_slash_text))
+async def cmd_moderation_slash_fallback(msg: Message):
+    """Резервный маршрутизатор модерации для Telegram-клиентов без entity."""
+    parts = (msg.text or "").strip()[1:].split(maxsplit=1)
+    word = parts[0].split("@", 1)[0].casefold()
+    handler = _MODERATION_SLASH_HANDLERS.get(word)
+    if not handler:
+        return
+
+    class RawSlashCommand:
+        args = parts[1] if len(parts) > 1 else ""
+
+    return await handler(msg, RawSlashCommand())
+
+
 @dp.message(Command("purge"))
 async def cmd_purge(msg: Message, command: CommandObject):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
