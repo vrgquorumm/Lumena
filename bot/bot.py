@@ -12558,6 +12558,21 @@ async def universal_handler(msg: Message):
             return
         return
 
+    # Telegram не всегда передаёт кириллические slash-команды как entity
+    # типа bot_command. Разбираем их резервно по обычному тексту.
+    if text.startswith("/"):
+        slash_parts = text[1:].split(maxsplit=1)
+        slash_word = (slash_parts[0] if slash_parts else "").split("@", 1)[0].lower()
+        if slash_word in TEXT_COMMANDS:
+            class SlashFakeCmd:
+                args = slash_parts[1] if len(slash_parts) > 1 else ""
+
+            try:
+                await TEXT_COMMANDS[slash_word](msg, SlashFakeCmd())
+            except TypeError:
+                await TEXT_COMMANDS[slash_word](msg)
+        return
+
     # ── Команды без префикса
     if not text.startswith("/"):
         # 🔥 стрик через огонь
