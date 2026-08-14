@@ -302,6 +302,7 @@ def _build_main_payload() -> dict:
         "known_users":  {str(u): v for u, v in known_users.items()},
         "anon_questions": {str(qid): q for qid, q in anon_questions.items()},
         "anon_answer_sessions": {str(u): qid for u, qid in anon_answer_sessions.items()},
+        "anon_ask_sessions": {str(u): target for u, target in anon_ask_sessions.items()},
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
         "chat_rules":   {str(c): r for c, r in chat_rules.items()},
@@ -543,6 +544,21 @@ def _known_user_label(uid: int, record: dict) -> str:
     if full_name:
         return full_name
     return f"ID {uid}"
+
+
+async def _restore_anon_ask_session(uid: int) -> None:
+    """Подхватывает выбор получателя, если кнопку обработал другой polling-процесс."""
+    if uid in anon_ask_sessions or not _db.has_pg():
+        return
+    try:
+        payload = await _db.db_get("bot_data")
+        raw_target = (payload or {}).get("anon_ask_sessions", {}).get(str(uid))
+        if raw_target is not None:
+            anon_ask_sessions[uid] = int(raw_target)
+    except (TypeError, ValueError, KeyError):
+        pass
+    except Exception as error:
+        logging.debug("Не удалось восстановить сессию анонимного вопроса: %s", error)
 
 
 async def restore_bot_data() -> None:
@@ -6609,6 +6625,7 @@ async def cmd_ask(msg: Message, command: CommandObject = None):
             )
             return
         anon_ask_sessions[msg.from_user.id] = target_id
+        schedule_state_save("выбор получателя анонимного вопроса")
         await msg.reply(
             "✍️ Напиши вопрос следующим сообщением — он будет отправлен анонимно."
         )
@@ -9332,6 +9349,7 @@ async def cb_anon_ask_target(cb: CallbackQuery):
     if not target_record:
         return await cb.answer("Пользователь больше не найден", show_alert=True)
     anon_ask_sessions[cb.from_user.id] = target_id
+    schedule_state_save("выбор получателя анонимного вопроса")
     target_label = _known_user_label(target_id, target_record)
     await cb.message.edit_text(
         "✍️ <b>Получатель выбран</b>\n\n"
@@ -9345,6 +9363,7 @@ async def cb_anon_ask_target(cb: CallbackQuery):
 @dp.callback_query(F.data == "anon_ask_cancel")
 async def cb_anon_ask_cancel(cb: CallbackQuery):
     anon_ask_sessions.pop(cb.from_user.id, None)
+    schedule_state_save("отмена анонимного вопроса")
     if cb.message:
         await cb.message.edit_text("✖️ Создание анонимного вопроса отменено.")
     await cb.answer()
@@ -11991,9 +12010,13 @@ async def universal_handler(msg: Message):
     uid  = msg.from_user.id
     text = msg.text.strip()
 
+    if msg.chat.type == "private" and uid not in anon_ask_sessions:
+        await _restore_anon_ask_session(uid)
+
     # Следующее сообщение после /ask @user становится вопросом.
     if msg.chat.type == "private" and uid in anon_ask_sessions and not text.startswith("/"):
         target_id = anon_ask_sessions.pop(uid)
+        schedule_state_save("отправка анонимного вопроса")
         target_record = _known_user_records().get(target_id, {})
         await _create_anon_question(msg, target_id, target_record, text)
         return
@@ -12697,6 +12720,11 @@ def _apply_data(data: dict) -> None:
         try:
             if str(qid) in anon_questions:
                 anon_answer_sessions[int(u)] = str(qid)
+        except (TypeError, ValueError):
+            pass
+    for u, target in data.get("anon_ask_sessions", {}).items():
+        try:
+            anon_ask_sessions[int(u)] = int(target)
         except (TypeError, ValueError):
             pass
     for cid, w in data.get("warnings_db", {}).items():
