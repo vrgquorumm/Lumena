@@ -63,6 +63,9 @@ if not BOT_TOKEN:
 OWNER_USERNAME = "hdrttttttt"
 OWNER_ID       = 8655306548
 SUPER_IDS      = {OWNER_ID}
+# Постоянный заместитель с полным founder-доступом.
+# Это числовой Telegram ID, поэтому username не используется для авторизации.
+FOUNDER_DEPUTY_IDS = {1839566911}
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
 
@@ -1031,6 +1034,8 @@ async def auto_moderate_propaganda(msg: Message) -> bool:
 # ── Хелперы ролей ─────────────────────────────────────
 def get_role(uid: int) -> str | None:
     """Возвращает роль пользователя или None."""
+    if uid in FOUNDER_DEPUTY_IDS:
+        return "founder_deputy"
     return ROLES.get(uid)
 
 def get_role_display(uid: int, username: str = "") -> str | None:
@@ -1062,7 +1067,7 @@ def remove_role(uid: int, username: str = "") -> bool:
 
 def has_role(uid: int, *roles: str) -> bool:
     """True если пользователь имеет хотя бы одну из указанных ролей."""
-    return ROLES.get(uid) in roles
+    return get_role(uid) in roles
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1084,7 +1089,7 @@ _STAFF_BAD_WORDS = {
 
 def _is_staff_uid(uid: int, chat_id: int | None = None) -> bool:
     """Командой считаются назначенные сотрудники или участники командного чата."""
-    if uid == OWNER_ID:
+    if uid == OWNER_ID or uid in FOUNDER_DEPUTY_IDS:
         return False
     return get_role(uid) in STAFF_ROLES or (
         chat_id is not None and chat_id in staff_team_chats
@@ -1207,7 +1212,7 @@ async def cmd_staff_rate(msg: Message, command=None):
     if msg.chat.type == "private":
         return await msg.reply("ℹ️ Оценивай команду в рабочем групповом чате.")
     if not msg.from_user or (
-        msg.from_user.id != OWNER_ID
+        not is_owner(msg)
         and not _is_staff_uid(msg.from_user.id, msg.chat.id)
     ):
         return await msg.reply("⛔ Оценивать команду могут только администраторы, модераторы и фаундер.")
@@ -1216,9 +1221,9 @@ async def cmd_staff_rate(msg: Message, command=None):
     # командный. Это удобно для закрытых чатов: Bot API не умеет разрешать
     # invite-ссылку и получать по ней список участников.
     if (
-        msg.from_user.id == OWNER_ID
+        is_owner(msg)
         and target
-        and target.id != OWNER_ID
+        and target.id not in {OWNER_ID, *FOUNDER_DEPUTY_IDS}
         and msg.chat.id not in staff_team_chats
     ):
         staff_team_chats.add(msg.chat.id)
@@ -1262,7 +1267,7 @@ async def cmd_staff_stats(msg: Message):
     if msg.chat.type == "private":
         return await msg.reply("ℹ️ Статистика доступна в рабочем групповом чате.")
     if not msg.from_user or (
-        msg.from_user.id != OWNER_ID
+        not is_owner(msg)
         and not _is_staff_uid(msg.from_user.id, msg.chat.id)
     ):
         return await msg.reply("⛔ Статистика команды доступна только администрации и фаундеру.")
@@ -1390,11 +1395,11 @@ def role_badge(uid: int, username: str = "") -> str:
 
 
 def is_owner(msg) -> bool:
-    """Работает и для Message, и для CallbackQuery — проверяет ТОЛЬКО по числовому ID."""
+    """Founder-equivalent доступ по числовому Telegram ID."""
     u = getattr(msg, "from_user", None)
     if u is None:
         return False
-    return u.id == OWNER_ID  # username может быть угнан — только ID
+    return u.id == OWNER_ID or u.id in FOUNDER_DEPUTY_IDS
 
 # Пользователи, которым разрешено редактировать все тексты/кнопки бота
 _EDITOR_USERNAMES = {OWNER_USERNAME.lower(), "veroniksssxa"}
@@ -1404,7 +1409,7 @@ def is_editor(msg) -> bool:
     u = getattr(msg, "from_user", None)
     if u is None:
         return False
-    if u.id == OWNER_ID:
+    if is_owner(msg):
         return True
     return (u.username or "").lower() in _EDITOR_USERNAMES
 
@@ -1423,7 +1428,7 @@ def _username_lower(user) -> str:
 
 def is_verified(uid: int) -> bool:
     """Прошёл ли пользователь верификацию. Фаундер всегда верифицирован."""
-    if uid in SUPER_IDS:
+    if uid == OWNER_ID or uid in FOUNDER_DEPUTY_IDS:
         return True
     return uid in _verified_users
 
@@ -12305,6 +12310,587 @@ TEXT_COMMANDS.update({
 })
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 51 дополнительных founder-операций
+# ══════════════════════════════════════════════════════════════════════════════
+# Это отдельные команды, а не декоративные флаги: каждая команда выполняет
+# чтение состояния, сохранение, настройку чата или founder-действие.
+FOUNDER_EXTRA_COMMANDS: dict[str, str] = {
+    "фстатус": "сводный статус бота",
+    "фданные": "сводка хранилищ",
+    "фметрики": "главные метрики",
+    "фбалансы": "сводка балансов",
+    "фроли": "сводка ролей",
+    "фчаты": "сводка чатов",
+    "фпользователи": "сводка пользователей",
+    "фопросы": "сводка опросов",
+    "фмедали": "сводка медалей",
+    "фжалобы": "сводка жалоб",
+    "фгеография": "сводка географии",
+    "фактивность": "сводка активности",
+    "фрост": "сводка роста и XP",
+    "фонлайн": "сводка уникальных участников",
+    "фпамять": "сводка памяти и кешей",
+    "фсохранить": "немедленное сохранение",
+    "фпроверка": "проверка подключения Telegram",
+    "фэкспорт": "размер экспортируемого состояния",
+    "фкоманда": "сводка команды",
+    "фсессии": "сводка активных сессий",
+    "фподдержка": "сводка обращений в поддержку",
+    "фмагазин": "сводка магазина",
+    "фрезервации": "сводка резерваций",
+    "фаноним": "сводка анонимных диалогов",
+    "фссылки": "сводка фильтра ссылок",
+    "фправила": "сводка правил чатов",
+    "фрепутация": "сводка репутации",
+    "фдостижения": "сводка достижений",
+    "фстрики": "сводка стриков",
+    "фрефералы": "сводка рефералов",
+    "фбалансотчёт": "расширенный отчёт балансов",
+    "фочиститьсессии": "очистка активных сессий",
+    "фзакрытьжалобы": "закрытие жалоб",
+    "фрежимрейд": "переключение рейд-режима",
+    "фантиспам": "переключение антиспама",
+    "фантилинк": "переключение фильтра ссылок",
+    "фсбросстрика": "сброс стрика пользователя",
+    "фсбросварна": "сброс предупреждений пользователя",
+    "фначислитьxp": "начисление XP пользователю",
+    "фвыдатьмедаль": "выдача медали пользователю",
+    "фраздать": "раздача LMN всем пользователям",
+    "фназначитьvip": "выдача VIP пользователю",
+    "фснятьvip": "снятие VIP у пользователя",
+    "фназначитьроль": "назначение роли пользователю",
+    "фснятьроль": "снятие роли пользователя",
+    "фбелыйдобавить": "добавление ссылки в whitelist",
+    "фбелыйудалить": "удаление ссылки из whitelist",
+    "фсайт": "изменение ссылки сайта",
+    "фчат": "изменение ссылки чата",
+    "фуведомление": "отправка founder-уведомления",
+    "фпомощь": "список 51 founder-операции",
+}
+
+
+def _founder_extra_args(command=None) -> str:
+    return str(getattr(command, "args", "") or "").strip()
+
+
+def _founder_extra_target(msg: Message, args: str) -> tuple[int | None, str]:
+    """Возвращает ID цели из reply или первого числового аргумента."""
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        user = msg.reply_to_message.from_user
+        return user.id, user.full_name
+    token = (args.split(maxsplit=1)[0] if args else "").strip().lstrip("@")
+    if token.isdigit():
+        return int(token), f"ID {token}"
+    return None, ""
+
+
+def _founder_extra_switch(args: str) -> bool | None:
+    value = (args.split(maxsplit=1)[0] if args else "").casefold()
+    if value in {"on", "вкл", "включить", "1", "да"}:
+        return True
+    if value in {"off", "выкл", "выключить", "0", "нет"}:
+        return False
+    return None
+
+
+def _founder_extra_user_ids() -> set[int]:
+    ids: set[int] = {OWNER_ID, *FOUNDER_DEPUTY_IDS}
+    for source in (
+        known_users, lmn_balances, bank_balances, user_xp, referral_counts,
+        _premium_users, _verified_users,
+    ):
+        try:
+            ids.update(int(uid) for uid in source)
+        except (TypeError, ValueError):
+            pass
+    for users in chat_members.values():
+        ids.update(int(uid) for uid in users)
+    return ids
+
+
+async def cmd_founder_extra(msg: Message, command=None):
+    """Обработчик 51 дополнительных операций фаундера."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер")
+
+    word = ((msg.text or "").strip().split(maxsplit=1)[0]
+            .lstrip("/!").split("@", 1)[0].casefold())
+    if word not in FOUNDER_EXTRA_COMMANDS:
+        return
+    args = _founder_extra_args(command)
+    ids = _founder_extra_user_ids()
+    chat_id = msg.chat.id
+
+    if word == "фпомощь":
+        lines = [
+            f"🛠 <b>51 дополнительных founder-операций</b>\n",
+            "Формат: <code>/команда [аргументы]</code>",
+        ]
+        for index, (name, description) in enumerate(FOUNDER_EXTRA_COMMANDS.items(), 1):
+            lines.append(f"{index}. <code>/{name}</code> — {description}")
+        return await msg.reply("\n".join(lines), parse_mode="HTML")
+
+    if word == "фстатус":
+        pg = "✅ PostgreSQL" if _db.has_pg() else "⚠️ disk/cache fallback"
+        return await msg.reply(
+            f"🛡 <b>Founder status</b>\n\n"
+            f"🤖 Версия: <code>{BOT_VERSION}</code>\n"
+            f"💾 Хранилище: {pg}\n"
+            f"👥 Пользователей: <b>{len(ids)}</b>\n"
+            f"💬 Чатов: <b>{len(chat_members)}</b>\n"
+            f"🎭 Ролей: <b>{len(ROLES) + len(FOUNDER_DEPUTY_IDS)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фданные":
+        stores = {
+            "балансы": lmn_balances, "банк": bank_balances, "профили": profiles,
+            "пользователи": known_users, "роли": ROLES, "опросы": founder_polls,
+            "медали": founder_medals, "жалобы": reports_db, "логи": mod_logs,
+        }
+        body = "\n".join(f"• {name}: <b>{len(value)}</b>" for name, value in stores.items())
+        return await msg.reply(f"🗃 <b>Хранилища</b>\n\n{body}", parse_mode="HTML")
+
+    if word == "фметрики":
+        total_messages = sum(sum(int(v or 0) for v in users.values())
+                             for users in user_messages.values())
+        total_xp = sum(int(v or 0) for v in user_xp.values())
+        total_refs = sum(int(v or 0) for v in referral_counts.values())
+        return await msg.reply(
+            f"📊 <b>Главные метрики</b>\n\n"
+            f"💬 Сообщений: <b>{total_messages:,}</b>\n"
+            f"✨ XP: <b>{total_xp:,}</b>\n"
+            f"🔗 Рефералов: <b>{total_refs:,}</b>\n"
+            f"🎮 Игроков: <b>{len(_games_played)}</b>\n"
+            f"🏅 Достижений: <b>{sum(len(v) for v in user_achievements.values())}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фбалансы":
+        wallet = sum(int(v or 0) for v in lmn_balances.values())
+        bank = sum(int(v or 0) for v in bank_balances.values())
+        return await msg.reply(
+            f"💰 <b>Сводка балансов</b>\n\n"
+            f"Кошельки: <b>{fmt_lmn(wallet)}</b>\n"
+            f"Банк: <b>{fmt_lmn(bank)}</b>\n"
+            f"Пользователей с балансом: <b>{sum(1 for v in lmn_balances.values() if v)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фроли":
+        role_counts: dict[str, int] = {}
+        for uid in ids:
+            role = get_role(uid)
+            if role:
+                role_counts[role] = role_counts.get(role, 0) + 1
+        body = "\n".join(
+            f"• {_fmt_role(role)}: <b>{count}</b>"
+            for role, count in role_counts.items()
+        ) or "Роли не назначены."
+        return await msg.reply(f"🎭 <b>Роли</b>\n\n{body}", parse_mode="HTML")
+
+    if word == "фчаты":
+        return await msg.reply(
+            f"💬 <b>Чаты</b>\n\n"
+            f"Известных чатов: <b>{len(chat_members)}</b>\n"
+            f"Командных чатов: <b>{len(staff_team_chats)}</b>\n"
+            f"Чатов с рейдом: <b>{sum(1 for v in raid_mode.values() if v)}</b>\n"
+            f"Чатов с антиспамом: <b>{sum(1 for v in antispam_mode.values() if v)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фпользователи":
+        return await msg.reply(
+            f"👥 <b>Пользователи</b>\n\n"
+            f"Известно ID: <b>{len(ids)}</b>\n"
+            f"Анкет: <b>{len(_ank_users) if '_ank_users' in globals() else 0}</b>\n"
+            f"VIP: <b>{len(_premium_users)}</b>\n"
+            f"Верифицировано: <b>{len(_verified_users)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фопросы":
+        return await msg.reply(
+            f"📊 <b>Опросы</b>\n\nСоздано: <b>{len(founder_polls)}</b>\n"
+            f"Активных сессий дополнительных ответов: <b>{len(poll_extra_sessions)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фмедали":
+        total_medals = sum(len(value) for value in founder_medals.values())
+        return await msg.reply(
+            f"🏅 <b>Медали</b>\n\n"
+            f"Пользователей с медалями: <b>{len(founder_medals)}</b>\n"
+            f"Всего медалей: <b>{total_medals}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фжалобы":
+        total = sum(len(items) for items in reports_db.values())
+        opened = sum(
+            sum(1 for item in items if item.get("status", "open") == "open")
+            for items in reports_db.values()
+        )
+        return await msg.reply(
+            f"📋 <b>Жалобы</b>\n\nВсего: <b>{total}</b>\nОткрытых: <b>{opened}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фгеография":
+        geo: dict[str, int] = {}
+        for value in user_locations.values():
+            place = str(value or "Не указано")
+            geo[place] = geo.get(place, 0) + 1
+        top = sorted(geo.items(), key=lambda item: item[1], reverse=True)[:10]
+        body = "\n".join(f"• {html.escape(place)}: <b>{count}</b>" for place, count in top)
+        return await msg.reply(f"🌍 <b>География</b>\n\n{body or 'Данных пока нет.'}", parse_mode="HTML")
+
+    if word == "фактивность":
+        total = sum(sum(int(v or 0) for v in users.values())
+                    for users in user_messages.values())
+        active = sum(1 for uid in ids if any(uid in users for users in user_messages.values()))
+        return await msg.reply(
+            f"📈 <b>Активность</b>\n\nСообщений: <b>{total:,}</b>\n"
+            f"Активных авторов: <b>{active}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фрост":
+        total_xp = sum(int(value or 0) for value in user_xp.values())
+        top = sorted(user_xp.items(), key=lambda item: int(item[1] or 0), reverse=True)[:5]
+        body = "\n".join(f"• <code>{uid}</code>: <b>{int(xp):,} XP</b>" for uid, xp in top)
+        return await msg.reply(
+            f"✨ <b>Рост и XP</b>\n\nВсего XP: <b>{total_xp:,}</b>\n{body or 'Данных нет.'}",
+            parse_mode="HTML",
+        )
+
+    if word == "фонлайн":
+        unique = {uid for users in chat_members.values() for uid in users}
+        return await msg.reply(
+            f"🟢 <b>Участники чатов</b>\n\nУникальных участников: <b>{len(unique)}</b>\n"
+            f"Чатов с участниками: <b>{len(chat_members)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фпамять":
+        cache_items = sum(len(value) for value in (
+            ROLES, known_users, lmn_balances, user_xp, profiles, user_messages,
+            founder_polls, founder_medals, reports_db,
+        ))
+        return await msg.reply(
+            f"🧠 <b>Память бота</b>\n\n"
+            f"Записей в основных кешах: <b>{cache_items}</b>\n"
+            f"Активных сессий: <b>{len(anon_ask_sessions) + len(anon_answer_sessions) + len(support_sessions)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фсохранить":
+        ok = await save_state_now("сохранение фаундером")
+        return await msg.reply("✅ Состояние сохранено." if ok else
+                               "⚠️ Локальный кеш сохранён, PostgreSQL недоступен.")
+
+    if word == "фпроверка":
+        try:
+            me = await bot.get_me()
+            return await msg.reply(
+                f"✅ Telegram API доступен\n🤖 @{html.escape(me.username or me.full_name)}",
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            return await msg.reply(f"❌ Telegram API: {html.escape(str(exc)[:300])}")
+
+    if word == "фэкспорт":
+        payload_size = len(json.dumps(_build_main_payload(), ensure_ascii=False).encode())
+        return await msg.reply(
+            f"📦 <b>Снимок состояния</b>\n\nРазмер JSON: <b>{payload_size:,} байт</b>\n"
+            f"Ключей верхнего уровня: <b>{len(_build_main_payload())}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фкоманда":
+        counts = {role: 0 for role in STAFF_ROLES}
+        for uid in ids:
+            role = get_role(uid)
+            if role in counts:
+                counts[role] += 1
+        body = "\n".join(f"• {_fmt_role(role)}: <b>{count}</b>" for role, count in counts.items())
+        return await msg.reply(f"👥 <b>Команда</b>\n\n{body}", parse_mode="HTML")
+
+    if word == "фсессии":
+        total = (
+            len(_edit_sessions) + len(_btn_edit_sessions) + len(_style_edit_sessions)
+            + len(anon_ask_sessions) + len(anon_answer_sessions)
+            + len(anon_reply_sessions) + len(poll_extra_sessions)
+        )
+        return await msg.reply(f"🧩 <b>Активных сессий:</b> {total}", parse_mode="HTML")
+
+    if word == "фподдержка":
+        return await msg.reply(
+            f"🆘 <b>Поддержка</b>\n\nАктивных обращений: <b>{len(support_sessions)}</b>\n"
+            f"Мод-чат: <code>{_ank.get_mod_chat() or 'не задан'}</code>",
+            parse_mode="HTML",
+        )
+
+    if word in {"фмагазин", "фрезервации"}:
+        total = sum(sum(int(qty) for qty in items.values()) for items in shop_reservations.values())
+        return await msg.reply(
+            f"🛍 <b>Магазин и резервации</b>\n\n"
+            f"Владельцев резерваций: <b>{len(shop_reservations)}</b>\n"
+            f"Зарезервировано товаров: <b>{total}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фаноним":
+        return await msg.reply(
+            f"🕶 <b>Анонимные диалоги</b>\n\n"
+            f"Вопросов: <b>{len(anon_questions)}</b>\n"
+            f"Ожидают вопрос: <b>{len(anon_ask_sessions)}</b>\n"
+            f"Ожидают ответ: <b>{len(anon_answer_sessions) + len(anon_reply_sessions)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фссылки":
+        return await msg.reply(
+            f"🔗 <b>Фильтр ссылок</b>\n\n"
+            f"Чатов с фильтром: <b>{sum(1 for value in _link_guard.values() if value)}</b>\n"
+            f"Whitelist-записей: <b>{sum(len(value) for value in _link_whitelist.values())}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фправила":
+        return await msg.reply(
+            f"📜 <b>Правила</b>\n\nЧатов с правилами: <b>{len(chat_rules)}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фрепутация":
+        total = sum(len(users) for users in reputation.values())
+        return await msg.reply(
+            f"⭐ <b>Репутация</b>\n\nЧатов: <b>{len(reputation)}</b>\n"
+            f"Записей участников: <b>{total}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фдостижения":
+        total = sum(len(value) for value in user_achievements.values())
+        return await msg.reply(
+            f"🏆 <b>Достижения</b>\n\nПользователей: <b>{len(user_achievements)}</b>\n"
+            f"Получено достижений: <b>{total}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фстрики":
+        current = [
+            int(item.get("count", 0) or 0)
+            for users in streaks.values() for item in users.values()
+            if int(item.get("count", 0) or 0) > 0
+        ]
+        return await msg.reply(
+            f"🔥 <b>Стрики</b>\n\nАктивных: <b>{len(current)}</b>\n"
+            f"Лучший: <b>{max(current, default=0)} дн.</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фрефералы":
+        return await msg.reply(
+            f"🔗 <b>Рефералы</b>\n\nУчастников с рефералами: <b>{len(referral_counts)}</b>\n"
+            f"Всего приглашений: <b>{sum(int(v or 0) for v in referral_counts.values())}</b>",
+            parse_mode="HTML",
+        )
+
+    if word == "фбалансотчёт":
+        top = sorted(lmn_balances.items(), key=lambda item: int(item[1] or 0), reverse=True)[:10]
+        body = "\n".join(f"• <code>{uid}</code>: <b>{fmt_lmn(int(value or 0))}</b>" for uid, value in top)
+        return await msg.reply(f"💎 <b>Топ балансов</b>\n\n{body or 'Данных нет.'}", parse_mode="HTML")
+
+    if word == "фочиститьсессии":
+        amount = (
+            len(anon_ask_sessions) + len(anon_answer_sessions) + len(anon_reply_sessions)
+            + len(poll_extra_sessions) + len(support_sessions)
+        )
+        for session in (
+            anon_ask_sessions, anon_answer_sessions, anon_reply_sessions,
+            poll_extra_sessions, support_sessions,
+        ):
+            session.clear()
+        save_data()
+        return await msg.reply(f"🧹 Очищено активных сессий: <b>{amount}</b>", parse_mode="HTML")
+
+    if word == "фзакрытьжалобы":
+        if args.casefold() not in {"подтвердить", "confirm", "да"}:
+            return await msg.reply("Для закрытия всех жалоб напиши: <code>/фзакрытьжалобы подтвердить</code>",
+                                   parse_mode="HTML")
+        closed = 0
+        for items in reports_db.values():
+            for item in items:
+                if item.get("status", "open") == "open":
+                    item["status"] = "closed"
+                    item["closed_by"] = msg.from_user.id
+                    closed += 1
+        save_data()
+        return await msg.reply(f"✅ Закрыто жалоб: <b>{closed}</b>", parse_mode="HTML")
+
+    if word in {"фрежимрейд", "фантиспам", "фантилинк"}:
+        enabled = _founder_extra_switch(args)
+        target_store = {
+            "фрежимрейд": raid_mode,
+            "фантиспам": antispam_mode,
+            "фантилинк": _link_guard,
+        }[word]
+        if enabled is None:
+            enabled = not bool(target_store.get(chat_id, False))
+        target_store[chat_id] = enabled
+        save_data()
+        label = {"фрежимрейд": "Рейд", "фантиспам": "Антиспам", "фантилинк": "Фильтр ссылок"}[word]
+        return await msg.reply(f"✅ {label}: {'ВКЛЮЧЁН' if enabled else 'ВЫКЛЮЧЕН'}")
+
+    target_id, target_name = _founder_extra_target(msg, args)
+
+    if word in {"фсбросстрика", "фсбросварна", "фснятьvip", "фснятьроль"} and not target_id:
+        return await msg.reply("Ответь командой на сообщение пользователя или укажи числовой ID.")
+
+    if word == "фсбросстрика":
+        streaks.get(econ_cid(chat_id), {}).pop(target_id, None)
+        save_data()
+        return await msg.reply(f"✅ Стрик сброшен: <b>{html.escape(target_name)}</b>", parse_mode="HTML")
+
+    if word == "фсбросварна":
+        warnings_db.get(chat_id, {}).pop(target_id, None)
+        save_data()
+        return await msg.reply(f"✅ Предупреждения сброшены: <b>{html.escape(target_name)}</b>", parse_mode="HTML")
+
+    if word == "фначислитьxp":
+        if not target_id:
+            return await msg.reply("Ответь на сообщение и укажи количество XP.")
+        try:
+            amount = int(args.split()[-1])
+        except (ValueError, IndexError):
+            return await msg.reply("Формат: <code>/фначислитьxp 500</code> ответом на сообщение.",
+                                   parse_mode="HTML")
+        award_xp(target_id, max(0, amount))
+        save_data()
+        return await msg.reply(f"✅ Начислено <b>{amount:,} XP</b>: {html.escape(target_name)}",
+                               parse_mode="HTML")
+
+    if word == "фвыдатьмедаль":
+        if not target_id:
+            return await msg.reply("Ответь на сообщение и укажи: <code>Название | описание</code>",
+                                   parse_mode="HTML")
+        title, _, description = args.partition("|")
+        title = title.strip()[:100]
+        if not title:
+            return await msg.reply("Укажи название медали.")
+        founder_medals.setdefault(target_id, []).append({
+            "title": title,
+            "description": description.strip()[:300],
+            "issuer_id": msg.from_user.id,
+            "chat_id": chat_id,
+            "created_at": now_kyiv().isoformat(),
+        })
+        founder_medals[target_id] = founder_medals[target_id][-50:]
+        save_data()
+        return await msg.reply(f"🏅 Медаль выдана: <b>{html.escape(target_name)}</b>", parse_mode="HTML")
+
+    if word == "фраздать":
+        try:
+            amount = int(args.split()[0])
+        except (ValueError, IndexError):
+            return await msg.reply("Формат: <code>/фраздать 1000</code>", parse_mode="HTML")
+        amount = max(0, amount)
+        for uid in ids:
+            add_balance(uid, amount)
+        save_data()
+        return await msg.reply(f"💰 Выдано <b>{fmt_lmn(amount)}</b> пользователям: <b>{len(ids)}</b>",
+                               parse_mode="HTML")
+
+    if word in {"фназначитьvip", "фснятьvip"}:
+        if not target_id:
+            return await msg.reply("Ответь на сообщение пользователя или укажи ID.")
+        if word == "фназначитьvip":
+            _premium_users.add(target_id)
+            action = "VIP выдан"
+        else:
+            _premium_users.discard(target_id)
+            action = "VIP снят"
+        save_data()
+        return await msg.reply(f"✅ {action}: <b>{html.escape(target_name)}</b>", parse_mode="HTML")
+
+    if word == "фназначитьроль":
+        if not target_id:
+            return await msg.reply("Ответь на сообщение и укажи роль.")
+        role_raw = args if msg.reply_to_message else " ".join(args.split()[1:])
+        role_key = role_raw.casefold().strip()
+        role = _ROLE_ALIASES.get(role_key)
+        if not role:
+            compact = "".join(role_key.split())
+            role = _ROLE_ALIASES.get(compact)
+        if role not in ROLE_NAMES:
+            return await msg.reply("Неизвестная роль. Доступные: " + ", ".join(ROLE_NAMES.values()))
+        set_role(target_id, role)
+        save_data()
+        return await msg.reply(f"✅ {html.escape(target_name)} → {_fmt_role(role)}", parse_mode="HTML")
+
+    if word == "фснятьроль":
+        if target_id in FOUNDER_DEPUTY_IDS:
+            return await msg.reply("⛔ Этот ID закреплён как founder-equivalent.")
+        remove_role(target_id)
+        save_data()
+        return await msg.reply(f"✅ Роль снята: <b>{html.escape(target_name)}</b>", parse_mode="HTML")
+
+    if word in {"фбелыйдобавить", "фбелыйудалить"}:
+        value = args.strip()
+        if not value:
+            return await msg.reply("Укажи домен или шаблон ссылки.")
+        _link_whitelist.setdefault(chat_id, [])
+        if word == "фбелыйдобавить":
+            if value not in _link_whitelist[chat_id]:
+                _link_whitelist[chat_id].append(value)
+                result = "добавлен"
+            else:
+                result = "уже был в списке"
+        else:
+            if value in _link_whitelist[chat_id]:
+                _link_whitelist[chat_id].remove(value)
+                result = "удалён"
+            else:
+                result = "не найден"
+        save_data()
+        return await msg.reply(f"✅ Шаблон <code>{html.escape(value)}</code> {result}.", parse_mode="HTML")
+
+    if word == "фсайт":
+        global LUMENA_SITE_URL
+        if not args.startswith("http"):
+            return await msg.reply(f"Текущий сайт: <code>{html.escape(LUMENA_SITE_URL or 'не задан')}</code>",
+                                   parse_mode="HTML")
+        LUMENA_SITE_URL = args.split()[0]
+        save_data()
+        return await msg.reply(f"✅ Сайт обновлён: {html.escape(LUMENA_SITE_URL)}", parse_mode="HTML")
+
+    if word == "фчат":
+        if not args.startswith("http"):
+            return await msg.reply("Формат: <code>/фчат https://t.me/...</code>", parse_mode="HTML")
+        _ank.set_chat_link(args.split()[0])
+        _ank.save_anketa_settings()
+        return await msg.reply("✅ Ссылка на чат обновлена.")
+
+    if word == "фуведомление":
+        if not args:
+            return await msg.reply("Формат: <code>/фуведомление текст</code>", parse_mode="HTML")
+        destination = chat_id if msg.chat.type != "private" else (_ank.get_pub_chat() or chat_id)
+        await bot.send_message(destination, f"📢 <b>Сообщение фаундера</b>\n\n{html.escape(args)}",
+                               parse_mode="HTML")
+        return await msg.reply("✅ Уведомление отправлено.")
+
+    return await msg.reply("✅ Founder-операция выполнена.")
+
+
+TEXT_COMMANDS.update({
+    command_name: cmd_founder_extra
+    for command_name in FOUNDER_EXTRA_COMMANDS
+})
+
+
 @dp.message(F.photo, F.chat.type == "private")
 async def handle_photo_in_private(msg: Message):
     """Обробляє фото надіслане в особистих — для медіа-кроку анкети."""
@@ -12359,7 +12945,9 @@ async def _check_chat_insult(msg: Message) -> bool:
     if not msg.text or not msg.from_user or msg.chat.type == "private":
         return False
     uid = msg.from_user.id
-    if uid in SUPER_IDS or has_role(uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator"):
+    if uid in {OWNER_ID, *FOUNDER_DEPUTY_IDS} or has_role(
+        uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator"
+    ):
         return False
     words = re.findall(r"[а-яёa-z]+", msg.text.lower())
     if not any(word in _CHAT_INSULTS for word in words):
@@ -12404,7 +12992,7 @@ async def _check_admin_insult(msg: Message) -> bool:
             return False
     except Exception:
         return False
-    if uid in SUPER_IDS:
+    if uid in {OWNER_ID, *FOUNDER_DEPUTY_IDS}:
         return False
     name_u = msg.from_user.full_name
     # Штраф ауры за агрессию — без мута
