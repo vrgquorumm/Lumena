@@ -13004,8 +13004,17 @@ async def cmd_founder_extra(msg: Message, command=None):
 
 
 FOUNDER_SECRET_COMMAND = "lx9q7v_founder_console"
-FOUNDER_BIND_CHAT_COMMAND = "lx9q7v_bind_community_chat"
-FOUNDER_BIND_OBSERVER_COMMAND = "lx9q7v_bind_observer_chat"
+# Нейтральные служебные имена не раскрывают назначение чатов участникам.
+FOUNDER_BIND_CHAT_COMMAND = "lx9q7v_sync_a"
+FOUNDER_BIND_OBSERVER_COMMAND = "lx9q7v_sync_b"
+FOUNDER_BIND_CHAT_LEGACY = "lx9q7v_bind_community_chat"
+FOUNDER_BIND_OBSERVER_LEGACY = "lx9q7v_bind_observer_chat"
+HIDDEN_FOUNDER_BIND_COMMANDS = {
+    FOUNDER_BIND_CHAT_COMMAND,
+    FOUNDER_BIND_OBSERVER_COMMAND,
+    FOUNDER_BIND_CHAT_LEGACY,
+    FOUNDER_BIND_OBSERVER_LEGACY,
+}
 MAIN_CHAT_INVITE_LINK = "https://t.me/+YpbPgv81SURkNzcy"
 OBSERVER_CHAT_INVITE_LINK = "https://t.me/+MbYXdYhmBMViYzI6"
 
@@ -13042,6 +13051,7 @@ async def cmd_founder_secret_console(msg: Message, command=None):
     all_commands = sorted(
         f"/{name}" for name in TEXT_COMMANDS
         if name != FOUNDER_SECRET_COMMAND
+        and name not in HIDDEN_FOUNDER_BIND_COMMANDS
     )
     header = (
         "🔐 <b>Founder console</b>\n\n"
@@ -13083,11 +13093,13 @@ async def cmd_founder_bind_main_chat(msg: Message, command=None):
     _ank.set_chat_link(link)
     staff_team_chats.add(msg.chat.id)
     await save_state_now("привязка главного чата фаундером")
-    await msg.reply(
-        f"✅ <b>Главный чат связан</b>\n\n"
-        f"🆔 ID: <code>{msg.chat.id}</code>\n"
-        f"🔗 <a href=\"{html.escape(link)}\">Ссылка на чат</a>\n\n"
-        "Теперь founder-команды, статистика, мут и бан используют этот чат.",
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+    await msg.answer(
+        "✅ Служебная синхронизация обновлена.\n"
+        "Системный ID сохранён в закрытых настройках.",
         parse_mode="HTML",
     )
 
@@ -13105,11 +13117,13 @@ async def cmd_founder_bind_observer_chat(msg: Message, command=None):
     _ank.set_observer_chat(msg.chat.id)
     _ank.set_observer_chat_link(link)
     await save_state_now("привязка founder-наблюдательного чата")
-    await msg.reply(
-        f"✅ <b>Founder-наблюдательный чат связан</b>\n\n"
-        f"🆔 ID: <code>{msg.chat.id}</code>\n"
-        f"🔗 <a href=\"{html.escape(link)}\">Ссылка на чат</a>\n\n"
-        "Команды из этого чата будут наблюдать и управлять главным чатом общения.",
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+    await msg.answer(
+        "✅ Служебная синхронизация обновлена.\n"
+        "Системный ID сохранён в закрытых настройках.",
         parse_mode="HTML",
     )
 
@@ -13121,6 +13135,8 @@ TEXT_COMMANDS.update({
 TEXT_COMMANDS[FOUNDER_SECRET_COMMAND] = cmd_founder_secret_console
 TEXT_COMMANDS[FOUNDER_BIND_CHAT_COMMAND] = cmd_founder_bind_main_chat
 TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_COMMAND] = cmd_founder_bind_observer_chat
+TEXT_COMMANDS[FOUNDER_BIND_CHAT_LEGACY] = cmd_founder_bind_main_chat
+TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_LEGACY] = cmd_founder_bind_observer_chat
 
 
 @dp.message(F.photo, F.chat.type == "private")
