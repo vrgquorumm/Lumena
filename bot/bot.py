@@ -35,6 +35,7 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
     ChatMemberUpdated,
+    User,
     BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats,
     BotCommandScopeDefault,
     InputMediaPhoto, InputMediaVideo,
@@ -1532,12 +1533,42 @@ async def get_user(msg: Message, command: CommandObject = None):
     if msg.reply_to_message:
         return msg.reply_to_message.from_user
     if command and command.args:
+        target_ref = command.args.split()[0].strip()
+        lookup_chat = _command_chat_id(msg) or msg.chat.id
+        uid = None
+        record = {}
+
+        if target_ref.lstrip("-").isdigit():
+            uid = int(target_ref)
+        elif target_ref.startswith("@"):
+            username = target_ref[1:].casefold()
+            for known_uid, known_record in _known_user_records().items():
+                if str(known_record.get("username", "")).lstrip("@").casefold() == username:
+                    uid = int(known_uid)
+                    record = known_record
+                    break
+
+        if uid is None:
+            return None
         try:
-            uid = int(command.args.split()[0])
-            lookup_chat = _command_chat_id(msg) or msg.chat.id
             member = await bot.get_chat_member(lookup_chat, uid)
             return member.user
-        except: return None
+        except Exception:
+            # Для удалённого управления из founder-чата Telegram может не
+            # вернуть участника через getChatMember. Используем безопасный
+            # локальный реестр, если пользователь уже был замечен ботом.
+            if not record:
+                record = _known_user_records().get(uid, {})
+            if not record and target_ref.startswith("@"):
+                return None
+            username = str(record.get("username", "")).lstrip("@")
+            full_name = str(record.get("full_name", "")).strip()
+            return User(
+                id=uid,
+                is_bot=False,
+                first_name=full_name or username or str(uid),
+                username=username or None,
+            )
     return None
 
 def parse_time(text: str) -> timedelta:
