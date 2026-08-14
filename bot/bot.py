@@ -176,6 +176,7 @@ user_xp:           dict[int, int]  = {}   # uid → XP
 user_messages:     dict[int, dict] = {}   # chat_id → {uid: count}
 daily_cooldown:    dict[int, str]  = {}   # uid → ISO-дата последнего дейли
 user_achievements: dict[int, list] = {}   # uid → [achievement_id, ...]
+founder_medals:    dict[int, list[dict]] = {}  # uid → [{title, description, ...}, ...]
 mod_logs:          dict[int, list] = {}   # chat_id → [{action,uid,by,ts}]
 reports_db:        dict[int, list] = {}   # chat_id → [{from_uid,target_uid,reason,ts}]
 referrals:         dict[int, int]  = {}   # uid → referrer_uid
@@ -376,6 +377,21 @@ def _build_main_payload() -> dict:
         "user_messages":     {str(c): {str(u): v for u, v in m.items()} for c, m in user_messages.items()},
         "daily_cooldown":    {str(u): v for u, v in daily_cooldown.items()},
         "user_achievements": {str(u): list(v) for u, v in user_achievements.items()},
+        "founder_medals": {
+            str(u): [
+                {
+                    "title": str(medal.get("title", ""))[:100],
+                    "description": str(medal.get("description", ""))[:300],
+                    "issuer_id": int(medal.get("issuer_id", OWNER_ID)),
+                    "chat_id": int(medal.get("chat_id", 0) or 0),
+                    "created_at": str(medal.get("created_at", ""))[:40],
+                }
+                for medal in medals[:50]
+                if isinstance(medal, dict) and str(medal.get("title", "")).strip()
+            ]
+            for u, medals in founder_medals.items()
+            if medals
+        },
         "mod_logs":          {str(c): v for c, v in mod_logs.items()},
         "reports_db":        {str(c): v for c, v in reports_db.items()},
         "staff_relations": {
@@ -4170,6 +4186,141 @@ async def cmd_givetoadmins(msg: Message):
         )
     except Exception as e: await msg.reply(f"❌ {e}")
 
+def _medal_help() -> str:
+    return (
+        "🏅 <b>Выдача медали</b>\n\n"
+        "Ответом на сообщение пользователя:\n"
+        "<code>/медалька Активный участник | За помощь команде</code>\n\n"
+        "Или по username:\n"
+        "<code>/медалька @username Активный участник | За помощь команде</code>"
+    )
+
+
+async def _resolve_medal_target(msg: Message, target_ref: str = ""):
+    """Возвращает (id, имя, username) для медали."""
+    replied = getattr(msg, "reply_to_message", None)
+    replied_user = getattr(replied, "from_user", None)
+    if replied_user and not target_ref:
+        return replied_user.id, replied_user.full_name, replied_user.username or ""
+
+    target_ref = target_ref.strip().lstrip("@")
+    if not target_ref:
+        return None
+    if target_ref.isdigit():
+        target_id = int(target_ref)
+        record = _known_user_records().get(target_id, {})
+        return (
+            target_id,
+            record.get("full_name") or f"ID {target_id}",
+            record.get("username", ""),
+        )
+
+    target_lower = target_ref.casefold()
+    for target_id, record in _known_user_records().items():
+        if str(record.get("username", "")).casefold() == target_lower:
+            return (
+                target_id,
+                record.get("full_name") or target_ref,
+                record.get("username", target_ref),
+            )
+
+    try:
+        target = await bot.get_chat(f"@{target_ref}")
+        return target.id, target.full_name or target_ref, target.username or target_ref
+    except Exception:
+        return None
+
+
+@dp.message(Command("медалька", "медальку", "medal"))
+async def cmd_founder_medal(msg: Message, command: CommandObject = None):
+    if not is_owner(msg):
+        return await msg.reply("⛔ Выдавать медали может только фаундер.")
+
+    raw_args = ((command.args if command else "") or "").strip()
+    replied_user = getattr(getattr(msg, "reply_to_message", None), "from_user", None)
+    if replied_user:
+        target = await _resolve_medal_target(msg)
+        medal_text = raw_args
+    else:
+        parts = raw_args.split(maxsplit=1)
+        if len(parts) < 2:
+            return await msg.reply(_medal_help(), parse_mode="HTML")
+        target = await _resolve_medal_target(msg, parts[0])
+        medal_text = parts[1].strip()
+
+    if not target:
+        return await msg.reply(
+            "❌ Не удалось найти пользователя. Ответь командой на его сообщение "
+            "или укажи корректный @username."
+        )
+
+    title, separator, description = medal_text.partition("|")
+    title = title.strip()[:100]
+    description = (
+        description.strip()[:300]
+        if separator
+        else "За вклад в развитие сообщества Lumena."
+    )
+    if not title:
+        return await msg.reply(
+            "❌ Укажи название медали.\n\n" + _medal_help(),
+            parse_mode="HTML",
+        )
+
+    target_id, target_name, target_username = target
+    medal = {
+        "title": title,
+        "description": description,
+        "issuer_id": msg.from_user.id,
+        "chat_id": msg.chat.id,
+        "created_at": now_kyiv().isoformat(timespec="seconds"),
+    }
+    founder_medals.setdefault(int(target_id), []).insert(0, medal)
+    founder_medals[int(target_id)] = founder_medals[int(target_id)][:50]
+    if target_name:
+        chat_members.setdefault(msg.chat.id, {})[int(target_id)] = target_name
+    schedule_state_save("выдача медали фаундером")
+
+    safe_name = html.escape(target_name or target_username or str(target_id))
+    mention = f'<a href="tg://user?id={target_id}">{safe_name}</a>'
+    await msg.reply(
+        f"🏅 Медаль <b>«{html.escape(title)}»</b> выдана {mention}!\n"
+        f"💬 {html.escape(description)}",
+        parse_mode="HTML",
+    )
+
+    try:
+        await bot.send_message(
+            int(target_id),
+            "🏅 <b>Тебе выдали медаль!</b>\n\n"
+            f"🎖 <b>{html.escape(title)}</b>\n"
+            f"💬 {html.escape(description)}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Пользователь мог ещё не открыть личный чат с ботом.
+        pass
+
+
+async def cmd_medals(msg: Message):
+    uid = msg.from_user.id
+    medals = founder_medals.get(uid, [])
+    if not medals:
+        return await msg.reply("🏅 У тебя пока нет медалей от фаундера.")
+
+    lines = [
+        f"{brand.hdr()}\n\n🏅 <b>Мои медали · "
+        f"{html.escape(msg.from_user.first_name or 'участник')}</b>\n\n{brand.div()}"
+    ]
+    for medal in medals:
+        lines.append(
+            f"🏅 <b>{html.escape(medal['title'])}</b>\n"
+            f"💬 {html.escape(medal.get('description', ''))}"
+        )
+    lines.append(f"\n{brand.div()}")
+    await msg.reply("\n\n".join(lines), parse_mode="HTML")
+
+
 async def cmd_award(msg: Message, command: CommandObject = None):
     """Фаундер даёт монеты юзеру по @username и пишет сообщение с упоминанием."""
     if not is_owner(msg):
@@ -7031,6 +7182,14 @@ async def cmd_achievements(msg: Message):
         check = "✅" if ach_id in earned else "🔒"
         style = f"<b>{title_}</b>" if ach_id in earned else f"<i>{title_}</i>"
         lines.append(f"{check} {icon} {style} — {desc}")
+    medals = founder_medals.get(uid, [])
+    if medals:
+        lines.append("\n🏅 <b>Медали от фаундера</b>")
+        for medal in medals:
+            lines.append(
+                f"🏅 <b>{html.escape(medal['title'])}</b> — "
+                f"{html.escape(medal.get('description', ''))}"
+            )
     lines.append(f"\n{brand.div()}\n✅ Получено: <b>{len(earned)}/{len(ACHIEVEMENT_INFO)}</b>")
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
@@ -11838,6 +11997,11 @@ TEXT_COMMANDS.update({
     "ранг":          cmd_rank,
     "топ":           cmd_top_xp,
     "достижения":    cmd_achievements,
+    "медаль":        cmd_medals,
+    "медали":        cmd_medals,
+    "медалька":      cmd_founder_medal,
+    "медальку":      cmd_founder_medal,
+    "medal":         cmd_founder_medal,
     "сообщения":     cmd_messages,
     "активность":    cmd_activity,
     # Ежедневные
@@ -13346,6 +13510,23 @@ def _apply_data(data: dict) -> None:
         daily_cooldown[int(u)] = str(v)
     for u, v in data.get("user_achievements", {}).items():
         user_achievements[int(u)] = list(v)
+    for u, medals in data.get("founder_medals", {}).items():
+        try:
+            clean_medals = []
+            for medal in medals[:50]:
+                if not isinstance(medal, dict) or not str(medal.get("title", "")).strip():
+                    continue
+                clean_medals.append({
+                    "title": str(medal.get("title", "")).strip()[:100],
+                    "description": str(medal.get("description", "")).strip()[:300],
+                    "issuer_id": int(medal.get("issuer_id", OWNER_ID)),
+                    "chat_id": int(medal.get("chat_id", 0) or 0),
+                    "created_at": str(medal.get("created_at", ""))[:40],
+                })
+            if clean_medals:
+                founder_medals[int(u)] = clean_medals
+        except (AttributeError, TypeError, ValueError):
+            pass
     for c, v in data.get("mod_logs", {}).items():
         mod_logs[int(c)] = list(v)
     for c, v in data.get("reports_db", {}).items():
