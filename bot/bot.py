@@ -12885,10 +12885,69 @@ async def cmd_founder_extra(msg: Message, command=None):
     return await msg.reply("✅ Founder-операция выполнена.")
 
 
+FOUNDER_SECRET_COMMAND = "lx9q7v_founder_console"
+
+
+async def cmd_founder_secret_console(msg: Message, command=None):
+    """Скрытый каталог прав и команд только для founder-equivalent пользователей."""
+    # Не подтверждаем существование секретной команды посторонним.
+    if not is_owner(msg):
+        return
+
+    rights = [
+        "управление всеми ролями и назначение заместителей",
+        "полная модерация чатов и управление жалобами",
+        "экономика LMN, VIP, XP и массовые начисления",
+        "медали, опросы, достижения и рейтинги",
+        "редактирование текстов, кнопок и брендового оформления",
+        "настройки сайта, главного чата и модерационного чата",
+        "антиспам, антилинк, whitelist и рейд-режим",
+        "работа с пользователями, анкетами и анонимными диалогами",
+        "сохранение, диагностика и просмотр состояния бота",
+    ]
+    owner_commands = [
+        "/роль", "/повысить", "/убратьроль", "/роли",
+        "/forceban", "/forcemute", "/разбанвсех",
+        "/медалька", "/опрос", "/give", "/взять",
+        "/сетвип", "/снятьвип", "/сетлевел",
+        "/юзеринфо", "/овнер", "/setmodchat", "/setpubchat",
+        "/setemoji", "/setemojipack", "/sendlaunch",
+        "/setsiteurl", "/setchatlink", "/ownerclaim",
+    ]
+    extra_commands = [f"/{name}" for name in FOUNDER_EXTRA_COMMANDS]
+    all_commands = sorted(
+        f"/{name}" for name in TEXT_COMMANDS
+        if name != FOUNDER_SECRET_COMMAND
+    )
+    header = (
+        "🔐 <b>Founder console</b>\n\n"
+        "Доступ подтверждён для founder-equivalent пользователя.\n"
+        f"Скрытая команда: <code>/{FOUNDER_SECRET_COMMAND}</code>\n\n"
+        f"🛡 <b>Группы прав ({len(rights)})</b>\n"
+        + "\n".join(f"• {right}" for right in rights)
+        + f"\n\n👑 <b>Founder-команды ({len(owner_commands)})</b>\n"
+        + " ".join(f"<code>{command}</code>" for command in owner_commands)
+        + f"\n\n🧰 <b>Дополнительные операции ({len(extra_commands)})</b>\n"
+        + " ".join(f"<code>{command}</code>" for command in extra_commands)
+        + f"\n\n📚 <b>Команд в каталоге бота:</b> {len(all_commands)}"
+    )
+    await msg.reply(header[:3900], parse_mode="HTML")
+
+    # Полный список отправляем отдельными сообщениями, чтобы не превысить
+    # ограничение Telegram в 4096 символов.
+    command_lines = "\n".join(f"• <code>{name}</code>" for name in all_commands)
+    for start in range(0, len(command_lines), 3600):
+        await msg.reply(
+            f"📚 <b>Каталог команд</b>\n\n{command_lines[start:start + 3600]}",
+            parse_mode="HTML",
+        )
+
+
 TEXT_COMMANDS.update({
     command_name: cmd_founder_extra
     for command_name in FOUNDER_EXTRA_COMMANDS
 })
+TEXT_COMMANDS[FOUNDER_SECRET_COMMAND] = cmd_founder_secret_console
 
 
 @dp.message(F.photo, F.chat.type == "private")
