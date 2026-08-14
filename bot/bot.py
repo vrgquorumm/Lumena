@@ -183,6 +183,7 @@ daily_cooldown:    dict[int, str]  = {}   # uid → ISO-дата последн�
 user_achievements: dict[int, list] = {}   # uid → [achievement_id, ...]
 founder_medals:    dict[int, list[dict]] = {}  # uid → [{title, description, ...}, ...]
 mod_logs:          dict[int, list] = {}   # chat_id → [{action,uid,by,ts}]
+soft_mutes:        dict[int, dict[int, str]] = {}  # chat_id → uid → expiry ISO
 reports_db:        dict[int, list] = {}   # chat_id → [{from_uid,target_uid,reason,ts}]
 referrals:         dict[int, int]  = {}   # uid → referrer_uid
 referral_counts:   dict[int, int]  = {}   # uid → кол-во приглашённых
@@ -398,6 +399,11 @@ def _build_main_payload() -> dict:
             if medals
         },
         "mod_logs":          {str(c): v for c, v in mod_logs.items()},
+        "soft_mutes":        {
+            str(c): {str(u): str(until) for u, until in users.items()}
+            for c, users in soft_mutes.items()
+            if users
+        },
         "reports_db":        {str(c): v for c, v in reports_db.items()},
         "staff_relations": {
             str(c): {
@@ -1756,6 +1762,82 @@ async def _demote_if_needed(chat_id: int, user_id: int):
                         user_id, chat_id, error)
         return False, str(error)
 
+
+def _soft_mute_until(chat_id: int, user_id: int) -> datetime | None:
+    raw = soft_mutes.get(int(chat_id), {}).get(int(user_id))
+    if not raw:
+        return None
+    try:
+        until = datetime.fromisoformat(str(raw))
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=KYIV_TZ)
+        else:
+            until = until.astimezone(KYIV_TZ)
+    except (TypeError, ValueError):
+        soft_mutes.get(int(chat_id), {}).pop(int(user_id), None)
+        return None
+    if until <= now_kyiv():
+        soft_mutes.get(int(chat_id), {}).pop(int(user_id), None)
+        if not soft_mutes.get(int(chat_id)):
+            soft_mutes.pop(int(chat_id), None)
+        return None
+    return until
+
+
+async def _mute_or_soft_mute(
+    chat_id: int,
+    user_id: int,
+    until: datetime,
+) -> tuple[bool, bool, str]:
+    """Мутит обычного участника или включает soft-mute для администратора."""
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        if member.status == ChatMemberStatus.CREATOR:
+            return False, False, "создателя чата нельзя ограничить"
+        if member.status == ChatMemberStatus.ADMINISTRATOR:
+            soft_mutes.setdefault(int(chat_id), {})[int(user_id)] = until.isoformat()
+            schedule_state_save("мягкий мут администратора")
+            return True, True, ""
+        await bot.restrict_chat_member(
+            chat_id,
+            user_id,
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until,
+        )
+        return True, False, ""
+    except Exception as error:
+        return False, False, str(error)
+
+
+def _clear_soft_mute(chat_id: int, user_id: int) -> bool:
+    users = soft_mutes.get(int(chat_id), {})
+    removed = int(user_id) in users
+    users.pop(int(user_id), None)
+    if not users:
+        soft_mutes.pop(int(chat_id), None)
+    if removed:
+        schedule_state_save("снятие мягкого мута")
+    return removed
+
+
+async def _enforce_soft_mute(event: Message) -> bool:
+    """Удаляет сообщения администратора с активным soft-mute."""
+    if not event.chat or event.chat.type == "private" or not event.from_user:
+        return False
+    until = _soft_mute_until(event.chat.id, event.from_user.id)
+    if not until:
+        return False
+    try:
+        await event.delete()
+    except Exception as error:
+        logging.warning(
+            "Не удалось удалить сообщение soft-mute uid=%s chat=%s: %s",
+            event.from_user.id,
+            event.chat.id,
+            error,
+        )
+    return True
+
 # ── Премиум-карточки ────────────────────────────────────
 _LMN_HDR = "🖤  L U M E N A  🖤"  # plain fallback для legacy-мест
 _LMN_DIV = "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
@@ -2601,9 +2683,13 @@ async def cmd_mute(msg: Message, command: CommandObject):
     title = f"Мут ♾ навсегда" if is_perma else f"Мут 🔇 на {dur_str}"
     extra = None if is_perma else f"⏰ До {until.strftime('%d.%m.%Y %H:%M')}"
     try:
-        await bot.restrict_chat_member(chat_id, user.id,
-            permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        _log_mod(chat_id, "mute", user.id, msg.from_user.id)
+        muted, soft, mute_error = await _mute_or_soft_mute(chat_id, user.id, until)
+        if not muted:
+            raise RuntimeError(mute_error)
+        if soft:
+            title = f"Мягкий мут 🔇 на {dur_str}"
+            extra = "Сообщения администратора будут удаляться автоматически"
+        _log_mod(chat_id, "soft_mute" if soft else "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(title, user, reason=reason, extra=extra),
             parse_mode="HTML")
@@ -2637,12 +2723,20 @@ async def cmd_mute1(msg: Message, command: CommandObject):
     until = now_kyiv() + delta
     _, reason = parse_time_and_reason(command.args or "")
     try:
-        await bot.restrict_chat_member(chat_id, user.id,
-            permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        _log_mod(chat_id, "mute", user.id, msg.from_user.id)
+        muted, soft, mute_error = await _mute_or_soft_mute(chat_id, user.id, until)
+        if not muted:
+            raise RuntimeError(mute_error)
+        _log_mod(chat_id, "soft_mute" if soft else "mute", user.id, msg.from_user.id)
         await msg.reply(
-            mod_card("Мут 🔇 на 1 мин", user, reason=reason,
-                     extra=f"⏰ До {until.strftime('%H:%M')}"),
+            mod_card(
+                "Мягкий мут 🔇 на 1 мин" if soft else "Мут 🔇 на 1 мин",
+                user,
+                reason=reason,
+                extra=(
+                    "Сообщения администратора будут удаляться автоматически"
+                    if soft else f"⏰ До {until.strftime('%H:%M')}"
+                ),
+            ),
             parse_mode="HTML")
     except Exception as e:
         await msg.reply(f"❌ {e}")
@@ -2655,9 +2749,19 @@ async def cmd_unmute(msg: Message, command: CommandObject):
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
     try:
-        await bot.restrict_chat_member(chat_id, user.id,
-            permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True,
-                can_send_other_messages=True, can_add_web_page_previews=True))
+        if _clear_soft_mute(chat_id, user.id):
+            _log_mod(chat_id, "unmute", user.id, msg.from_user.id)
+            return await msg.reply(mod_card("Мягкий мут снят 🔊", user), parse_mode="HTML")
+        await bot.restrict_chat_member(
+            chat_id,
+            user.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            ),
+        )
         _log_mod(chat_id, "unmute", user.id, msg.from_user.id)
         await msg.reply(mod_card("Размучен 🔊", user), parse_mode="HTML")
     except Exception as e: await msg.reply(f"❌ {e}")
@@ -2718,22 +2822,20 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
-    try:
-        await bot.promote_chat_member(chat_id, user.id, can_manage_chat=False,
-            can_delete_messages=False, can_manage_video_chats=False,
-            can_restrict_members=False, can_promote_members=False,
-            can_change_info=False, can_invite_users=False, can_pin_messages=False)
-    except: pass
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
     dur_str  = _fmt_duration(delta)
     is_perma = delta.days >= 365
     title    = "Принудительный мут ♾ навсегда 🔇" if is_perma else f"Принудительный мут 🔇 на {dur_str}"
-    extra2   = "⚠️ Права сняты" if is_perma else f"⚠️ Права сняты · До {until.strftime('%d.%m.%Y %H:%M')}"
+    extra2   = None if is_perma else f"До {until.strftime('%d.%m.%Y %H:%M')}"
     try:
-        await bot.restrict_chat_member(chat_id, user.id,
-            permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        _log_mod(chat_id, "mute", user.id, msg.from_user.id)
+        muted, soft, mute_error = await _mute_or_soft_mute(chat_id, user.id, until)
+        if not muted:
+            raise RuntimeError(mute_error)
+        if soft:
+            title = "Принудительный мягкий мут 🔇" if is_perma else f"Принудительный мягкий мут 🔇 на {dur_str}"
+            extra2 = "Сообщения администратора будут удаляться автоматически"
+        _log_mod(chat_id, "soft_mute" if soft else "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(title, user, extra=extra2, reason=reason),
             parse_mode="HTML")
@@ -10206,6 +10308,8 @@ class PropagandaMiddleware(BaseMiddleware):
             if "first_message" not in user_achievements.get(_uid_mw, []):
                 user_achievements.setdefault(_uid_mw, []).append("first_message")
             award_xp(_uid_mw, random.randint(1, 5))
+            if await _enforce_soft_mute(event):
+                return
             # Автоматический аудит отношений: считаем только явные ответы
             # сотрудника сотруднику, чтобы обычные сообщения не превращались
             # в ложные обвинения. Полный текст в состояние не сохраняем.
@@ -13525,26 +13629,31 @@ async def _founder_apply_user_mod(
                 raise RuntimeError("Неизвестная длительность мута")
             delta, duration_label = duration_data
             until = now_kyiv() + delta
-            await bot.restrict_chat_member(
-                target_chat,
-                uid,
-                permissions=ChatPermissions(can_send_messages=False),
-                until_date=until,
+            muted, soft, mute_error = await _mute_or_soft_mute(
+                target_chat, uid, until
             )
-            title = f"Мут 🔇 на {duration_label}"
-            log_action = "mute"
+            if not muted:
+                raise RuntimeError(mute_error)
+            title = (
+                f"Мягкий мут 🔇 на {duration_label}"
+                if soft else f"Мут 🔇 на {duration_label}"
+            )
+            log_action = "soft_mute" if soft else "mute"
         elif action == "unmute":
-            await bot.restrict_chat_member(
-                target_chat,
-                uid,
-                permissions=ChatPermissions(
-                    can_send_messages=True,
-                    can_send_media_messages=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                ),
-            )
-            title = "Размучен 🔊"
+            if _clear_soft_mute(target_chat, uid):
+                title = "Мягкий мут снят 🔊"
+            else:
+                await bot.restrict_chat_member(
+                    target_chat,
+                    uid,
+                    permissions=ChatPermissions(
+                        can_send_messages=True,
+                        can_send_media_messages=True,
+                        can_send_other_messages=True,
+                        can_add_web_page_previews=True,
+                    ),
+                )
+                title = "Размучен 🔊"
             log_action = "unmute"
         elif action == "ban":
             if is_owner(cb):
@@ -15056,6 +15165,17 @@ def _apply_data(data: dict) -> None:
             pass
     for c, v in data.get("mod_logs", {}).items():
         mod_logs[int(c)] = list(v)
+    for c, users in data.get("soft_mutes", {}).items():
+        try:
+            clean = {
+                int(uid): str(until)
+                for uid, until in (users or {}).items()
+                if str(until).strip()
+            }
+            if clean:
+                soft_mutes[int(c)] = clean
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректный soft-mute для chat=%s пропущен", c)
     for c, v in data.get("reports_db", {}).items():
         reports_db[int(c)] = list(v)
     for c, pairs in data.get("staff_relations", {}).items():
