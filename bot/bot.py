@@ -3268,8 +3268,15 @@ async def cmd_forcemarry(msg: Message, command: CommandObject):
 @dp.callback_query(F.data.startswith("mar_"))
 async def marry_callback(cb: CallbackQuery):
     parts = cb.data.split("_")
+    if len(parts) != 3 or parts[0] != "mar" or parts[1] not in {"y", "n"}:
+        return await cb.answer("Некорректное предложение", show_alert=True)
+    try:
+        proposer_id = int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректное предложение", show_alert=True)
+    if proposer_id <= 0 or not cb.message:
+        return await cb.answer("Предложение недоступно", show_alert=True)
     action = parts[1]
-    proposer_id = int(parts[2])
     chat_id = cb.message.chat.id
     target_id = cb.from_user.id
 
@@ -4163,8 +4170,13 @@ async def cmd_cook(msg: Message):
 
 @dp.callback_query(F.data.startswith("ckpick:"))
 async def cb_cook_pick(cb: CallbackQuery):
-    _, uid_s, idx_s = cb.data.split(":")
-    uid, idx = int(uid_s), int(idx_s)
+    parts = cb.data.split(":")
+    if len(parts) != 3:
+        return await cb.answer("Некорректная кнопка готовки", show_alert=True)
+    try:
+        uid, idx = int(parts[1]), int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка готовки", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоё блюдо!", show_alert=True)
     session = _cook_sessions.get(uid)
@@ -4196,7 +4208,13 @@ async def cb_cook_pick(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ckcancel:"))
 async def cb_cook_cancel(cb: CallbackQuery):
-    uid = int(cb.data.split(":")[1])
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка готовки", show_alert=True)
+    try:
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка готовки", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоё блюдо!", show_alert=True)
     _cook_sessions.pop(uid, None)
@@ -4206,7 +4224,13 @@ async def cb_cook_cancel(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ckgo:"))
 async def cb_cook_go(cb: CallbackQuery):
-    uid = int(cb.data.split(":")[1])
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка готовки", show_alert=True)
+    try:
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка готовки", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоё блюдо!", show_alert=True)
     session = _cook_sessions.pop(uid, None)
@@ -8234,7 +8258,12 @@ async def cmd_crash(msg: Message, command: CommandObject = None):
 @dp.callback_query(F.data.startswith("crash:out:"))
 async def cb_crash_out(cb: CallbackQuery):
     parts = cb.data.split(":")
-    uid   = int(parts[2])
+    if len(parts) != 3 or parts[0] != "crash" or parts[1] != "out":
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
+    try:
+        uid = int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя игра!", show_alert=True)
     game = _crash_games.pop(uid, None)
@@ -8330,7 +8359,13 @@ async def cmd_blackjack(msg: Message, command: CommandObject = None):
 @dp.callback_query(F.data.startswith("bj:"))
 async def cb_bj(cb: CallbackQuery):
     parts  = cb.data.split(":")
-    action = parts[1]; uid = int(parts[2])
+    if len(parts) != 3 or parts[1] not in {"hit", "stand"}:
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
+    try:
+        uid = int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
+    action = parts[1]
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя игра!", show_alert=True)
     game = _bj_games.get(uid)
@@ -8428,10 +8463,23 @@ async def cmd_mines(msg: Message, command: CommandObject = None):
 @dp.callback_query(F.data.startswith("mines:"))
 async def cb_mines(cb: CallbackQuery):
     parts  = cb.data.split(":")
+    if len(parts) < 2:
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
     action = parts[1]
     if action == "noop":
+        if len(parts) != 2:
+            return await cb.answer("Некорректная кнопка игры", show_alert=True)
         return await cb.answer()
-    uid = int(parts[2])
+    if action == "cashout" and len(parts) != 3:
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
+    if action == "click" and len(parts) != 4:
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
+    if action not in {"cashout", "click"}:
+        return await cb.answer("Неизвестное действие", show_alert=True)
+    try:
+        uid = int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка игры", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя игра!", show_alert=True)
     game = _mines_games.get(uid)
@@ -8452,7 +8500,10 @@ async def cb_mines(cb: CallbackQuery):
         )
         return await cb.answer(f"+{fmt_lmn(winnings)}!")
     if action == "click":
-        idx = int(parts[3])
+        try:
+            idx = int(parts[3])
+        except (TypeError, ValueError):
+            return await cb.answer("Неверная клетка!", show_alert=True)
         total_cells = _MINES_SIZE * _MINES_SIZE
         # защита от невалидного индекса (подделанный callback)
         if not (0 <= idx < total_cells):
@@ -9166,7 +9217,10 @@ async def cmd_owner_panel(msg: Message):
 async def cb_owner(cb: CallbackQuery):
     if not is_owner(cb): return await cb.answer("⛔ Только фаундер", show_alert=True)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data="owner:back")]])
-    sec = cb.data.split(":", 1)[1]
+    parts = cb.data.split(":")
+    if len(parts) != 2 or not parts[1]:
+        return await cb.answer("Некорректный раздел", show_alert=True)
+    sec = parts[1]
     if sec == "users":
         total = len({uid for m in chat_members.values() for uid in m})
         vips  = len([uid for uid, r in ROLES.items() if r == "vip"])
@@ -9748,7 +9802,10 @@ _HELP_SECTIONS = {
 
 @dp.callback_query(F.data.startswith("help:"))
 async def cb_help_nav(cb: CallbackQuery):
-    section = cb.data.split(":", 1)[1]
+    parts = cb.data.split(":")
+    if len(parts) != 2 or not parts[1]:
+        return await cb.answer("Некорректный раздел", show_alert=True)
+    section = parts[1]
     if section == "menu":
         await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
@@ -10647,6 +10704,24 @@ dp.message.middleware(PropagandaMiddleware())
 # ═══════════════════════════════════════════════════════
 # АНКЕТИ — CALLBACKS МОДЕРАЦІЇ
 # ═══════════════════════════════════════════════════════
+_ANKETA_MODERATOR_ROLES = (
+    "founder_deputy", "lead_admin", "co_admin", "admin", "moderator",
+)
+
+
+def _is_anketa_moderator_callback(cb: CallbackQuery) -> bool:
+    """Разрешает moderation callbacks только из настроенного мод-чата."""
+    if not cb.message or not cb.from_user:
+        return False
+    try:
+        mod_chat = int(_ank.get_mod_chat())
+    except (TypeError, ValueError):
+        return False
+    if cb.message.chat.id != mod_chat:
+        return False
+    return is_owner(cb) or has_role(cb.from_user.id, *_ANKETA_MODERATOR_ROLES)
+
+
 @dp.callback_query(F.data.startswith("anon_answer:"))
 async def cb_anon_answer(cb: CallbackQuery):
     qid = cb.data.split(":", 1)[1]
@@ -10739,7 +10814,7 @@ async def cb_anon_ask_cancel(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("ank_lang:"))
 async def cb_ank_lang(cb: CallbackQuery):
     """Вибір мови анкети."""
-    if cb.message.chat.type != "private":
+    if not cb.message or cb.message.chat.type != "private":
         return await cb.answer()
     await _ank.handle_lang_select(bot, cb)
 
@@ -10747,7 +10822,13 @@ async def cb_ank_lang(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("ank_media_done:"))
 async def cb_ank_media_done(cb: CallbackQuery):
     """Юзер натиснув «Готово» — завершуємо збір медіа і відправляємо анкету."""
-    uid = int(cb.data.split(":", 1)[1])
+    try:
+        parts = cb.data.split(":")
+        if len(parts) != 2:
+            raise ValueError
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
     session = _ank._sessions.get(uid)
@@ -10761,7 +10842,13 @@ async def cb_ank_media_done(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("ank_media_skip:"))
 async def cb_ank_media_skip(cb: CallbackQuery):
     """Юзер натиснув «Без медіа» — відправляємо анкету без фото/відео."""
-    uid = int(cb.data.split(":", 1)[1])
+    try:
+        parts = cb.data.split(":")
+        if len(parts) != 2:
+            raise ValueError
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
     session = _ank._sessions.get(uid)
@@ -10775,7 +10862,12 @@ async def cb_ank_media_skip(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ank_ok:"))
 async def cb_ank_accept(cb: CallbackQuery):
-    app_id = cb.data.split(":", 1)[1]
+    if not _is_anketa_moderator_callback(cb):
+        return await cb.answer("⛔ Только модераторы анкеты", show_alert=True)
+    parts = cb.data.split(":")
+    if len(parts) != 2 or not parts[1]:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    app_id = parts[1]
     app = _ank._pending.get(app_id)
     if not app:
         return await cb.answer("Заявка не найдена или уже обработана", show_alert=True)
@@ -10905,7 +10997,12 @@ async def cb_ank_accept(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ank_no:"))
 async def cb_ank_reject(cb: CallbackQuery):
-    app_id = cb.data.split(":", 1)[1]
+    if not _is_anketa_moderator_callback(cb):
+        return await cb.answer("⛔ Только модераторы анкеты", show_alert=True)
+    parts = cb.data.split(":")
+    if len(parts) != 2 or not parts[1]:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    app_id = parts[1]
     app = _ank._pending.get(app_id)
     if not app:
         return await cb.answer("Заявка не найдена или уже обработана", show_alert=True)
@@ -10942,9 +11039,13 @@ async def cb_ank_reject(cb: CallbackQuery):
 async def cb_ank_react(cb: CallbackQuery):
     """Обробляє натискання ❤️ або 👎 під анкетою в паблік-чаті."""
     parts = cb.data.split(":")          # ["ank_r", "h"/"d", owner_uid]
-    if len(parts) != 3:
-        return await cb.answer()
-    rtype, owner_uid = parts[1], int(parts[2])
+    if len(parts) != 3 or parts[1] not in {"h", "d"}:
+        return await cb.answer("Некорректная реакция", show_alert=True)
+    try:
+        owner_uid = int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная реакция", show_alert=True)
+    rtype = parts[1]
 
     reactor     = cb.from_user
     reactor_uid = reactor.id
@@ -10989,8 +11090,11 @@ async def cb_ank_mutual(cb: CallbackQuery):
     """Власник натискає 'Відповісти взаємністю' — бот розкриває ім'я лайкера."""
     parts = cb.data.split(":")          # ["ank_mutual", reactor_uid, owner_uid]
     if len(parts) != 3:
-        return await cb.answer()
-    reactor_uid, owner_uid = int(parts[1]), int(parts[2])
+        return await cb.answer("Некорректная кнопка", show_alert=True)
+    try:
+        reactor_uid, owner_uid = int(parts[1]), int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка", show_alert=True)
 
     if cb.from_user.id != owner_uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
@@ -11037,7 +11141,12 @@ async def cb_ank_mutual(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ank_cm:"))
 async def cb_ank_mod_comment(cb: CallbackQuery):
-    app_id = cb.data.split(":", 1)[1]
+    if not _is_anketa_moderator_callback(cb):
+        return await cb.answer("⛔ Только модераторы анкеты", show_alert=True)
+    parts = cb.data.split(":")
+    if len(parts) != 2 or not parts[1]:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    app_id = parts[1]
     app = _ank._pending.get(app_id)
     if not app:
         return await cb.answer("Заявка не найдена", show_alert=True)
@@ -11053,7 +11162,13 @@ async def cb_ank_mod_comment(cb: CallbackQuery):
 # ─── Кнопки юзера: видалити / редагувати свою анкету ───
 @dp.callback_query(F.data.startswith("ank_start:"))
 async def cb_ank_start_private(cb: CallbackQuery):
-    uid = int(cb.data.split(":", 1)[1])
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    try:
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не для тебя", show_alert=True)
     status = _ank.get_user_status(uid)
@@ -11076,7 +11191,13 @@ async def cb_ank_start_private(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ank_mycard:"))
 async def cb_ank_mycard_private(cb: CallbackQuery):
-    uid = int(cb.data.split(":", 1)[1])
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    try:
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
     status = _ank.get_user_status(uid)
@@ -11133,7 +11254,13 @@ async def cb_ank_mycard_private(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ank_del:"))
 async def cb_ank_delete(cb: CallbackQuery):
-    uid = int(cb.data.split(":", 1)[1])
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    try:
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
 
@@ -11179,7 +11306,13 @@ async def cb_ank_delete(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ank_edit:"))
 async def cb_ank_user_edit(cb: CallbackQuery):
-    uid = int(cb.data.split(":", 1)[1])
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
+    try:
+        uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не твоя анкета", show_alert=True)
 
