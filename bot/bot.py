@@ -8907,21 +8907,57 @@ async def cmd_chatstats(msg: Message):
             chat_title = linked_chat.title or chat_title
         except Exception:
             pass
-    lines = [
-        f"{brand.hdr()}\n\n📊 <b>Статистика · {_html.escape(chat_title)}</b>\n\n{brand.div()}",
-        f"👥 Участников: <b>{tg_cnt:,}</b>",
-        f"💬 Сообщений: <b>{msgs_cnt:,}</b>",
-        f"✨ XP в чате: <b>{sum(user_xp.get(u, 0) for u in all_members):,}</b>",
-        f"💍 Браков: <b>{marr_cnt}</b>",
-    ]
-    if top_lines:
-        lines.append("\n🏆 Топ активных:")
-        lines.extend(top_lines)
+    today_str  = today_kyiv().isoformat()
+    msgs_today = sum(
+        (daily_msg_cnt.get(u) or {}).get("count", 0)
+        for u in all_members
+        if (daily_msg_cnt.get(u) or {}).get("date") == today_str
+    )
+    wrote_today = sum(
+        1 for u in all_members
+        if (daily_msg_cnt.get(u) or {}).get("date") == today_str
+        and (daily_msg_cnt.get(u) or {}).get("count", 0) > 0
+    )
+    avg_per_user = (msgs_cnt / tg_cnt) if tg_cnt else 0
+
+    top_rows = "".join(
+        f"<tr><td>👤 {_html.escape(all_members.get(uid_t) or f'ID {uid_t}')}</td><td>{cnt:,}</td></tr>"
+        for uid_t, cnt in top_act
+    )
+
+    rich_html = (
+        f"<h1>📊 {_html.escape(chat_title)}</h1>"
+        f"<p>📅 <b>{today_str}</b> (Киев)</p>"
+        "<hr>"
+        "<h2>💬 Сообщения</h2>"
+        "<table>"
+        "<tr><th>Метрика</th><th>Значение</th></tr>"
+        f"<tr><td>Сегодня</td><td>{msgs_today:,}</td></tr>"
+        f"<tr><td>Всего</td><td>{msgs_cnt:,}</td></tr>"
+        "</table>"
+        "<h2>👥 Участники</h2>"
+        "<table>"
+        "<tr><th>Метрика</th><th>Значение</th></tr>"
+        f"<tr><td>Писали сегодня</td><td>{wrote_today}</td></tr>"
+        f"<tr><td>Всего зарег.</td><td>{tg_cnt:,}</td></tr>"
+        f"<tr><td>Браков</td><td>{marr_cnt}</td></tr>"
+        f"<tr><td>Среднее сообщ./чел.</td><td>{avg_per_user:.1f}</td></tr>"
+        "</table>"
+    )
+    if top_rows:
+        rich_html += (
+            "<h2>🏆 Топ активных</h2>"
+            "<table><tr><th>Участник</th><th>Сообщений</th></tr>"
+            f"{top_rows}</table>"
+        )
     if rich_line:
-        lines.append(rich_line)
-    lines.extend(_chat_geo_lines(all_members, tg_cnt))
-    lines.append(f"\n{brand.div()}")
-    await msg.reply("\n".join(lines), parse_mode="HTML")
+        rn = _html.escape(all_members.get(rich[1]) or f"ID {rich[1]}")
+        rich_html += f"<h2>💰 Богатейший</h2><p><b>{rn}</b> · {fmt_lmn(rich[0])}</p>"
+    geo_extra = _chat_geo_lines(all_members, tg_cnt)
+    if geo_extra:
+        rich_html += "<hr>" + "".join(f"<p>{_html.escape(l.strip())}</p>" for l in geo_extra if l.strip())
+
+    await msg.reply(rich_html, parse_mode="HTML")
 
 async def cmd_online(msg: Message):
     if msg.chat.type == "private" and not is_owner(msg):
