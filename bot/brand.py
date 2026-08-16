@@ -337,6 +337,18 @@ def crown() -> str:
     return e("crown", "👑")
 
 
+def quote(text: str, expandable: bool = False) -> str:
+    """Премиальная HTML-цитата (Bot API blockquote), опционально сворачиваемая."""
+    tag = 'blockquote expandable="true"' if expandable else "blockquote"
+    close = "blockquote"
+    return f"<{tag}>{text}</{close}>"
+
+
+def spoiler(text: str) -> str:
+    """Скрытый спойлер-текст (Bot API tg-spoiler)."""
+    return f"<tg-spoiler>{text}</tg-spoiler>"
+
+
 def set_pack(ids: list[str], name: str = "") -> None:
     """Устанавливает emoji пак по списку ID."""
     global _pack_ids, _pack_name
