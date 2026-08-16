@@ -1056,16 +1056,17 @@ async def fetch_bot_data_from_github(path: str = "data/bot_data.json") -> bytes 
 
     token = os.getenv("GITHUB_TOKEN", "")
     repo  = os.getenv("GITHUB_REPO", "vrgquorumm/Lumena")
-    if not token:
-        return None
 
     git_path = f"bot/{path}"
     api_url  = f"https://api.github.com/repos/{repo}/contents/{git_path}"
     headers  = {
-        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    # Репозиторий публичный — работает и без токена; если GITHUB_TOKEN задан,
+    # используем его (выше лимиты запросов).
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(api_url, headers=headers) as r:
