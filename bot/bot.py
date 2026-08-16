@@ -11797,6 +11797,7 @@ def _editor_style_kb() -> InlineKeyboardMarkup:
             text=f"{status} {df['desc']}: {cur[:20]}",
             callback_data=f"editor:style_edit:{key}",
         )])
+    rows.append([InlineKeyboardButton(text="✨ Сбросить всё к премиуму", callback_data="editor:style_reset_all")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -12261,6 +12262,33 @@ async def cb_editor_style(cb: CallbackQuery):
         reply_markup=_editor_style_kb(),
     )
     await cb.answer()
+
+
+@dp.callback_query(F.data == "editor:style_reset_all")
+async def cb_editor_style_reset_all(cb: CallbackQuery):
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    brand.reset_all_styles()
+    brand.reset_all_buttons()
+    saved = await brand.persist_brand_now()
+    lines = ["🎨 <b>Оформление бота</b>\n",
+             "✨ Все стили и кнопки сброшены к премиальным дефолтам\n",
+             "✅ — изменено   ⬜ — стандартное\n"]
+    for key, df in brand.STYLE_DEFS.items():
+        status = "✅" if brand.is_style_customized(key) else "⬜"
+        cur    = html.escape(brand.get_style(key))
+        lines.append(f"  {status} <b>{html.escape(df['desc'])}</b>: <code>{cur}</code>")
+    lines.append(f"\n{brand.div()}")
+    lines.append(f"Заголовок: {brand.hdr()}")
+    await cb.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=_editor_style_kb(),
+    )
+    await cb.answer(
+        "✨ Сброшено к премиуму!" if saved else "⚠️ Сохранено локально: PostgreSQL недоступен",
+        show_alert=True,
+    )
 
 
 @dp.callback_query(F.data.startswith("editor:style_edit:"))
