@@ -4182,7 +4182,7 @@ async def cb_cook_pick(cb: CallbackQuery):
     session = _cook_sessions.get(uid)
     if not session:
         return await cb.answer("Сессия готовки не найдена", show_alert=True)
-    if idx in session["picked"] or idx >= len(session["options"]):
+    if idx in session["picked"] or not (0 <= idx < len(session["options"])):
         return await cb.answer()
     session["picked"].append(idx)
 
@@ -12422,11 +12422,13 @@ async def cb_editor_cat(cb: CallbackQuery):
         return await cb.answer("⛔", show_alert=True)
     try:
         parts   = cb.data.split(":")
+        if len(parts) not in (3, 4):
+            raise ValueError
         cat_idx = int(parts[2])
         page    = int(parts[3]) if len(parts) > 3 else 0
     except (ValueError, IndexError):
         return await cb.answer("Ошибка", show_alert=True)
-    if cat_idx >= len(_EDITOR_TEXT_CATEGORIES):
+    if not (0 <= cat_idx < len(_EDITOR_TEXT_CATEGORIES)):
         return await cb.answer("Ошибка", show_alert=True)
 
     cat_name, keys = _EDITOR_TEXT_CATEGORIES[cat_idx]
@@ -14254,13 +14256,16 @@ async def cb_founder_users(cb: CallbackQuery):
         try:
             page = int(parts[2])
         except (TypeError, ValueError):
-            page = 0
+            return await cb.answer("Некорректная страница", show_alert=True)
         await cb.message.edit_text(
             _founder_users_page_text(page),
             parse_mode="HTML",
             reply_markup=_founder_users_page_kb(page),
         )
         return await cb.answer()
+
+    if action == "page":
+        return await cb.answer("Некорректная страница", show_alert=True)
 
     if action in {"mod", "duration", "applymute", "askban", "confirmban", "cancel"}:
         try:
