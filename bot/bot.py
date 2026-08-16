@@ -85,6 +85,74 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # ═══════════════════════════════════════════════════════
+# ГЛОБАЛЬНЫЙ ПЕРЕХОД НА BOT API 10.1 RICH MESSAGES
+# ═══════════════════════════════════════════════════════
+# Вместо переписывания всех ~420 обработчиков вручную — один перехватчик на
+# уровне Bot.__call__: каждый исходящий SendMessage/EditMessageText с текстом
+# прозрачно превращается в SendRichMessage / EditMessageText(rich_message=...),
+# сохраняя тот же HTML (Rich Messages — надмножество обычного HTML-форматирования:
+# <b>/<i>/<code>/<a> и т.п. продолжают работать, плюс становятся доступны
+# <h1-h3>, <table>, чек-листы, <details>, LaTeX в markdown-режиме).
+# Кастомные тексты фаундера (entities вместо HTML) конвертируются через
+# html_decoration.unparse(). При любой ошибке — тихий откат на обычную отправку,
+# чтобы бот никогда не переставал отвечать из-за экспериментального формата.
+from aiogram.methods import SendMessage, EditMessageText, SendRichMessage
+from aiogram.types import InputRichMessage
+from aiogram.utils.text_decorations import html_decoration
+
+_orig_bot_call = Bot.__call__
+
+
+def _to_rich_html(text: str | None, entities, parse_mode) -> str | None:
+    if not text or not text.strip():
+        return None
+    if entities:
+        try:
+            return html_decoration.unparse(text, entities)
+        except Exception:
+            return None
+    if parse_mode not in ("HTML", None):
+        return None  # Markdown/MarkdownV2 — не конвертируем, шлём как раньше
+    return text
+
+
+async def _rich_patched_call(self, method, request_timeout=None):
+    try:
+        if isinstance(method, SendMessage):
+            html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
+            if html_text:
+                rich_method = SendRichMessage(
+                    chat_id=method.chat_id,
+                    rich_message=InputRichMessage(html=html_text),
+                    business_connection_id=method.business_connection_id,
+                    message_thread_id=method.message_thread_id,
+                    direct_messages_topic_id=method.direct_messages_topic_id,
+                    disable_notification=method.disable_notification,
+                    protect_content=method.protect_content,
+                    allow_paid_broadcast=method.allow_paid_broadcast,
+                    message_effect_id=method.message_effect_id,
+                    suggested_post_parameters=method.suggested_post_parameters,
+                    reply_parameters=method.reply_parameters,
+                    reply_markup=method.reply_markup,
+                )
+                return await _orig_bot_call(self, rich_method, request_timeout)
+        elif isinstance(method, EditMessageText) and not method.rich_message:
+            html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
+            if html_text:
+                method = method.model_copy(update={
+                    "rich_message": InputRichMessage(html=html_text),
+                    "text": None,
+                    "entities": None,
+                    "parse_mode": None,
+                })
+    except Exception as ex:
+        print(f"⚠️ rich-message перехват не удался, отправляю как обычно: {ex}")
+    return await _orig_bot_call(self, method, request_timeout)
+
+
+Bot.__call__ = _rich_patched_call
+
+# ═══════════════════════════════════════════════════════
 # ХРАНИЛИЩА ДАННЫХ
 # ═══════════════════════════════════════════════════════
 warnings_db = {}
