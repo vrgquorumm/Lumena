@@ -49,12 +49,18 @@ ON CONFLICT (key) DO UPDATE
 
 def _make_ssl(url: str) -> "ssl.SSLContext | bool | None":
     """Повертає SSL-налаштування для asyncpg.
-    Використовує системний CA з перевіркою сертифіката і hostname.
+
+    Railway (як внутрішній railway.internal, так і публічний *.proxy.rlwy.net)
+    термінує TLS самопідписаним сертифікатом, тому повна перевірка ланцюжка/
+    hostname тут завжди провалюється ("self-signed certificate in certificate
+    chain"). З'єднання лишається зашифрованим, просто без перевірки CA.
     """
     if "sslmode=disable" in url:
         return None
-    # Стандартний контекст з повною перевіркою (hostname + ланцюжок сертифікатів)
-    return ssl.create_default_context()
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 async def init_db() -> bool:
