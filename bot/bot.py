@@ -12280,11 +12280,15 @@ async def cb_editor_style_reset_all(cb: CallbackQuery):
         lines.append(f"  {status} <b>{html.escape(df['desc'])}</b>: <code>{cur}</code>")
     lines.append(f"\n{brand.div()}")
     lines.append(f"Заголовок: {brand.hdr()}")
-    await cb.message.edit_text(
-        "\n".join(lines),
-        parse_mode="HTML",
-        reply_markup=_editor_style_kb(),
-    )
+    try:
+        await cb.message.edit_text(
+            "\n".join(lines),
+            parse_mode="HTML",
+            reply_markup=_editor_style_kb(),
+        )
+    except TelegramAPIError as ex:
+        if "message is not modified" not in str(ex).lower():
+            raise
     await cb.answer(
         "✨ Сброшено к премиуму!" if saved else "⚠️ Сохранено локально: PostgreSQL недоступен",
         show_alert=True,
