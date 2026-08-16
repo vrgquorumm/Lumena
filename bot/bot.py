@@ -6674,6 +6674,41 @@ async def cmd_settitle(msg: Message, command: CommandObject = None):
     schedule_state_save("обновление звания")
     await msg.reply("✅ Звание установлено!")
 
+async def cmd_force_restore(msg: Message):
+    """Владелец: принудительно подтягивает bot_data.json с GitHub и сразу
+    записывает его в PostgreSQL, минуя обычный порядок восстановления при
+    старте. Нужна как аварийная кнопка, если Postgres пустой (свежая БД) или
+    локальный старт стартовал «с нуля»."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только для владельца")
+    await msg.reply("📥 Тяну bot_data.json с GitHub...")
+    raw = await brand.fetch_bot_data_from_github()
+    if not raw or len(raw) < 10:
+        return await msg.reply("❌ Не удалось получить файл с GitHub (пустой ответ)")
+    try:
+        payload = json.loads(raw)
+    except Exception as ex:
+        return await msg.reply(f"❌ Битый JSON: {ex}")
+
+    with open(DATA_FILE, "w", encoding="utf-8") as _f:
+        json.dump(payload, _f, ensure_ascii=False)
+    load_data()
+
+    pg_status = "не подключён"
+    if _db.has_pg():
+        ok = await _db.db_set("bot_data", _build_main_payload())
+        pg_status = "записано ✅" if ok else "запись не подтверждена ⚠️"
+
+    total_lmn = sum(lmn_balances.values()) + sum(bank_balances.values())
+    marr_total = sum(1 for c in marriages.values() for u, p in c.items() if c.get(p) == u) // 2
+    await msg.reply(
+        f"✅ Данные загружены из GitHub и применены локально.\n"
+        f"💰 LMN в системе: <b>{fmt_lmn(total_lmn)}</b>\n"
+        f"💍 Пар в браке: <b>{marr_total}</b>\n"
+        f"🗄 PostgreSQL: {pg_status}",
+        parse_mode="HTML",
+    )
+
 async def cmd_botstats(msg: Message):
     import html as _html
 
@@ -10240,6 +10275,7 @@ TEXT_COMMANDS.update({
     "кто я": cmd_whois, "кто это": cmd_whois, "whois": cmd_whois, "досье": cmd_whois,
     "профиль": cmd_profile, "айди": cmd_myid, "инфочат": cmd_chatinfo,
     "статистика": cmd_botstats, "пинг": cmd_ping, "версия": cmd_version,
+    "форсрестор": cmd_force_restore, "восстановитьданные": cmd_force_restore,
     "інфо": cmd_info, "инфо": cmd_info, "info": cmd_info,
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
     "правила": cmd_rules, "сетправила": cmd_setrules,
@@ -10307,6 +10343,7 @@ for slash_name, func in [
     ("whois", cmd_whois),
     ("profile", cmd_profile), ("myid", cmd_myid), ("chatinfo", cmd_chatinfo),
     ("ping", cmd_ping), ("version", cmd_version), ("botstats", cmd_botstats),
+    ("forcerestore", cmd_force_restore),
     ("setbio", cmd_setbio), ("settitle", cmd_settitle),
     # Правила (без декоратора)
     ("rules", cmd_rules), ("setrules", cmd_setrules), ("announce", cmd_announce),
