@@ -349,6 +349,27 @@ def spoiler(text: str) -> str:
     return f"<tg-spoiler>{text}</tg-spoiler>"
 
 
+def underline(text: str) -> str:
+    """Подчёркнутый текст."""
+    return f"<u>{text}</u>"
+
+
+def strike(text: str) -> str:
+    """Зачёркнутый текст."""
+    return f"<s>{text}</s>"
+
+
+def code(text: str) -> str:
+    """Инлайн-код (моноширинный, для чисел/id/значений)."""
+    return f"<code>{text}</code>"
+
+
+def code_block(text: str, lang: str = "") -> str:
+    """Блок кода (Bot API pre + language)."""
+    lang_attr = f' class="language-{lang}"' if lang else ""
+    return f"<pre{lang_attr}>{text}</pre>"
+
+
 def set_pack(ids: list[str], name: str = "") -> None:
     """Устанавливает emoji пак по списку ID."""
     global _pack_ids, _pack_name
