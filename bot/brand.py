@@ -198,6 +198,16 @@ def reset_style(key: str) -> None:
     _custom_style.pop(key, None)
 
 
+def reset_all_styles() -> None:
+    """Сбрасывает ВСЕ кастомные стили — возвращает премиальные дефолты из STYLE_DEFS."""
+    _custom_style.clear()
+
+
+def reset_all_buttons() -> None:
+    """Сбрасывает ВСЕ кастомные кнопки — возвращает премиальные дефолты из BUTTON_DEFS."""
+    _custom_buttons.clear()
+
+
 def all_custom_styles() -> dict:
     return dict(_custom_style)
 
@@ -292,7 +302,7 @@ def get_role_id(role: str) -> str | None:
 def hdr() -> str:
     """Заголовок  EM  НАЗВАНИЕ  EM."""
     em   = e("header")
-    name = _custom_style.get("header_text") or "L U M E N A"
+    name = get_style("header_text")
     return f"{em}  {name}  {em}"
 
 
@@ -300,10 +310,10 @@ def div(n: int | None = None) -> str:
     """Разделитель из n символов (n=None → берёт из настроек divider_count)."""
     if n is None:
         try:
-            n = max(3, min(30, int(_custom_style.get("divider_count") or 10)))
+            n = max(3, min(30, int(get_style("divider_count") or 10)))
         except (ValueError, TypeError):
             n = 10
-    ch = _custom_style.get("divider_char") or e("divider", "▬")
+    ch = get_style("divider_char")
     return ch * n
 
 
