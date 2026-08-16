@@ -11801,6 +11801,20 @@ def _editor_main_menu_kb() -> InlineKeyboardMarkup:
     ])
 
 
+async def send_rich_message(chat_id: int, *, html: str | None = None, markdown: str | None = None) -> dict:
+    """Отправка Rich Message (Bot API 10.1) — таблицы, чек-листы, заголовки, LaTeX, цитаты.
+    aiogram ещё не имеет типизированного метода sendRichMessage, поэтому зовём Bot API напрямую."""
+    rich_message: dict = {}
+    if html is not None:
+        rich_message["html"] = html
+    if markdown is not None:
+        rich_message["markdown"] = markdown
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendRichMessage"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json={"chat_id": chat_id, "rich_message": rich_message}) as resp:
+            return await resp.json()
+
+
 def _editor_style_kb() -> InlineKeyboardMarkup:
     """Список редактируемых параметров оформления."""
     rows = []
@@ -11812,6 +11826,7 @@ def _editor_style_kb() -> InlineKeyboardMarkup:
             callback_data=f"editor:style_edit:{key}",
         )])
     rows.append([InlineKeyboardButton(text="✨ Сбросить всё к премиуму", callback_data="editor:style_reset_all")])
+    rows.append([InlineKeyboardButton(text="📊 Rich-отчёт (таблицы/чек-листы)", callback_data="editor:style_rich_demo")])
     rows.append([InlineKeyboardButton(text="📰 Новости Telegram для ботов", url="https://t.me/BotNews")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -12314,6 +12329,52 @@ async def cb_editor_style_reset_all(cb: CallbackQuery):
         print(f"⚠️ cb_editor_style_reset_all: {ex}")
         try:
             await cb.message.answer(f"⚠️ Ошибка сброса: {ex}")
+        except Exception:
+            pass
+
+
+@dp.callback_query(F.data == "editor:style_rich_demo")
+async def cb_editor_style_rich_demo(cb: CallbackQuery):
+    if not is_owner(cb):
+        return await cb.answer("⛔", show_alert=True)
+    await cb.answer("📊 Собираю rich-отчёт...")
+    try:
+        total_users     = len(user_xp)
+        total_lmn       = sum(lmn_balances.values()) + sum(bank_balances.values())
+        total_marriages = sum(len(m) for m in marriages.values()) // 2
+        top_uid, top_xp = max(user_xp.items(), key=lambda kv: kv[1], default=(None, 0))
+        top_name = f"ID {top_uid}" if top_uid else "—"
+
+        rich_html = (
+            "<h1>✨ Lumena — Rich-отчёт</h1>"
+            "<p>Живая сводка по экономике и сообществу, собранная через "
+            "<b>Bot API 10.1 Rich Messages</b>.</p>"
+            "<hr>"
+            "<h2>📊 Ключевые метрики</h2>"
+            "<table>"
+            "<tr><th>Показатель</th><th>Значение</th></tr>"
+            f"<tr><td>Пользователей с XP</td><td>{total_users}</td></tr>"
+            f"<tr><td>LMN в обороте</td><td>{total_lmn}</td></tr>"
+            f"<tr><td>Пар в браке</td><td>{total_marriages}</td></tr>"
+            f"<tr><td>Лидер по XP</td><td>{top_name} ({top_xp} XP)</td></tr>"
+            "</table>"
+            "<h2>🗺 Дорожная карта оформления</h2>"
+            "<ul type=\"checklist\">"
+            "<li checked>Премиальный стиль (заголовки, разделители, эмодзи)</li>"
+            "<li checked>Меню команд и описание бота в Telegram</li>"
+            "<li checked>Rich-форматирование: таблицы, заголовки, чек-листы</li>"
+            "<li>Карты и медиаколлажи (нужны координаты/файлы — по запросу)</li>"
+            "</ul>"
+            "<blockquote>Rich Messages — новый формат Bot API 10.1, "
+            "поддерживается напрямую через sendRichMessage.</blockquote>"
+        )
+        result = await send_rich_message(cb.from_user.id, html=rich_html)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("description", "unknown error"))
+    except Exception as ex:
+        print(f"⚠️ cb_editor_style_rich_demo: {ex}")
+        try:
+            await cb.message.answer(f"⚠️ Rich-отчёт не отправлен: {ex}")
         except Exception:
             pass
 
