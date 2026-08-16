@@ -14061,6 +14061,51 @@ async def cmd_founder_users(msg: Message, command=None):
     )
 
 
+@dp.message(Command("allbalances"))
+async def cmd_all_balances(msg: Message, command: CommandObject = None):
+    """Founder-команда: показывает кошелёк + банк всех известных пользователей."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер и заместитель фаундера")
+
+    uids = set(lmn_balances.keys()) | set(bank_balances.keys())
+    if not uids:
+        return await msg.answer("Пока нет данных о балансах.")
+
+    rows = []
+    for uid in uids:
+        wallet = int(lmn_balances.get(uid, 0) or 0)
+        bank = int(bank_balances.get(uid, 0) or 0)
+        rows.append((uid, wallet, bank, wallet + bank))
+    rows.sort(key=lambda r: r[3], reverse=True)
+
+    total_wallet = sum(r[1] for r in rows)
+    total_bank = sum(r[2] for r in rows)
+
+    lines = [
+        "🖤 ✨ <b>L U M E N A</b> ✨ 🖤",
+        "🏦 <b>Балансы всех пользователей</b>\n",
+    ]
+    for uid, wallet, bank, total in rows:
+        info = known_users.get(uid, {})
+        name = info.get("full_name") or info.get("username") or str(uid)
+        if info.get("username"):
+            name = f"{name} (@{info['username']})"
+        crown = "👑 " if uid == OWNER_ID else ""
+        lines.append(
+            f"{crown}<b>{name}</b> [<code>{uid}</code>]\n"
+            f"    💳 {fmt_lmn(wallet)} · 🏦 {fmt_lmn(bank)} · Σ {fmt_lmn(total)} LMN"
+        )
+
+    lines.append(
+        f"\n📊 <b>Итого:</b> кошельки {fmt_lmn(total_wallet)} LMN · "
+        f"банки {fmt_lmn(total_bank)} LMN · всего {fmt_lmn(total_wallet + total_bank)} LMN"
+    )
+
+    text = "\n".join(lines)
+    for i in range(0, len(text), 3900):
+        await msg.answer(text[i:i + 3900], parse_mode="HTML")
+
+
 @dp.callback_query(F.data.startswith("founder_users:"))
 async def cb_founder_users(cb: CallbackQuery):
     """Навигация по founder-списку пользователей."""
