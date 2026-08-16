@@ -99,6 +99,7 @@ dp = Dispatcher()
 from aiogram.methods import SendMessage, EditMessageText, SendRichMessage
 from aiogram.types import InputRichMessage
 from aiogram.utils.text_decorations import html_decoration
+from aiogram.client.default import Default
 
 _orig_bot_call = Bot.__call__
 
@@ -116,6 +117,13 @@ def _to_rich_html(text: str | None, entities, parse_mode) -> str | None:
     return text
 
 
+def _no_default(v):
+    """aiogram's Default(...) sentinel ('use bot session default') fails strict
+    pydantic bool|None validation on SendRichMessage's fields — drop it to None
+    and let normal default-resolution apply at request build time instead."""
+    return None if isinstance(v, Default) else v
+
+
 async def _rich_patched_call(self, method, request_timeout=None):
     try:
         if isinstance(method, SendMessage):
@@ -127,9 +135,9 @@ async def _rich_patched_call(self, method, request_timeout=None):
                     business_connection_id=method.business_connection_id,
                     message_thread_id=method.message_thread_id,
                     direct_messages_topic_id=method.direct_messages_topic_id,
-                    disable_notification=method.disable_notification,
-                    protect_content=method.protect_content,
-                    allow_paid_broadcast=method.allow_paid_broadcast,
+                    disable_notification=_no_default(method.disable_notification),
+                    protect_content=_no_default(method.protect_content),
+                    allow_paid_broadcast=_no_default(method.allow_paid_broadcast),
                     message_effect_id=method.message_effect_id,
                     suggested_post_parameters=method.suggested_post_parameters,
                     reply_parameters=method.reply_parameters,
