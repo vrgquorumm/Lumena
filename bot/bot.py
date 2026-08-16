@@ -6530,6 +6530,11 @@ async def cmd_chatinfo(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML")
 
+@dp.message(Command("profile"))
+async def _cmd_profile_slash(msg: Message):
+    await cmd_profile(msg)
+
+
 async def cmd_profile(msg: Message):
     target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
     uid = target.id
@@ -7653,6 +7658,11 @@ async def cmd_rank(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML"
     )
+
+@dp.message(Command("top"))
+async def _cmd_top_slash(msg: Message):
+    await cmd_top_xp(msg)
+
 
 async def cmd_top_xp(msg: Message):
     if msg.chat.type == "private":
@@ -9324,6 +9334,11 @@ _HELP_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="✦ 📢 Канал ✦",    url="https://t.me/lmnfff"),
     ],
 ])
+
+@dp.message(Command("help"))
+async def _cmd_help_slash(msg: Message):
+    await cmd_help(msg)
+
 
 async def cmd_help(msg: Message):
     await msg.reply(
@@ -15053,6 +15068,41 @@ async def main():
         print("✅ Webhook сброшен — polling запускается как единственный инстанс")
     except Exception as _whe:
         logging.warning(f"delete_webhook: {_whe}")
+
+    # ── Премиальная витрина бота в Telegram ──────────────────────────
+    # Меню команд, описание в пустом чате, короткое описание в профиле
+    # и кнопка меню — то, что Telegram Bot API официально даёт разработчикам.
+    try:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="✨ Открыть Lumena"),
+                BotCommand(command="profile", description="👑 Мой профиль"),
+                BotCommand(command="help", description="📖 Все команды"),
+                BotCommand(command="settings", description="🎨 Настройки и оформление"),
+                BotCommand(command="top", description="⭐ Топ участников"),
+                BotCommand(command="shop", description="💎 Магазин"),
+            ],
+            scope=BotCommandScopeAllPrivateChats(),
+        )
+        await bot.set_my_commands(
+            [
+                BotCommand(command="profile", description="👑 Мой профиль"),
+                BotCommand(command="top", description="⭐ Топ участников"),
+                BotCommand(command="help", description="📖 Все команды"),
+            ],
+            scope=BotCommandScopeAllGroupChats(),
+        )
+        await bot.set_my_description(
+            "✨ L U M E N A ✨\n\n"
+            "Премиальный опыт для твоего сообщества: экономика, роли, магазин, "
+            "медали и живая модерация — всё в одном боте."
+        )
+        await bot.set_my_short_description(
+            "✨ Lumena — премиальный бот для сообществ Telegram"
+        )
+        print("✅ Премиальная витрина Telegram обновлена (команды, описание)")
+    except Exception as _showcase_ex:
+        logging.warning(f"premium showcase setup: {_showcase_ex}")
 
     # Цикл перезапуска polling — при любом сбое сети/API бот сам восстанавливається
     retry_delay = 5
