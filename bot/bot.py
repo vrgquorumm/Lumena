@@ -3482,11 +3482,10 @@ async def cmd_marriages(msg: Message):
     if not pairs and not pending:
         return await msg.reply("💍 В этом чате пока нет браков")
 
-    lines = [f"{brand.hdr()}\n"]
+    rich_html = f"<h1>💍 Браки чата</h1><p>Пар: <b>{len(pairs)}</b></p><hr>"
 
     if pairs:
-        lines.append(f"💍 Браки чата  ({len(pairs)} пар)")
-        lines.append(brand.div())
+        pair_rows = ""
         for i, (u1, u2) in enumerate(pairs, 1):
             n1, n2 = f"ID {u1}", f"ID {u2}"
             try:
@@ -3505,27 +3504,37 @@ async def cmd_marriages(msg: Message):
             try:
                 wed = date.fromisoformat(marriage_dates[pair_key])
                 days_together = (today_kyiv() - wed).days
-                days_str = f" · {days_together} дн. вместе 💑"
+                days_str = f"{days_together} дн."
             except Exception:
-                days_str = ""
-            lines.append(f"{i}. 💕 <b>{_html.escape(n1)}</b> ❤️ <b>{_html.escape(n2)}</b>{days_str}")
+                days_str = "—"
+            pair_rows += (
+                f"<tr><td>{i}. {_html.escape(n1)} ❤️ {_html.escape(n2)}</td>"
+                f"<td>{days_str}</td></tr>"
+            )
+        rich_html += (
+            "<h2>💕 Пары</h2><table>"
+            "<tr><th>Пара</th><th>Вместе</th></tr>"
+            f"{pair_rows}</table>"
+        )
 
     if pending:
-        if pairs:
-            lines.append("")
-        lines.append("⏳ Ожидают ответа:")
+        pend_rows = ""
         for prop_id, tgt_id, prop_name in pending:
             tgt_name = f"ID {tgt_id}"
             try:
                 tm = await bot.get_chat_member(msg.chat.id, tgt_id)
                 tgt_name = tm.user.full_name
             except: pass
-            lines.append(
-                f"  💌 <b>{_html.escape(prop_name)}</b> → <b>{_html.escape(tgt_name)}</b>"
+            pend_rows += (
+                f"<tr><td>{_html.escape(prop_name)}</td><td>{_html.escape(tgt_name)}</td></tr>"
             )
+        rich_html += (
+            "<h2>⏳ Ожидают ответа</h2><table>"
+            "<tr><th>От кого</th><th>Кому</th></tr>"
+            f"{pend_rows}</table>"
+        )
 
-    lines.append(f"\n{brand.div()}")
-    await msg.reply("\n".join(lines), parse_mode="HTML")
+    await msg.reply(rich_html, parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════
 # СТРИКИ
@@ -8980,15 +8989,19 @@ async def cmd_online(msg: Message):
         return await msg.reply("📊 Нет данных об активности")
     top   = sorted(all_msgs.items(), key=lambda x: x[1], reverse=True)[:15]
     total = sum(all_msgs.values())
-    lines = [f"{brand.hdr()}\n\n📊 <b>Топ активных участников</b>\n\n{brand.div()}"]
     medals = ["🥇", "🥈", "🥉"] + ["👤"] * 12
+    rows = ""
     for i, (uid_t, cnt) in enumerate(top):
         nm  = html.escape(all_members.get(uid_t) or f"ID {uid_t}")
         pct = cnt / total * 100 if total else 0
-        bar = "█" * min(int(pct / 5), 10)
-        lines.append(f"{medals[i]} <b>{nm}</b> — {cnt:,} ({pct:.0f}%) {bar}")
-    lines.append(f"\n{brand.div()}\n💬 Всего сообщений: <b>{total:,}</b>")
-    await msg.reply("\n".join(lines), parse_mode="HTML")
+        rows += f"<tr><td>{medals[i]} {nm}</td><td>{cnt:,}</td><td>{pct:.0f}%</td></tr>"
+    rich_html = (
+        "<h1>📊 Топ активных участников</h1><hr>"
+        "<table><tr><th>Участник</th><th>Сообщ.</th><th>%</th></tr>"
+        f"{rows}</table>"
+        f"<p>💬 Всего сообщений: <b>{total:,}</b></p>"
+    )
+    await msg.reply(rich_html, parse_mode="HTML")
 
 async def cmd_analytics(msg: Message):
     target_chat = _founder_main_chat_id(msg) if is_owner(msg) else None
@@ -9009,13 +9022,14 @@ async def cmd_analytics(msg: Message):
             for u in all_members
         )
         await msg.reply(
-            f"{brand.hdr()}\n\n📊 <b>{title}</b>\n\n{brand.div()}\n"
-            f"👥 Участников в базе: <b>{len(all_members):,}</b>\n"
-            f"💬 Сообщений: <b>{chat_msgs:,}</b>\n"
-            f"✨ XP участников: <b>{chat_xp:,}</b>\n"
-            f"🏆 Достижений: <b>{chat_ach}</b>\n"
-            f"💰 LMN участников: <b>{fmt_lmn(chat_lmn)}</b>\n\n"
-            f"{brand.div()}",
+            f"<h1>📊 {title}</h1><hr>"
+            "<table><tr><th>Метрика</th><th>Значение</th></tr>"
+            f"<tr><td>Участников в базе</td><td>{len(all_members):,}</td></tr>"
+            f"<tr><td>Сообщений</td><td>{chat_msgs:,}</td></tr>"
+            f"<tr><td>XP участников</td><td>{chat_xp:,}</td></tr>"
+            f"<tr><td>Достижений</td><td>{chat_ach}</td></tr>"
+            f"<tr><td>LMN участников</td><td>{fmt_lmn(chat_lmn)}</td></tr>"
+            "</table>",
             parse_mode="HTML"
         )
     elif msg.chat.type != "private":
@@ -9028,13 +9042,14 @@ async def cmd_analytics(msg: Message):
         chat_ach    = sum(len(user_achievements.get(u, [])) for u in all_members)
         chat_lmn    = sum(lmn_balances.get(u, 0) + bank_balances.get(u, 0) for u in all_members)
         await msg.reply(
-            f"{brand.hdr()}\n\n📊 <b>{title}</b>\n\n{brand.div()}\n"
-            f"👥 Участников в базе: <b>{len(all_members):,}</b>\n"
-            f"💬 Сообщений: <b>{chat_msgs:,}</b>\n"
-            f"✨ XP участников: <b>{chat_xp:,}</b>\n"
-            f"🏆 Достижений: <b>{chat_ach}</b>\n"
-            f"💰 LMN участников: <b>{fmt_lmn(chat_lmn)}</b>\n\n"
-            f"{brand.div()}",
+            f"<h1>📊 {title}</h1><hr>"
+            "<table><tr><th>Метрика</th><th>Значение</th></tr>"
+            f"<tr><td>Участников в базе</td><td>{len(all_members):,}</td></tr>"
+            f"<tr><td>Сообщений</td><td>{chat_msgs:,}</td></tr>"
+            f"<tr><td>XP участников</td><td>{chat_xp:,}</td></tr>"
+            f"<tr><td>Достижений</td><td>{chat_ach}</td></tr>"
+            f"<tr><td>LMN участников</td><td>{fmt_lmn(chat_lmn)}</td></tr>"
+            "</table>",
             parse_mode="HTML"
         )
     else:
@@ -9044,13 +9059,14 @@ async def cmd_analytics(msg: Message):
         total_lmn  = sum(lmn_balances.values()) + sum(bank_balances.values())
         total_u    = len({u for m in chat_members.values() for u in m})
         await msg.reply(
-            f"{brand.hdr()}\n\n📊 <b>Глобальная аналитика</b>\n\n{brand.div()}\n"
-            f"👥 Всего пользователей: <b>{total_u:,}</b>\n"
-            f"💬 Всего сообщений: <b>{total_msgs:,}</b>\n"
-            f"✨ XP в системе: <b>{total_xp:,}</b>\n"
-            f"🏆 Достижений выдано: <b>{total_ach}</b>\n"
-            f"💰 LMN в обороте: <b>{fmt_lmn(total_lmn)}</b>\n\n"
-            f"{brand.div()}",
+            "<h1>📊 Глобальная аналитика</h1><hr>"
+            "<table><tr><th>Метрика</th><th>Значение</th></tr>"
+            f"<tr><td>Всего пользователей</td><td>{total_u:,}</td></tr>"
+            f"<tr><td>Всего сообщений</td><td>{total_msgs:,}</td></tr>"
+            f"<tr><td>XP в системе</td><td>{total_xp:,}</td></tr>"
+            f"<tr><td>Достижений выдано</td><td>{total_ach}</td></tr>"
+            f"<tr><td>LMN в обороте</td><td>{fmt_lmn(total_lmn)}</td></tr>"
+            "</table>",
             parse_mode="HTML"
         )
 
