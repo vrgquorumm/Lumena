@@ -12268,31 +12268,39 @@ async def cb_editor_style(cb: CallbackQuery):
 async def cb_editor_style_reset_all(cb: CallbackQuery):
     if not is_owner(cb):
         return await cb.answer("⛔", show_alert=True)
-    brand.reset_all_styles()
-    brand.reset_all_buttons()
-    saved = await brand.persist_brand_now()
-    lines = ["🎨 <b>Оформление бота</b>\n",
-             "✨ Все стили и кнопки сброшены к премиальным дефолтам\n",
-             "✅ — изменено   ⬜ — стандартное\n"]
-    for key, df in brand.STYLE_DEFS.items():
-        status = "✅" if brand.is_style_customized(key) else "⬜"
-        cur    = html.escape(brand.get_style(key))
-        lines.append(f"  {status} <b>{html.escape(df['desc'])}</b>: <code>{cur}</code>")
-    lines.append(f"\n{brand.div()}")
-    lines.append(f"Заголовок: {brand.hdr()}")
+    # Отвечаем сразу, чтобы у кнопки не крутились "часики" пока идёт работа —
+    # Telegram отменяет callback, если на него не ответить за ~10 секунд.
+    await cb.answer("✨ Сбрасываю к премиуму...")
     try:
-        await cb.message.edit_text(
-            "\n".join(lines),
-            parse_mode="HTML",
-            reply_markup=_editor_style_kb(),
-        )
-    except TelegramAPIError as ex:
-        if "message is not modified" not in str(ex).lower():
-            raise
-    await cb.answer(
-        "✨ Сброшено к премиуму!" if saved else "⚠️ Сохранено локально: PostgreSQL недоступен",
-        show_alert=True,
-    )
+        brand.reset_all_styles()
+        brand.reset_all_buttons()
+        saved = await brand.persist_brand_now()
+        lines = ["🎨 <b>Оформление бота</b>\n",
+                 "✨ Все стили и кнопки сброшены к премиальным дефолтам\n",
+                 "✅ — изменено   ⬜ — стандартное\n"]
+        for key, df in brand.STYLE_DEFS.items():
+            status = "✅" if brand.is_style_customized(key) else "⬜"
+            cur    = html.escape(brand.get_style(key))
+            lines.append(f"  {status} <b>{html.escape(df['desc'])}</b>: <code>{cur}</code>")
+        lines.append(f"\n{brand.div()}")
+        lines.append(f"Заголовок: {brand.hdr()}")
+        try:
+            await cb.message.edit_text(
+                "\n".join(lines),
+                parse_mode="HTML",
+                reply_markup=_editor_style_kb(),
+            )
+        except TelegramAPIError as ex:
+            if "message is not modified" not in str(ex).lower():
+                raise
+        if not saved:
+            await cb.message.answer("⚠️ Сохранено локально: PostgreSQL недоступен")
+    except Exception as ex:
+        print(f"⚠️ cb_editor_style_reset_all: {ex}")
+        try:
+            await cb.message.answer(f"⚠️ Ошибка сброса: {ex}")
+        except Exception:
+            pass
 
 
 @dp.callback_query(F.data.startswith("editor:style_edit:"))
