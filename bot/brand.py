@@ -17,25 +17,25 @@ STYLE_DEFS: dict[str, dict] = {
     # ── Оформление ────────────────────────────────────────
     "header_text":  {
         "desc":    "Текст заголовка",
-        "default": "L U M E N A",
+        "default": "✨ L U M E N A ✨",
         "hint":    'Показывается в шапке каждого ответа. Пример: «L U M E N A» или «✨ LUMENA ✨»',
         "max":     40,
     },
     "divider_char": {
         "desc":    "Символ разделителя",
-        "default": "▬",
+        "default": "═",
         "hint":    "Повторяется N раз как горизонтальная черта. Один символ или emoji.",
         "max":     8,
     },
     "divider_count": {
         "desc":    "Длина разделителя",
-        "default": "10",
+        "default": "14",
         "hint":    "Сколько символов в разделителе. Число от 3 до 30.",
         "max":     2,
     },
     "bullet_char":  {
         "desc":    "Буллет-поинт",
-        "default": "◾",
+        "default": "✦",
         "hint":    "Символ в начале пунктов списка. Один символ или emoji.",
         "max":     8,
     },
@@ -47,7 +47,7 @@ STYLE_DEFS: dict[str, dict] = {
     },
     "bot_display_name": {
         "desc":    "Имя бота в фразах",
-        "default": "Лумена",
+        "default": "Lumena",
         "hint":    "Как бот называет себя. Пример: Лумена, Lumena, Lumena Bot",
         "max":     30,
     },
@@ -66,7 +66,7 @@ STYLE_DEFS: dict[str, dict] = {
     },
     "currency_emoji": {
         "desc":    "Эмодзи монеты",
-        "default": "💰",
+        "default": "💎",
         "hint":    "Показывается рядом с балансом. Один символ или emoji.",
         "max":     4,
     },
