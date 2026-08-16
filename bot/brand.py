@@ -300,21 +300,17 @@ def get_role_id(role: str) -> str | None:
 
 
 def hdr() -> str:
-    """Заголовок  EM  НАЗВАНИЕ  EM."""
+    """Премиальный заголовок — настоящий Rich Message <h1> (Bot API 10.1)."""
     em   = e("header")
     name = get_style("header_text")
-    return f"{em}  {name}  {em}"
+    return f"<h1>{em} {name} {em}</h1>"
 
 
 def div(n: int | None = None) -> str:
-    """Разделитель из n символов (n=None → берёт из настроек divider_count)."""
-    if n is None:
-        try:
-            n = max(3, min(30, int(get_style("divider_count") or 10)))
-        except (ValueError, TypeError):
-            n = 10
-    ch = get_style("divider_char")
-    return ch * n
+    """Премиальный разделитель — настоящий Rich Message <hr> (Bot API 10.1).
+    Параметр n сохранён для обратной совместимости вызовов, но больше не влияет
+    на вид: длину/толщину разделителя теперь рисует сам Telegram-клиент."""
+    return "<hr>"
 
 
 def bul() -> str:
