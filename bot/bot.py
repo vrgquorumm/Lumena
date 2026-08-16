@@ -11813,6 +11813,7 @@ def _editor_style_kb() -> InlineKeyboardMarkup:
             callback_data=f"editor:style_edit:{key}",
         )])
     rows.append([InlineKeyboardButton(text="✨ Сбросить всё к премиуму", callback_data="editor:style_reset_all")])
+    rows.append([InlineKeyboardButton(text="📰 Новости Telegram для ботов", url="https://t.me/BotNews")])
     rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="editor:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
