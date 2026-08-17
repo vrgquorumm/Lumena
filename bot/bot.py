@@ -1395,7 +1395,8 @@ def get_role(uid: int) -> str | None:
 def _role_sync_chat_ids(current_chat_id: int | None = None) -> list[int]:
     """Уникальные чаты, где Telegram-права роли должны совпадать.
 
-    Главный чат хранится как pub_chat, закрытый админский — как observer_chat.
+    Главный чат хранится как pub_chat, админский — как mod_chat. observer_chat
+    оставлен в списке для совместимости со старой настройкой founder-чата.
     Текущий чат ставится первым, чтобы команда работала и до полной настройки
     связки; повторяющиеся ID убираются.
     """
@@ -1403,6 +1404,7 @@ def _role_sync_chat_ids(current_chat_id: int | None = None) -> list[int]:
     for raw_chat_id in (
         current_chat_id,
         _ank.get_pub_chat(),
+        _ank.get_mod_chat(),
         _ank.get_observer_chat(),
     ):
         try:
@@ -12552,7 +12554,7 @@ async def cmd_setadminchat(msg: Message, command: CommandObject = None):
         )
     raw_args = (command.args if command else "") or ""
     link = raw_args.strip().split()[0] if raw_args.strip().startswith("http") else OBSERVER_CHAT_INVITE_LINK
-    _ank.set_observer_chat(msg.chat.id)
+    _ank.set_mod_chat(msg.chat.id)
     _ank.set_observer_chat_link(link)
     staff_team_chats.add(msg.chat.id)
     await save_state_now("привязка админ-чата к главному")
