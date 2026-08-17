@@ -12140,6 +12140,78 @@ async def cb_ank_reject(cb: CallbackQuery):
 
 
 # ─── Реакції ❤️ / 👎 на публічних анкетах ───
+async def _send_anketa_private_preview(
+    recipient_uid: int,
+    owner_uid: int,
+    intro_html: str = "",
+    reply_markup=None,
+) -> bool:
+    """Приватно показывает одобренную анкету другому участнику."""
+    data = _ank.get_approved_data(owner_uid)
+    if not data:
+        return False
+
+    if intro_html:
+        await bot.send_message(recipient_uid, intro_html, parse_mode="HTML")
+
+    answers = data.get("answers") or {}
+    card_text = _ank.fmt_pub_card(
+        answers,
+        data.get("username", ""),
+        data.get("full_name", ""),
+        is_premium=is_anketa_premium(owner_uid, data.get("username", "")),
+    )
+    media_items = answers.get("media", [])
+    if not media_items:
+        if answers.get("video_id"):
+            media_items = [{"type": "video", "file_id": answers["video_id"]}]
+        elif answers.get("photo_id"):
+            media_items = [{"type": "photo", "file_id": answers["photo_id"]}]
+
+    if not media_items:
+        await bot.send_message(
+            recipient_uid,
+            card_text,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+        )
+    elif len(media_items) == 1:
+        item = media_items[0]
+        if item["type"] == "photo":
+            await bot.send_photo(
+                recipient_uid,
+                photo=item["file_id"],
+                caption=card_text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
+        else:
+            await bot.send_video(
+                recipient_uid,
+                video=item["file_id"],
+                caption=card_text,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+            )
+    else:
+        media_ids = await _ank._send_media_group_to_chat(
+            bot,
+            recipient_uid,
+            media_items,
+            caption=card_text,
+            parse_mode="HTML",
+        )
+        await bot.send_message(
+            recipient_uid,
+            "💞 Действия:",
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+            reply_to_message_id=media_ids[0] if media_ids else None,
+            allow_sending_without_reply=True,
+        )
+    return True
+
+
 @dp.callback_query(F.data.startswith("ank_r:"))
 async def cb_ank_react(cb: CallbackQuery):
     """Обробляє натискання ❤️ або 👎 під анкетою в паблік-чаті."""
@@ -12189,6 +12261,75 @@ async def cb_ank_react(cb: CallbackQuery):
         await cb.answer("Лайк убран", show_alert=False)
 
 
+@dp.callback_query(F.data.startswith("ank_likers:"))
+async def cb_ank_likers(cb: CallbackQuery):
+    """Приватный список пользователей, поставивших лайк владельцу анкеты."""
+    parts = cb.data.split(":")
+    if len(parts) != 2:
+        return await cb.answer("Некорректная кнопка", show_alert=True)
+    try:
+        owner_uid = int(parts[1])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка", show_alert=True)
+    if cb.from_user.id != owner_uid:
+        return await cb.answer("Это не твой список лайков", show_alert=True)
+
+    hearts = _ank.get_hearts(owner_uid)
+    if not hearts:
+        return await cb.answer("Пока никто не поставил лайк", show_alert=True)
+
+    lines = ["❤️ <b>Кто лайкнул твою анкету</b>\n"]
+    for reactor_uid, info in hearts.items():
+        info = info or {}
+        name = html.escape(str(info.get("name") or f"ID {reactor_uid}"))
+        lines.append(f"• <a href=\"tg://user?id={reactor_uid}\">{name}</a>")
+    if cb.message:
+        await cb.message.answer(
+            "\n".join(lines) + "\n\nВыбери человека, чтобы открыть его анкету:",
+            parse_mode="HTML",
+            reply_markup=_ank.make_likers_kb(owner_uid),
+        )
+    await cb.answer("Список лайков открыт")
+
+
+@dp.callback_query(F.data.startswith("ank_liker:"))
+async def cb_ank_liker_view(cb: CallbackQuery):
+    """Показывает владельцу приватную анкету конкретного лайкнувшего."""
+    parts = cb.data.split(":")
+    if len(parts) != 3:
+        return await cb.answer("Некорректная кнопка", show_alert=True)
+    try:
+        reactor_uid, owner_uid = int(parts[1]), int(parts[2])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная кнопка", show_alert=True)
+    if cb.from_user.id != owner_uid:
+        return await cb.answer("Это не твой список лайков", show_alert=True)
+
+    info = _ank.get_hearts(owner_uid).get(reactor_uid)
+    if not info:
+        return await cb.answer("Этот лайк уже убран", show_alert=True)
+    reactor_data = _ank.get_approved_data(reactor_uid)
+    if not reactor_data:
+        return await cb.answer(
+            "Анкета этого пользователя больше недоступна",
+            show_alert=True,
+        )
+
+    reactor_name = html.escape(
+        str(reactor_data.get("full_name") or info.get("name") or reactor_uid)
+    )
+    ok = await _send_anketa_private_preview(
+        owner_uid,
+        reactor_uid,
+        intro_html=(
+            "👀 <b>Анкета пользователя, который поставил лайк:</b>\n"
+            f"<a href=\"tg://user?id={reactor_uid}\">{reactor_name}</a>"
+        ),
+        reply_markup=_ank.make_liker_view_kb(reactor_uid, owner_uid),
+    )
+    await cb.answer("Анкета открыта" if ok else "Анкета недоступна")
+
+
 # ─── Взаємність: власник хоче дізнатись хто лайкнув ───
 @dp.callback_query(F.data.startswith("ank_mutual:"))
 async def cb_ank_mutual(cb: CallbackQuery):
@@ -12211,33 +12352,44 @@ async def cb_ank_mutual(cb: CallbackQuery):
         await cb.message.edit_reply_markup(reply_markup=None)
         return await cb.answer("Этот человек уже убрал лайк 😔", show_alert=True)
 
-    reactor_name = info["name"]
-    reactor_user = info["username"]
+    reactor_name = str(info.get("name") or reactor_uid)
+    reactor_user = str(info.get("username") or "")
     tag = f"@{reactor_user}" if reactor_user else reactor_name
-    # Имя-ссылка: клик открывает личный чат с этим человеком напрямую.
-    reactor_link = f"[{reactor_name}](tg://user?id={reactor_uid})"
-
-    # Показываем владельцу кто это
-    await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.message.answer(
-        f"💞 *Взаимная симпатия!*\n\n"
-        f"Тебя лайкнул(а): {reactor_link}\n"
-        f"Telegram: {tag}\n\n"
-        "_Нажми на имя, чтобы написать первым — возможно это судьба! 🌟_",
-        parse_mode="Markdown"
+    reactor_link = (
+        f"<a href=\"tg://user?id={reactor_uid}\">"
+        f"{html.escape(reactor_name)}</a>"
     )
 
-    # Уведомляем лайкера
+    # Показываем владельцу кто это и открываем анкету лайкнувшего.
+    await cb.message.edit_reply_markup(reply_markup=None)
+    await cb.message.answer(
+        f"💞 <b>Взаимная симпатия!</b>\n\n"
+        f"Тебя лайкнул(а): {reactor_link}\n"
+        f"Telegram: {html.escape(tag)}\n\n"
+        "Ниже открываю анкету этого человека.",
+        parse_mode="HTML",
+    )
+    try:
+        await _send_anketa_private_preview(owner_uid, reactor_uid)
+    except Exception as preview_error:
+        logging.warning("⚠️ Не удалось показать анкету лайкнувшего: %s", preview_error)
+
+    # Уведомляем лайкера и открываем ему анкету ответившего.
     owner_data = _ank.get_approved_data(owner_uid)
     owner_name = owner_data["answers"].get("name", "автор анкеты") if owner_data else "автор анкеты"
-    owner_link = f"[{owner_name}](tg://user?id={owner_uid})"
+    owner_link = (
+        f"<a href=\"tg://user?id={owner_uid}\">"
+        f"{html.escape(str(owner_name))}</a>"
+    )
     try:
         await bot.send_message(
             reactor_uid,
-            f"💞 *Взаимная симпатия!*\n\n"
-            f"{owner_link} ответил(а) на твой лайк — нажми на имя, чтобы написать им!",
-            parse_mode="Markdown"
+            f"💞 <b>Взаимная симпатия!</b>\n\n"
+            f"{owner_link} ответил(а) на твой лайк.\n"
+            "Ниже открываю его/её анкету.",
+            parse_mode="HTML",
         )
+        await _send_anketa_private_preview(reactor_uid, owner_uid)
     except Exception:
         pass
 

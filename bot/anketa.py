@@ -201,6 +201,22 @@ async def load_anketa_from_db() -> None:
             _approved_data[int(k)] = v
         for k, v in users.get("pending", {}).items():
             _pending[str(k)] = v
+        for owner_key, reaction_data in users.get("reactions", {}).items():
+            try:
+                owner_uid = int(owner_key)
+            except (TypeError, ValueError):
+                continue
+            reaction_data = reaction_data or {}
+            _reactions[owner_uid] = {
+                "hearts": {
+                    int(reactor_uid): dict(info or {})
+                    for reactor_uid, info in reaction_data.get("hearts", {}).items()
+                },
+                "dislikes": {
+                    int(reactor_uid): dict(info or {})
+                    for reactor_uid, info in reaction_data.get("dislikes", {}).items()
+                },
+            }
         print("✅ anketa_users завантажено з PostgreSQL")
 async def restore_anketa() -> None:
     """При старті відновлює anketa_users і anketa_settings: PostgreSQL → GitHub → локальний файл."""
@@ -264,6 +280,22 @@ def load_anketa_settings():
                 _approved_data[int(k)] = v
             for k, v in d.get("pending", {}).items():
                 _pending[str(k)] = v
+            for owner_key, reaction_data in d.get("reactions", {}).items():
+                try:
+                    owner_uid = int(owner_key)
+                except (TypeError, ValueError):
+                    continue
+                reaction_data = reaction_data or {}
+                _reactions[owner_uid] = {
+                    "hearts": {
+                        int(reactor_uid): dict(info or {})
+                        for reactor_uid, info in reaction_data.get("hearts", {}).items()
+                    },
+                    "dislikes": {
+                        int(reactor_uid): dict(info or {})
+                        for reactor_uid, info in reaction_data.get("dislikes", {}).items()
+                    },
+                }
         except Exception:
             pass
 
@@ -280,6 +312,19 @@ def _build_anketa_payloads() -> tuple[dict, dict]:
     users_payload = {
         "status":   {str(k): v for k, v in _user_status.items()},
         "approved": {str(k): v for k, v in _approved_data.items()},
+        "reactions": {
+            str(owner_uid): {
+                "hearts": {
+                    str(reactor_uid): dict(info or {})
+                    for reactor_uid, info in reaction_data.get("hearts", {}).items()
+                },
+                "dislikes": {
+                    str(reactor_uid): dict(info or {})
+                    for reactor_uid, info in reaction_data.get("dislikes", {}).items()
+                },
+            }
+            for owner_uid, reaction_data in _reactions.items()
+        },
         # Заявки зберігаємо також: після перезапуску користувач повинен
         # мати змогу скасувати pending-анкету, а не отримувати "вічне" очікування.
         "pending":  dict(_pending),
@@ -598,11 +643,15 @@ def record_reaction(owner_uid: int, reactor_uid: int,
     # Якщо вже є цей тип — знімаємо (toggle)
     if reactor_uid in _reactions[owner_uid][bucket_key]:
         del _reactions[owner_uid][bucket_key][reactor_uid]
+        save_anketa_settings()
+        _schedule_anketa_save()
         return (rtype == "h"), False
 
     # Видаляємо протилежну реакцію якщо була
     _reactions[owner_uid][other_key].pop(reactor_uid, None)
     _reactions[owner_uid][bucket_key][reactor_uid] = info
+    save_anketa_settings()
+    _schedule_anketa_save()
     return (rtype == "h"), (rtype == "h")
 
 
@@ -612,12 +661,51 @@ def get_hearts(owner_uid: int) -> dict[int, dict]:
 
 
 def make_mutual_kb(reactor_uid: int, owner_uid: int) -> InlineKeyboardMarkup:
-    """Кнопка 'Ответить взаимностью' — отправляется владельцу анкеты."""
+    """Кнопки уведомления о лайке."""
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text="💞 Ответить взаимностью",
-            callback_data=f"ank_mutual:{reactor_uid}:{owner_uid}"
-        )
+            callback_data=f"ank_mutual:{reactor_uid}:{owner_uid}",
+        ),
+    ], [
+        InlineKeyboardButton(
+            text="👀 Посмотреть, кто лайкнул",
+            callback_data=f"ank_likers:{owner_uid}",
+        ),
+    ]])
+
+
+def make_likers_kb(owner_uid: int) -> InlineKeyboardMarkup | None:
+    """Кнопки просмотра конкретных лайкнувших и ответа взаимностью."""
+    rows = []
+    for reactor_uid, info in get_hearts(owner_uid).items():
+        name = str((info or {}).get("name") or f"ID {reactor_uid}")
+        name = " ".join(name.split())[:28]
+        rows.append([
+            InlineKeyboardButton(
+                text=f"👀 {name}",
+                callback_data=f"ank_liker:{reactor_uid}:{owner_uid}",
+            ),
+            InlineKeyboardButton(
+                text="💞",
+                callback_data=f"ank_mutual:{reactor_uid}:{owner_uid}",
+            ),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def make_liker_view_kb(reactor_uid: int, owner_uid: int) -> InlineKeyboardMarkup:
+    """Действия при приватном просмотре анкеты лайкнувшего."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="💞 Ответить взаимностью",
+            callback_data=f"ank_mutual:{reactor_uid}:{owner_uid}",
+        ),
+    ], [
+        InlineKeyboardButton(
+            text="👀 Все лайки",
+            callback_data=f"ank_likers:{owner_uid}",
+        ),
     ]])
 
 
