@@ -48,6 +48,9 @@ import anketa as _ank
 import ai_agent
 import brand
 import db as _db
+from auction import AuctionManager
+
+auction_manager = AuctionManager()
 
 _edit_sessions:     dict[int, str]  = {}
 _btn_edit_sessions: dict[int, dict] = {}
@@ -184,6 +187,10 @@ explore_cooldown = {}
 team_alchemy_runs = {}
 bank_balances = {}        # {user_id: int} — гроші в банку (захищені від /rob)
 bank_withdraw_cd = {}     # {user_id: datetime} — кулдаун виведення з банку
+bank_term_deposits: dict[int, dict] = {}  # {uid: {principal, started_at}}
+economy_progress: dict[int, dict] = {}    # daily добычный combo
+work_sessions: dict[int, dict] = {}      # интерактивные рабочие контракты
+earning_challenges: dict[int, dict] = {} # последний риск-бонус после добычи
 chat_rules = {}
 hangman_games = {}
 roulette_players = {}
@@ -427,6 +434,27 @@ def _build_main_payload() -> dict:
         "bank_withdraw_cd": {
             str(u): value.isoformat() for u, value in bank_withdraw_cd.items()
         },
+        "bank_term_deposits": {
+            str(u): {
+                "principal": max(0, int(value.get("principal", 0) or 0)),
+                "started_at": str(value.get("started_at", ""))[:50],
+            }
+            for u, value in bank_term_deposits.items()
+            if isinstance(value, dict) and int(value.get("principal", 0) or 0) > 0
+        },
+        "economy_progress": {
+            str(u): {
+                "date": str(value.get("date", ""))[:20],
+                "sources": sorted(
+                    str(source)[:30]
+                    for source in (value.get("sources") or [])
+                    if str(source).strip()
+                )[:12],
+            }
+            for u, value in economy_progress.items()
+            if isinstance(value, dict)
+        },
+        "auction_state": auction_manager.export_state(),
         "hunt_cooldown": {
             str(u): value.isoformat() for u, value in hunt_cooldown.items()
         },
@@ -974,6 +1002,19 @@ async def coin_rain_loop():
                 _active_rain.pop(chat_id, None)
 
         await asyncio.sleep(RAIN_INTERVAL)
+
+
+async def auction_loop():
+    """Проверяет завершение лота и ежедневный доход коллекций."""
+    while True:
+        await asyncio.sleep(20)
+        try:
+            await auction_manager.tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.warning("auction_loop: %s", exc)
+
 
 # ═══════════════════════════════════════════════════════
 # АВТОМОДЕРАЦИЯ — ПРОПАГАНДА РОССИЙСКОЙ АРМИИ
@@ -1695,10 +1736,109 @@ def get_balance(uid: int) -> int:
         bank_balances.setdefault(uid, 0)
     return lmn_balances.get(uid, 0)
 
-def add_balance(uid: int, amount: int):
-    lmn_balances[uid] = lmn_balances.get(uid, 0) + amount
-    if amount:
+def add_balance(uid: int, amount: int) -> int:
+    """Меняет кошелёк, не позволяя превысить общий лимит аккаунта 7 млрд."""
+    requested = int(amount)
+    wallet = max(0, int(lmn_balances.get(uid, 0) or 0))
+    protected = max(0, int(bank_balances.get(uid, 0) or 0))
+    term = bank_term_deposits.get(uid) or {}
+    protected += max(0, int(term.get("principal", 0) or 0))
+    if requested > 0:
+        allowed = max(0, LMN_BALANCE_RESET_TARGET - wallet - protected)
+        applied = min(requested, allowed)
+    else:
+        applied = max(-wallet, requested)
+    lmn_balances[uid] = wallet + applied
+    if applied:
         schedule_state_save("изменение LMN-баланса")
+    return applied
+
+
+def _auction_get_funds(uid: int) -> int:
+    """Средства, которыми можно оплатить ставку (кошелёк + обычный банк)."""
+    return max(0, get_balance(uid)) + max(0, get_bank(uid))
+
+
+def _auction_charge(uid: int, amount: int) -> bool:
+    """Списывает ставку сначала из кошелька, затем из обычного банка."""
+    amount = int(amount)
+    if amount <= 0 or _auction_get_funds(uid) < amount:
+        return False
+    wallet_part = min(max(0, get_balance(uid)), amount)
+    bank_part = amount - wallet_part
+    if wallet_part:
+        add_balance(uid, -wallet_part)
+    if bank_part:
+        bank_balances[uid] = get_bank(uid) - bank_part
+    schedule_state_save("резерв ставки аукциона")
+    return True
+
+
+def _auction_refund(uid: int, amount: int) -> None:
+    if amount > 0:
+        add_balance(uid, int(amount))
+
+
+def _apply_economy_combo(uid: int, amount: int, source: str) -> tuple[int, int]:
+    """Ежедневная серия разных занятий даёт до +25% к добыче.
+
+    Повтор одного и того же способа не разгоняет награду: бонус появляется
+    только за разнообразие, поэтому выгоднее чередовать работу, рыбалку,
+    шахту, охоту, алхимию и экспедиции.
+    """
+    today = today_kyiv().isoformat()
+    state = economy_progress.setdefault(uid, {"date": today, "sources": []})
+    if state.get("date") != today:
+        state["date"] = today
+        state["sources"] = []
+    sources = state.setdefault("sources", [])
+    if source not in sources:
+        sources.append(source)
+    bonus_percent = min(25, max(0, len(sources) - 1) * 5)
+    return int(amount * (100 + bonus_percent) / 100), bonus_percent
+
+
+def _economy_combo_line(bonus_percent: int) -> str:
+    if bonus_percent <= 0:
+        return ""
+    return f"\n🔥 Серия разнообразия: <b>+{bonus_percent}%</b> к добыче"
+
+
+def _register_earning_challenge(uid: int, amount: int, source: str) -> None:
+    """Оставляет одну свежую награду для добровольного испытания x2."""
+    stake = max(0, min(int(amount), 250_000))
+    if stake <= 0:
+        earning_challenges.pop(uid, None)
+        return
+    earning_challenges[uid] = {
+        "stake": stake,
+        "source": str(source)[:30],
+        "created_at": now_kyiv().isoformat(),
+    }
+
+
+def _earning_navigation_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔥 Серия", callback_data="work:combo"),
+            InlineKeyboardButton(text="🏛 Коллекция", callback_data="auction:collection"),
+        ],
+        [InlineKeyboardButton(text="🏦 Банк", callback_data="bank:card")],
+    ])
+
+
+def _earning_actions_keyboard() -> InlineKeyboardMarkup:
+    """Общий следующий шаг после любой добычи — не оставляем пользователя в тупике."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎲 Испытание x2", callback_data="earn:challenge"),
+            InlineKeyboardButton(text="🔥 Серия", callback_data="work:combo"),
+        ],
+        [
+            InlineKeyboardButton(text="🏛 Коллекция", callback_data="auction:collection"),
+            InlineKeyboardButton(text="🏦 Банк", callback_data="bank:card"),
+        ],
+    ])
 
 def fmt_lmn(n: int) -> str:
     return f"{n:,}".replace(",", " ")
@@ -3728,8 +3868,7 @@ async def cmd_give(msg: Message, command: CommandObject):
         balance=fmt_lmn(get_balance(msg.from_user.id)),
     )
 
-@dp.message(Command("work"))
-async def cmd_work(msg: Message):
+async def _cmd_work_legacy(msg: Message):
     uid = msg.from_user.id
     now = now_kyiv()
     last = work_cooldown.get(uid)
@@ -3792,6 +3931,7 @@ async def cmd_work(msg: Message):
     job_data = random.choice(_jobs_tier)
     job, earn_min, earn_max, job_icon, job_phrase = job_data
     earned = random.randint(earn_min, earn_max)
+    earned, combo_bonus = _apply_economy_combo(uid, earned, "work")
     add_balance(uid, earned)
     new_bal = get_balance(uid)
     _work_intros = [
@@ -3804,8 +3944,207 @@ async def cmd_work(msg: Message):
         job=job,
         earned=fmt_lmn(earned),
         balance=fmt_lmn(new_bal),
+        combo=_economy_combo_line(combo_bonus),
     )
     schedule_state_save("work")
+
+
+def _work_choice_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🛡 Надёжно · ×0.9–1.1", callback_data="work:secure"),
+        ],
+        [
+            InlineKeyboardButton(text="⚡ Сбалансированно · ×1.0–1.55", callback_data="work:balanced"),
+        ],
+        [
+            InlineKeyboardButton(text="🔥 Ва-банк · ×1.2–2.8", callback_data="work:risky"),
+        ],
+    ])
+
+
+def _work_result_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎲 Испытание x2", callback_data="earn:challenge"),
+            InlineKeyboardButton(text="📈 Моя серия", callback_data="work:combo"),
+        ],
+        [InlineKeyboardButton(text="🏛 На аукцион", callback_data="auction:open")],
+    ])
+
+
+@dp.message(Command("work", "работа"))
+async def cmd_work(msg: Message):
+    uid = msg.from_user.id
+    now = now_kyiv()
+    last = work_cooldown.get(uid)
+    if last and (now - last).total_seconds() < 3600:
+        mins = 60 - int((now - last).total_seconds()) // 60
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            "💼 <b>Следующий контракт ещё не готов</b>\n\n"
+            f"⏳ До новой смены: <b>{max(1, mins)} мин</b>\n"
+            "Пока можно открыть банк, аукцион или другую экспедицию.\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+
+    jobs = [
+        ("программист", 400, 900, "💻", "пофиксил баги — получил премию"),
+        ("дизайнер", 350, 800, "🎨", "сдал проект клиенту вовремя"),
+        ("врач", 500, 950, "🧑‍⚕️", "принял пациентов и выписал рецепты"),
+        ("юрист", 450, 900, "⚖️", "выиграл дело в суде"),
+        ("пилот", 600, 1200, "✈️", "выполнил рейс без задержки"),
+        ("астронавт", 700, 1500, "🚀", "провёл эксперименты на орбите"),
+        ("стример", 200, 700, "🎮", "получил донат от зрителей"),
+        ("повар", 250, 550, "🧑‍🍳", "шеф-повар оценил твоё блюдо"),
+        ("детектив", 300, 750, "🕵️", "раскрыл дело и получил гонорар"),
+        ("учёный", 350, 800, "🔬", "опубликовал статью — гранты прилетели"),
+        ("спортсмен", 200, 600, "⚽", "выиграл турнир"),
+        ("иллюзионист", 150, 700, "🎩", "публика была в восторге от шоу"),
+    ]
+    job = random.choice(jobs)
+    work_sessions[uid] = {"job": job, "created_at": now.isoformat()}
+    name, earn_min, earn_max, icon, phrase = job
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"💼 <b>Новый контракт · {icon} {name.title()}</b>\n\n"
+        f"<i>Твоя задача: {phrase}.</i>\n\n"
+        f"Базовая выплата: <b>{fmt_lmn(earn_min)}–{fmt_lmn(earn_max)} LMN</b>\n"
+        "Выбери стиль смены. Чем выше риск, тем выше потолок награды.\n\n"
+        "🛡 Надёжно — почти без провала\n"
+        "⚡ Сбалансированно — лучший средний результат\n"
+        "🔥 Ва-банк — шанс на большой куш, но можно уйти со штрафом",
+        parse_mode="HTML",
+        reply_markup=_work_choice_keyboard(),
+    )
+
+
+@dp.callback_query(F.data.startswith("work:"))
+async def cb_work_contract(cb: CallbackQuery):
+    uid = cb.from_user.id
+    action = (cb.data or "").split(":")[1] if ":" in (cb.data or "") else ""
+
+    if action == "combo":
+        state = economy_progress.get(uid) or {}
+        sources = state.get("sources") or []
+        names = {
+            "work": "работа",
+            "alchemy": "алхимия",
+            "fish": "рыбалка",
+            "hunt": "охота",
+            "mine": "шахта",
+            "cook": "готовка",
+            "explore": "экспедиция",
+            "daily": "дейли",
+        }
+        shown = ", ".join(names.get(str(source), str(source)) for source in sources) or "пока пусто"
+        next_bonus = min(25, len(sources) * 5)
+        return await cb.answer(
+            f"Сегодня: {shown}. Следующий бонус: +{next_bonus}%.",
+            show_alert=True,
+        )
+
+    session = work_sessions.pop(uid, None)
+    if not session or action not in {"secure", "balanced", "risky"}:
+        return await cb.answer("Этот контракт уже закрыт. Напиши «работа» заново.", show_alert=True)
+    created_at = _parse_bank_datetime(session.get("created_at"))
+    if created_at and (now_kyiv() - created_at).total_seconds() > 600:
+        return await cb.answer("Контракт просрочен. Открой новый через «работа».", show_alert=True)
+
+    job, earn_min, earn_max, icon, phrase = session["job"]
+    uid_now = now_kyiv()
+    work_cooldown[uid] = uid_now
+    profiles.setdefault(uid, {})
+
+    settings = {
+        "secure": ("🛡 Надёжная смена", 0.94, 0.85, 1.10, 0),
+        "balanced": ("⚡ Сбалансированный контракт", 0.82, 1.00, 1.55, 120),
+        "risky": ("🔥 Ва-банк", 0.62, 1.20, 2.80, 260),
+    }
+    mode_name, success_chance, multiplier_min, multiplier_max, max_fine = settings[action]
+    if random.random() > success_chance:
+        fine = min(get_balance(uid), random.randint(max(20, max_fine // 2), max(20, max_fine)))
+        add_balance(uid, -fine)
+        await cb.message.edit_text(
+            f"{brand.hdr()}\n\n"
+            f"{icon} <b>{mode_name}: провал</b>\n\n"
+            "Контракт оказался сложнее, чем выглядел на бумаге.\n"
+            f"💸 Штраф за срыв: <b>{fmt_lmn(fine)} LMN</b>\n"
+            f"🧾 Задача: {html.escape(phrase)}\n\n"
+            "⏳ Следующая смена будет доступна через <b>60 мин</b>.",
+            parse_mode="HTML",
+        )
+        return await cb.answer("Контракт сорван", show_alert=True)
+
+    multiplier = random.uniform(multiplier_min, multiplier_max)
+    earned = max(1, int(random.randint(earn_min, earn_max) * multiplier))
+    earned, combo_bonus = _apply_economy_combo(uid, earned, "work")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "work")
+    await cb.message.edit_text(
+        f"{brand.hdr()}\n\n"
+        f"{icon} <b>{mode_name}: выполнено</b>\n\n"
+        f"<i>{html.escape(phrase)}.</i>\n"
+        f"🎯 Коэффициент контракта: <b>×{multiplier:.2f}</b>\n"
+        f"💰 Выплата: <b>+{fmt_lmn(credited)} LMN</b>"
+        f"{_economy_combo_line(combo_bonus)}\n"
+        f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
+        "⏳ Следующая смена через <b>60 мин</b>.",
+        parse_mode="HTML",
+        reply_markup=_work_result_keyboard(),
+    )
+    schedule_state_save("интерактивный рабочий контракт")
+    await cb.answer(f"+{fmt_lmn(credited)} LMN")
+
+
+@dp.callback_query(F.data == "earn:challenge")
+async def cb_earning_challenge(cb: CallbackQuery):
+    uid = cb.from_user.id
+    challenge = earning_challenges.pop(uid, None)
+    if not challenge:
+        return await cb.answer("Свежей награды для испытания нет.", show_alert=True)
+    created_at = _parse_bank_datetime(challenge.get("created_at"))
+    if created_at and (now_kyiv() - created_at).total_seconds() > 900:
+        return await cb.answer("Испытание уже истекло. Сначала заработай новые LMN.", show_alert=True)
+    stake = max(1, int(challenge.get("stake", 0) or 0))
+    if get_balance(uid) < stake:
+        return await cb.answer(
+            f"Для испытания нужно оставить в кошельке {fmt_lmn(stake)} LMN.",
+            show_alert=True,
+        )
+    source = html.escape(str(challenge.get("source", "добыча")))
+    if random.random() < 0.42:
+        credited = add_balance(uid, stake)
+        result = (
+            f"🎉 <b>Испытание пройдено!</b>\n"
+            f"Источник: {source}\n"
+            f"💰 Бонус: <b>+{fmt_lmn(credited)} LMN</b>\n"
+            "Твоя последняя награда удвоена."
+        )
+    else:
+        lost = add_balance(uid, -stake)
+        result = (
+            f"💥 <b>Испытание не пройдено</b>\n"
+            f"Источник: {source}\n"
+            f"🎲 Риск был {fmt_lmn(stake)} LMN — потеряно: <b>{fmt_lmn(-lost)} LMN</b>\n"
+            "Следующая добыча снова даст новую попытку."
+        )
+    schedule_state_save("испытание награды")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    try:
+        await cb.message.answer(
+            f"{brand.hdr()}\n\n{result}\n\n"
+            f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>",
+            parse_mode="HTML",
+            reply_markup=_earning_navigation_keyboard(),
+        )
+    except Exception:
+        pass
+    await cb.answer("Испытание завершено")
 
 
 @dp.message(Command("alchemy", "алхимия"))
@@ -3835,18 +4174,21 @@ async def cmd_alchemy(msg: Message):
     ]
     icon, recipe, action, earn_min, earn_max = random.choice(recipes)
     earned = random.randint(earn_min, earn_max)
-    add_balance(uid, earned)
+    earned, combo_bonus = _apply_economy_combo(uid, earned, "alchemy")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "alchemy")
     save_data()
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"⚗️ <b>LMN Алхимия</b>\n\n"
         f"{icon} <b>{recipe}</b>\n"
         f"<i>Ты {action} и получил(а) чистый результат.</i>\n\n"
-        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💰 Награда: <b>+{fmt_lmn(credited)} LMN</b>{_economy_combo_line(combo_bonus)}\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         f"⏳ Следующая варка через <b>2 ч</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
 
 
@@ -3893,7 +4235,8 @@ async def cmd_team_alchemy(msg: Message):
 
     participants[uid] = msg.from_user.full_name
     contribution = random.randint(220, 420)
-    add_balance(uid, contribution)
+    contribution_credited = add_balance(uid, contribution)
+    _register_earning_challenge(uid, contribution_credited, "team_alchemy")
     participant_names = list(participants.values())
     if len(participants) < 3:
         save_data()
@@ -3901,7 +4244,7 @@ async def cmd_team_alchemy(msg: Message):
             f"{brand.hdr()}\n\n"
             "🧪 <b>Команда Алхимия — ингредиент принят!</b>\n\n"
             f"👤 Алхимиков в ритуале: <b>{len(participants)}/3</b>\n"
-            f"💰 За вклад: <b>+{fmt_lmn(contribution)} LMN</b>\n"
+            f"💰 За вклад: <b>+{fmt_lmn(contribution_credited)} LMN</b>\n"
             f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
             "Позови ещё "
             f"<b>{3 - len(participants)}</b> разных участника(ов), чтобы завершить эликсир.\n\n"
@@ -3911,8 +4254,12 @@ async def cmd_team_alchemy(msg: Message):
 
     completion_reward = random.randint(900, 1600)
     run["completed"] = True
+    my_completion = 0
     for participant_id in participants:
-        add_balance(participant_id, completion_reward)
+        credited_completion = add_balance(participant_id, completion_reward)
+        if participant_id == uid:
+            my_completion = credited_completion
+    _register_earning_challenge(uid, contribution_credited + my_completion, "team_alchemy")
     save_data()
     names = ", ".join(html.escape(name) for name in participant_names)
     await msg.reply(
@@ -3920,11 +4267,12 @@ async def cmd_team_alchemy(msg: Message):
         "🧪 <b>Команда Алхимия завершена!</b>\n\n"
         f"✨ {names} объединили ингредиенты и создали общий эликсир.\n\n"
         f"🏆 Командная награда: <b>+{fmt_lmn(completion_reward)} LMN</b> каждому\n"
-        f"💰 Твой вклад: <b>+{fmt_lmn(contribution)} LMN</b>\n"
+        f"💰 Твой вклад: <b>+{fmt_lmn(contribution_credited)} LMN</b>\n"
         f"💵 Твой баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         "Новый ритуал откроется завтра.\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
 
 
@@ -3959,20 +4307,25 @@ async def cmd_fish(msg: Message):
             break
     _, icon, name, earn_min, earn_max, comment = chosen
     earned = random.randint(earn_min, earn_max) if earn_max > 0 else 0
-    add_balance(uid, earned)
+    combo_bonus = 0
+    if earned > 0:
+        earned, combo_bonus = _apply_economy_combo(uid, earned, "fish")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "fish")
     new_bal = get_balance(uid)
     _intros = ["Закинул удочку...", "Рыбалка в разгаре...", "Ждал терпеливо и вот:"]
-    result_line = f"<b>+{fmt_lmn(earned)} LMN</b>" if earned else "<i>Ничего не заработал 😔</i>"
+    result_line = f"<b>+{fmt_lmn(credited)} LMN</b>" if credited else "<i>Ничего не заработал 😔</i>"
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🎣 {random.choice(_intros)}\n\n"
         f"{icon} <b>{name}</b>\n"
         f"<i>{comment}</i>\n\n"
-        f"💰 Улов: {result_line}\n"
+        f"💰 Улов: {result_line}{_economy_combo_line(combo_bonus)}\n"
         f"💵 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n\n"
         f"⏳ Следующая рыбалка через <b>30 мин</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
     schedule_state_save("fish")
 
@@ -4026,17 +4379,20 @@ async def cmd_hunt(msg: Message):
             parse_mode="HTML",
         )
 
-    add_balance(uid, earned)
+    earned, combo_bonus = _apply_economy_combo(uid, earned, "hunt")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "hunt")
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🏹 <b>Удачная охота!</b>\n\n"
         f"{icon} Ты добыл(а) <b>{prey}</b>.\n"
-        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💰 Награда: <b>+{fmt_lmn(credited)} LMN</b>{_economy_combo_line(combo_bonus)}\n"
         f"<i>{note}</i>\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         f"⏳ Следующая охота через <b>60 мин</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
     schedule_state_save("hunt")
 
@@ -4077,20 +4433,25 @@ async def cmd_mine(msg: Message):
             break
     _, icon, name, earn_min, earn_max, comment = chosen
     earned = random.randint(earn_min, earn_max) if earn_max > 0 else 0
-    add_balance(uid, earned)
+    combo_bonus = 0
+    if earned > 0:
+        earned, combo_bonus = _apply_economy_combo(uid, earned, "mine")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "mine")
     new_bal = get_balance(uid)
     _intros = ["Спустился(лась) в шахту...", "Кирка бьёт по породе...", "Копал(а) без остановки и вот:"]
-    result_line = f"<b>+{fmt_lmn(earned)} LMN</b>" if earned else "<i>Ничего не намайнил(а) 😔</i>"
+    result_line = f"<b>+{fmt_lmn(credited)} LMN</b>" if credited else "<i>Ничего не намайнил(а) 😔</i>"
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"⛏️ {random.choice(_intros)}\n\n"
         f"{icon} <b>{name}</b>\n"
         f"<i>{comment}</i>\n\n"
-        f"💰 Добыча: {result_line}\n"
+        f"💰 Добыча: {result_line}{_economy_combo_line(combo_bonus)}\n"
         f"💵 Баланс: <b>{fmt_lmn(new_bal)} LMN</b>\n\n"
         f"⏳ Следующая смена через <b>45 мин</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
     schedule_state_save("mine")
 
@@ -4271,7 +4632,9 @@ async def cb_cook_go(cb: CallbackQuery):
         mult, tier, dish_note = 2.6, "🏆 КУЛИНАРНЫЙ ШЕДЕВР!", "Такое блюдо не стыдно подать в мишленовском ресторане!"
 
     earned = max(1, int(base_value * mult * random.uniform(0.85, 1.15)))
-    add_balance(uid, earned)
+    earned, combo_bonus = _apply_economy_combo(uid, earned, "cook")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "cook")
     schedule_state_save("cook")
     await cb.message.edit_text(
         f"{brand.hdr()}\n\n"
@@ -4279,11 +4642,12 @@ async def cb_cook_go(cb: CallbackQuery):
         f"Ингредиенты: {picked_names}\n\n"
         f"{tier}\n"
         f"<i>{dish_note}</i>\n\n"
-        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💰 Награда: <b>+{fmt_lmn(credited)} LMN</b>{_economy_combo_line(combo_bonus)}\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         f"⏳ Следующая готовка через <b>{COOK_COOLDOWN_MIN} мин</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
     await cb.answer(f"+{fmt_lmn(earned)} LMN!")
 
@@ -4336,17 +4700,20 @@ async def cmd_explore(msg: Message):
             parse_mode="HTML",
         )
 
-    add_balance(uid, earned)
+    earned, combo_bonus = _apply_economy_combo(uid, earned, "explore")
+    credited = add_balance(uid, earned)
+    _register_earning_challenge(uid, credited, "explore")
     await msg.reply(
         f"{brand.hdr()}\n\n"
         f"🧭 <b>Успешная экспедиция!</b>\n\n"
         f"{icon} Отряд нашёл <b>{find}</b>.\n"
-        f"💰 Награда: <b>+{fmt_lmn(earned)} LMN</b>\n"
+        f"💰 Награда: <b>+{fmt_lmn(credited)} LMN</b>{_economy_combo_line(combo_bonus)}\n"
         f"<i>{note}</i>\n"
         f"💵 Баланс: <b>{fmt_lmn(get_balance(uid))} LMN</b>\n\n"
         f"⏳ Следующий поход через <b>120 мин</b>\n\n"
         f"{brand.div()}",
         parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
     schedule_state_save("explore")
 
@@ -4566,36 +4933,105 @@ async def cmd_rob(msg: Message):
 def get_bank(uid: int) -> int:
     return bank_balances.get(uid, 0)
 
-async def _bank_card(msg: Message):
-    uid    = msg.from_user.id
+
+BANK_TERM_APR = 0.10
+
+
+def _parse_bank_datetime(value: object) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=KYIV_TZ)
+        return parsed.astimezone(KYIV_TZ)
+    except (TypeError, ValueError):
+        return None
+
+
+def _term_interest(uid: int, now: datetime | None = None) -> int:
+    record = bank_term_deposits.get(uid)
+    if not record:
+        return 0
+    principal = max(0, int(record.get("principal", 0) or 0))
+    started = _parse_bank_datetime(record.get("started_at"))
+    if principal <= 0 or not started:
+        return 0
+    elapsed_seconds = max(0, ((now or now_kyiv()) - started).total_seconds())
+    return int(principal * BANK_TERM_APR * elapsed_seconds / (365 * 24 * 3600))
+
+
+def _bank_keyboard(uid: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="💎 Вклад 10% годовых", callback_data="bank:term:offer"),
+            InlineKeyboardButton(text="💰 Сохранить всё", callback_data="bank:save"),
+        ],
+        [
+            InlineKeyboardButton(text="📤 Как снять", callback_data="bank:withdraw:help"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="bank:card"),
+        ],
+    ]
+    if uid in bank_term_deposits:
+        rows.insert(1, [
+            InlineKeyboardButton(text="✨ Забрать проценты", callback_data="bank:term:claim"),
+            InlineKeyboardButton(text="🔓 Закрыть вклад", callback_data="bank:term:close"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _bank_card_text(uid: int) -> str:
     wallet = get_balance(uid)
-    vault  = get_bank(uid)
-    await msg.reply(
+    vault = get_bank(uid)
+    term = bank_term_deposits.get(uid)
+    principal = int(term.get("principal", 0) or 0) if term else 0
+    interest = _term_interest(uid) if term else 0
+    term_line = (
+        f"💎 Вклад: <b>{fmt_lmn(principal)}</b> · "
+        f"начислено <b>+{fmt_lmn(interest)}</b>"
+        if term else "💎 Вклад: <b>нет</b>"
+    )
+    return (
         f"{brand.hdr()}\n\n"
         f"🏦 <b>Твой банк</b>\n\n"
         f"💳 Кошелёк: <b>{fmt_lmn(wallet)}</b> {brand.currency()}\n"
         f"🏦 В банке:  <b>{fmt_lmn(vault)}</b> {brand.currency()}\n"
-        f"💰 Всего:    <b>{fmt_lmn(wallet + vault)}</b> {brand.currency()}\n\n"
-        f"<i>Деньги в банке <b>нельзя украсть</b> через ограбление</i>\n\n"
-        f"<code>сохранить</code> — перевести весь баланс в банк\n"
-        f"<code>снять 1000</code> — вывести из банка\n\n"
-        f"{brand.div()}",
-        parse_mode="HTML",
+        f"{term_line}\n"
+        f"💰 Всего:    <b>{fmt_lmn(wallet + vault + principal)}</b> {brand.currency()}\n\n"
+        f"<i>Деньги в обычном банке нельзя украсть через ограбление.</i>\n"
+        f"<i>Вклад начисляет 10% годовых пропорционально времени.</i>\n\n"
+        f"<code>сохранить</code> — перевести весь кошелёк в обычный банк\n"
+        f"<code>снять 1000</code> — вывести из обычного банка\n\n"
+        f"{brand.div()}"
     )
 
+
+async def _bank_card(msg: Message):
+    uid = msg.from_user.id
+    await msg.reply(
+        _bank_card_text(uid),
+        parse_mode="HTML",
+        reply_markup=_bank_keyboard(uid),
+    )
+
+
+def _move_wallet_to_bank(uid: int) -> int:
+    amount = get_balance(uid)
+    if amount <= 0:
+        return 0
+    add_balance(uid, -amount)
+    bank_balances[uid] = get_bank(uid) + amount
+    return amount
+
+
 async def _bank_deposit(msg: Message, args_text: str = ""):
-    uid    = msg.from_user.id
-    wallet = get_balance(uid)
+    uid = msg.from_user.id
     # «сохранить» всегда кладёт в банк весь доступный баланс.
     # Аргументы игнорируются намеренно — это исключает частичные переводы.
-    amount = wallet
+    amount = _move_wallet_to_bank(uid)
     if amount <= 0:
         return await msg.reply(
             "❌ В кошельке нет монет, которые можно сохранить.",
             parse_mode="HTML",
         )
-    add_balance(uid, -amount)
-    bank_balances[uid] = get_bank(uid) + amount
     save_data()
     await msg.reply(
         f"{brand.hdr()}\n\n"
@@ -4656,6 +5092,126 @@ async def _bank_withdraw(msg: Message, args_text: str = ""):
         parse_mode="HTML",
     )
 
+
+def _term_offer_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Вложить весь кошелёк", callback_data="bank:term:confirm")],
+        [InlineKeyboardButton(text="◀️ Назад в банк", callback_data="bank:card")],
+    ])
+
+
+async def _bank_term_confirm(cb: CallbackQuery) -> None:
+    uid = cb.from_user.id
+    wallet = get_balance(uid)
+    if uid in bank_term_deposits:
+        return await cb.answer(
+            "У тебя уже есть вклад. Сначала забери проценты или закрой его.",
+            show_alert=True,
+        )
+    if wallet <= 0:
+        return await cb.answer("В кошельке нет LMN для вклада.", show_alert=True)
+    bank_term_deposits[uid] = {
+        "principal": wallet,
+        "started_at": now_kyiv().isoformat(),
+    }
+    add_balance(uid, -wallet)
+    schedule_state_save("открытие вклада")
+    await cb.message.edit_text(
+        _bank_card_text(uid) + "\n\n✅ <b>Вклад открыт!</b>",
+        parse_mode="HTML",
+        reply_markup=_bank_keyboard(uid),
+    )
+    await cb.answer("Вклад открыт под 10% годовых")
+
+
+@dp.callback_query(F.data.startswith("bank:"))
+async def cb_bank_actions(cb: CallbackQuery):
+    parts = (cb.data or "").split(":")
+    if len(parts) < 2:
+        return await cb.answer("Некорректная кнопка банка", show_alert=True)
+    action = parts[1]
+    uid = cb.from_user.id
+
+    if action == "card" and len(parts) == 2:
+        await cb.message.edit_text(
+            _bank_card_text(uid),
+            parse_mode="HTML",
+            reply_markup=_bank_keyboard(uid),
+        )
+        return await cb.answer()
+
+    if action == "save" and len(parts) == 2:
+        amount = _move_wallet_to_bank(uid)
+        if amount <= 0:
+            return await cb.answer("В кошельке нет монет для сохранения.", show_alert=True)
+        schedule_state_save("сохранение через кнопку банка")
+        await cb.message.edit_text(
+            _bank_card_text(uid) + f"\n\n✅ В обычный банк переведено <b>{fmt_lmn(amount)} LMN</b>.",
+            parse_mode="HTML",
+            reply_markup=_bank_keyboard(uid),
+        )
+        return await cb.answer("Деньги сохранены")
+
+    if action == "withdraw" and len(parts) == 3 and parts[2] == "help":
+        return await cb.answer(
+            "Для снятия напиши: «снять 1000» или «снять всё». Кулдаун — 2 часа.",
+            show_alert=True,
+        )
+
+    if action != "term" or len(parts) != 3:
+        return await cb.answer("Некорректное действие банка", show_alert=True)
+
+    term_action = parts[2]
+    if term_action == "offer":
+        wallet = get_balance(uid)
+        return await cb.message.edit_text(
+            f"{brand.hdr()}\n\n"
+            "💎 <b>Срочный вклад Lumena</b>\n\n"
+            "Положи весь кошелёк под <b>10% годовых</b>.\n"
+            "Доход считается посекундно и растёт каждый день.\n\n"
+            f"💳 Сейчас в кошельке: <b>{fmt_lmn(wallet)} LMN</b>\n"
+            "✨ Проценты можно забирать отдельно, не трогая тело вклада.\n"
+            "🔓 Закрытие вернёт тело вклада и весь накопленный доход.",
+            parse_mode="HTML",
+            reply_markup=_term_offer_keyboard(),
+        )
+    if term_action == "confirm":
+        return await _bank_term_confirm(cb)
+    if term_action == "claim":
+        record = bank_term_deposits.get(uid)
+        if not record:
+            return await cb.answer("Активного вклада нет.", show_alert=True)
+        interest = _term_interest(uid)
+        if interest <= 0:
+            return await cb.answer("Проценты ещё не накопились.", show_alert=True)
+        add_balance(uid, interest)
+        record["started_at"] = now_kyiv().isoformat()
+        schedule_state_save("получение процентов по вкладу")
+        await cb.message.edit_text(
+            _bank_card_text(uid) + f"\n\n✨ Получено процентов: <b>+{fmt_lmn(interest)} LMN</b>.",
+            parse_mode="HTML",
+            reply_markup=_bank_keyboard(uid),
+        )
+        return await cb.answer(f"+{fmt_lmn(interest)} LMN процентов")
+    if term_action == "close":
+        record = bank_term_deposits.get(uid)
+        if not record:
+            return await cb.answer("Активного вклада нет.", show_alert=True)
+        principal = max(0, int(record.get("principal", 0) or 0))
+        interest = _term_interest(uid)
+        bank_term_deposits.pop(uid, None)
+        add_balance(uid, principal + interest)
+        schedule_state_save("закрытие вклада")
+        await cb.message.edit_text(
+            _bank_card_text(uid)
+            + f"\n\n🔓 Вклад закрыт. Возвращено: <b>{fmt_lmn(principal + interest)} LMN</b>.",
+            parse_mode="HTML",
+            reply_markup=_bank_keyboard(uid),
+        )
+        return await cb.answer("Вклад закрыт")
+    return await cb.answer("Некорректное действие вклада", show_alert=True)
+
+
 @dp.message(Command("bank", "банк"))
 async def cmd_bank_slash(msg: Message):
     await _bank_card(msg)
@@ -4667,6 +5223,16 @@ async def cmd_deposit_slash(msg: Message, command: CommandObject = None):
 @dp.message(Command("withdraw", "снять", "вывести"))
 async def cmd_withdraw_slash(msg: Message, command: CommandObject = None):
     await _bank_withdraw(msg, (command.args or "") if command else "")
+
+
+auction_manager.register(
+    dp,
+    bot,
+    get_funds=_auction_get_funds,
+    charge=_auction_charge,
+    refund=_auction_refund,
+    save=schedule_state_save,
+)
 
 
 @dp.message(Command("richest"))
@@ -7914,7 +8480,9 @@ async def cmd_daily(msg: Message):
             parse_mode="HTML"
         )
     reward = random.randint(500, 2000)
-    add_balance(uid, reward)
+    reward, combo_bonus = _apply_economy_combo(uid, reward, "daily")
+    credited = add_balance(uid, reward)
+    _register_earning_challenge(uid, credited, "daily")
     xp_got   = 50
     lvl_up   = award_xp(uid, xp_got)
     daily_cooldown[uid] = today
@@ -7928,12 +8496,13 @@ async def cmd_daily(msg: Message):
         f"{brand.hdr()}\n\n"
         f"🎁 <b>Ежедневная награда · {name}</b>\n\n"
         f"{brand.div()}\n"
-        f"💰 +<b>{fmt_lmn(reward)} LMN</b>\n"
+        f"💰 +<b>{fmt_lmn(credited)} LMN</b>{_economy_combo_line(combo_bonus)}\n"
         f"✨ +<b>{xp_got} XP</b>{up_text}{streak_tip}\n\n"
         f"📅 Возвращайся завтра!\n"
         f"💡 Не забудь: <code>задания</code> для бонуса за все задания\n\n"
         f"{brand.div()}",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
 
 def _this_week() -> str:
@@ -7973,7 +8542,8 @@ async def cmd_bonus(msg: Message):
             parse_mode="HTML"
         )
     reward = 5000
-    add_balance(uid, reward)
+    credited = add_balance(uid, reward)
+    _register_earning_challenge(uid, credited, "weekly_bonus")
     award_xp(uid, 100)
     bonus_weekly_cd[uid] = week_key
     save_data()
@@ -7984,11 +8554,12 @@ async def cmd_bonus(msg: Message):
         f"{brand.div()}\n"
         f"🔥 Стрик: <b>{st} дн.</b>\n"
         f"{bar}\n\n"
-        f"💰 +<b>{fmt_lmn(reward)} LMN</b>\n"
+        f"💰 +<b>{fmt_lmn(credited)} LMN</b>\n"
         f"✨ +<b>100 XP</b>\n\n"
         f"{brand.div()}\n"
         f"<i>Продолжай чекиниться каждый день!</i> 🌟",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=_earning_actions_keyboard(),
     )
 
 async def cmd_tasks(msg: Message):
@@ -10245,6 +10816,9 @@ TEXT_COMMANDS.update({
     "казино": cmd_casino, "слоты": cmd_slots, "слот": cmd_slots,
     "ограбить": cmd_rob, "украсть": cmd_rob,
     "банк": _bank_card, "bank": _bank_card,
+    "аукцион": auction_manager.cmd_auction, "auction": auction_manager.cmd_auction,
+    "ставка": auction_manager.cmd_bid, "bid": auction_manager.cmd_bid,
+    "коллекция": auction_manager.cmd_collection, "мояколлекция": auction_manager.cmd_collection,
     "сохранить": _bank_deposit, "save": _bank_deposit,
     "снять": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
     "вывести": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
@@ -15396,6 +15970,7 @@ async def main():
 
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
+    asyncio.create_task(auction_loop())
 
     # V6-объявление больше НЕ отправляется автоматически при старте —
     # только вручную через /announce_v6 (иначе каждый редеплой спамил чат).
@@ -15678,6 +16253,31 @@ def _apply_data(data: dict) -> None:
         _link_whitelist[int(c)] = list(wl)
     for u, b in data.get("bank_balances", {}).items():
         bank_balances[int(u)] = int(b)
+    for u, value in data.get("bank_term_deposits", {}).items():
+        try:
+            principal = int(value.get("principal", 0) or 0)
+            started_at = _parse_bank_datetime(value.get("started_at"))
+            if principal > 0 and started_at:
+                bank_term_deposits[int(u)] = {
+                    "principal": principal,
+                    "started_at": started_at.isoformat(),
+                }
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректный вклад для user=%s пропущен", u)
+    for u, value in data.get("economy_progress", {}).items():
+        try:
+            if isinstance(value, dict):
+                economy_progress[int(u)] = {
+                    "date": str(value.get("date", ""))[:20],
+                    "sources": [
+                        str(source)[:30]
+                        for source in (value.get("sources") or [])
+                        if str(source).strip()
+                    ][:12],
+                }
+        except (TypeError, ValueError):
+            pass
+    auction_manager.load_state(data.get("auction_state", {}))
     for u, value in data.get("bank_withdraw_cd", {}).items():
         try:
             _bwcd_dt = datetime.fromisoformat(value)
