@@ -633,6 +633,15 @@ def downgrade_rich_html(text: str | None, strip_custom_emoji: bool = False) -> s
         result,
         flags=re.IGNORECASE,
     )
+    if strip_custom_emoji:
+        # Старые/ограниченные клиенты могут отвергать blockquote с
+        # expandable-атрибутом. В аварийном fallback оставляем только текст.
+        result = re.sub(
+            r"</?blockquote[^>]*>",
+            "",
+            result,
+            flags=re.IGNORECASE,
+        )
     result = re.sub(r"<li\s*>", "• ", result, flags=re.IGNORECASE)
     result = re.sub(r"</li\s*>", "\n", result, flags=re.IGNORECASE)
     return result

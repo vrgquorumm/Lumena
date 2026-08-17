@@ -175,6 +175,72 @@ def _decorate_caption_container(model):
     return model.model_copy(update=updates) if updates else model
 
 
+async def _call_with_message_fallback(self, method, request_timeout=None):
+    """Отправляет сообщение и убирает спорные entities при ошибке Telegram."""
+    try:
+        return await _orig_bot_call(self, method, request_timeout)
+    except Exception as first_error:
+        error_text = str(first_error)
+        if not any(
+            marker in error_text
+            for marker in (
+                "ENTITY_TEXT_INVALID",
+                "RICH_MESSAGE_EMOJI_INVALID",
+                "can't parse entities",
+            )
+        ):
+            raise
+        if isinstance(method, SendMessage):
+            text = method.text or ""
+            parse_mode = method.parse_mode
+            if parse_mode in ("Markdown", "MarkdownV2"):
+                # Убираем только созданные нами ссылки на custom emoji и
+                # отправляем исходное оформление как обычный текст.
+                text = re.sub(
+                    r"!\[\]\(tg://emoji\?id=\d+\)",
+                    "•",
+                    text,
+                )
+                text = re.sub(
+                    r"\[[^\]]*\]\(tg://emoji\?id=\d+\)",
+                    "•",
+                    text,
+                )
+                safe_method = method.model_copy(update={
+                    "text": text,
+                    "parse_mode": None,
+                    "entities": None,
+                })
+            else:
+                safe_method = method.model_copy(update={
+                    "text": brand.downgrade_rich_html(
+                        text, strip_custom_emoji=True
+                    ),
+                    "parse_mode": "HTML",
+                    "entities": None,
+                })
+            logging.warning(
+                "⚠️ Telegram отклонил themed entities; отправляю безопасный fallback: %s",
+                error_text,
+            )
+            return await _orig_bot_call(self, safe_method, request_timeout)
+        if isinstance(method, EditMessageText):
+            safe_method = method.model_copy(update={
+                "text": brand.downgrade_rich_html(
+                    method.text or "", strip_custom_emoji=True
+                ),
+                "parse_mode": "HTML",
+                "entities": None,
+                "rich_message": None,
+            })
+            logging.warning(
+                "⚠️ Telegram отклонил themed edit entities; отправляю безопасный fallback: %s",
+                error_text,
+            )
+            return await _orig_bot_call(self, safe_method, request_timeout)
+        raise
+
+
 async def _rich_patched_call(self, method, request_timeout=None):
     try:
         method = _decorate_caption_container(method)
@@ -213,7 +279,9 @@ async def _rich_patched_call(self, method, request_timeout=None):
                     "entities": None,
                     "parse_mode": "HTML",
                 })
-                return await _orig_bot_call(self, method, request_timeout)
+                return await _call_with_message_fallback(
+                    self, method, request_timeout
+                )
         if brand.has_pack() and isinstance(method, EditMessageText) and not method.rich_message:
             html_text = _to_rich_html(
                 method.text, method.entities, method.parse_mode
@@ -224,7 +292,9 @@ async def _rich_patched_call(self, method, request_timeout=None):
                     "entities": None,
                     "parse_mode": "HTML",
                 })
-                return await _orig_bot_call(self, method, request_timeout)
+                return await _call_with_message_fallback(
+                    self, method, request_timeout
+                )
         if isinstance(method, SendRichMessage):
             rich_message = method.rich_message
             rich_html = getattr(rich_message, "html", None)
