@@ -82,6 +82,8 @@ LMN_GLOBAL_ZERO_VERSION = 2  # ручное обнуление кошелько�
 OWNER_AUTO_CREDIT_ENABLED = False  # после общего сброса фаундеру не начисляются монеты автоматически
 FOUNDER_GRANT_VERSION = 1
 FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
+# Дополнительные тематические паки, которые смешиваются с основным при старте.
+EXTRA_EMOJI_PACKS = ("metallic_by_emsetbot",)
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -13480,8 +13482,23 @@ async def handle_btn_edit_input(msg: Message):
     )
 
 
-async def _apply_emoji_pack(msg: Message, reference: str):
-    """Загружает custom emoji-пак и применяет его к сообщениям и кнопкам."""
+async def _fetch_emoji_pack(pack_name: str) -> tuple[list[str], dict[str, str]]:
+    """Получает ID и fallback-карту одного custom emoji-пака."""
+    sticker_set = await bot.get_sticker_set(pack_name)
+    emoji_map = {
+        str(s.emoji): str(s.custom_emoji_id)
+        for s in sticker_set.stickers
+        if getattr(s, "emoji", None) and getattr(s, "custom_emoji_id", None)
+    }
+    ids = [
+        s.custom_emoji_id for s in sticker_set.stickers
+        if getattr(s, "custom_emoji_id", None)
+    ]
+    return ids, emoji_map
+
+
+async def _apply_emoji_pack(msg: Message, reference: str, merge: bool = False):
+    """Загружает или добавляет custom emoji-пак к оформлению."""
     if not is_owner(msg):
         return
     pack_name = brand.pack_name_from_reference(reference)
@@ -13494,33 +13511,38 @@ async def _apply_emoji_pack(msg: Message, reference: str):
             "или просто отправь эту ссылку в личку боту.",
             parse_mode="HTML"
         )
-    status_msg = await msg.reply(f"⏳ Загружаю пак <code>{html.escape(pack_name)}</code>…", parse_mode="HTML")
+    action = "Смешиваю" if merge else "Загружаю"
+    status_msg = await msg.reply(
+        f"⏳ {action} пак <code>{html.escape(pack_name)}</code>…",
+        parse_mode="HTML",
+    )
     try:
-        sticker_set = await bot.get_sticker_set(pack_name)
-        emoji_map = {
-            str(s.emoji): str(s.custom_emoji_id)
-            for s in sticker_set.stickers
-            if getattr(s, "emoji", None) and getattr(s, "custom_emoji_id", None)
-        }
-        ids = [
-            s.custom_emoji_id for s in sticker_set.stickers
-            if getattr(s, "custom_emoji_id", None)
-        ]
+        ids, emoji_map = await _fetch_emoji_pack(pack_name)
         if not ids:
             return await status_msg.edit_text(
                 f"⚠️ Пак <code>{html.escape(pack_name)}</code> найден, но не содержит custom emoji.\n"
                 "Убедись что это пак именно с <b>custom emoji</b>, а не обычными стикерами.",
                 parse_mode="HTML"
             )
-        brand.set_pack(ids, pack_name, emoji_map)
-        saved = await save_state_now("загрузка custom emoji-пака")
+        if merge:
+            before = len(brand.get_pack())
+            brand.merge_pack(ids, pack_name, emoji_map)
+            added = len(brand.get_pack()) - before
+        else:
+            brand.set_pack(ids, pack_name, emoji_map)
+            added = len(ids)
+        saved = await save_state_now(
+            "смешивание custom emoji-пака" if merge else "загрузка custom emoji-пака"
+        )
         await status_msg.edit_text(
-            f"✅ <b>Пак загружен!</b>\n\n"
-            f"📦 <code>{html.escape(pack_name)}</code> — {len(ids)} emoji\n\n"
+            f"✅ <b>{'Пак смешан' if merge else 'Пак загружен'}!</b>\n\n"
+            f"📦 <code>{html.escape(pack_name)}</code> — {len(ids)} emoji\n"
+            f"{'➕ Добавлено новых: ' + str(added) + chr(10) if merge else ''}"
+            f"🎨 Всего в теме: {len(brand.get_pack())} emoji\n\n"
             f"Превью первых 12:\n{brand.preview(12)}\n\n"
             f"Заголовок: {brand.hdr()}\n"
             f"Разделитель: {brand.div()}\n\n"
-            "✅ Все новые сообщения и кнопки используют этот пак.\n"
+            "✅ Все новые сообщения и кнопки используют смешанную тему.\n"
             "🎨 Кнопки получили синие, зелёные и красные акценты Telegram."
             + ("" if saved else "\n\n⚠️ PostgreSQL недоступен: пак пока сохранён только локально."),
             parse_mode="HTML"
@@ -13540,6 +13562,14 @@ async def cmd_setemojipack(msg: Message):
     parts = (msg.text or "").split(maxsplit=1)
     reference = parts[1].strip() if len(parts) > 1 else ""
     await _apply_emoji_pack(msg, reference)
+
+
+@dp.message(Command("addemojipack", "addtheme", "добавитьпак"))
+async def cmd_addemojipack(msg: Message):
+    """Добавляет второй emoji-пак к уже активной теме."""
+    parts = (msg.text or "").split(maxsplit=1)
+    reference = parts[1].strip() if len(parts) > 1 else ""
+    await _apply_emoji_pack(msg, reference, merge=True)
 
 
 def _is_owner_emoji_pack_link(msg: Message) -> bool:
@@ -16061,24 +16091,42 @@ async def main():
     brand.load_custom_style()
 
     # ── Загружаем emoji пак при старте ───────────────────
-    _startup_pack = brand.get_pack_name() or "adaptiveqp_by_emsetbot"
+    # В snapshot имя может быть составным: берём первый пак как основной,
+    # а дополнительные ниже подмешиваются отдельно.
+    _startup_pack = (
+        (brand.get_pack_name().split("+", 1)[0].strip())
+        or "adaptiveqp_by_emsetbot"
+    )
     if not brand.has_pack() or not brand.has_emoji_map():
         try:
-            _ss = await bot.get_sticker_set(_startup_pack)
-            _emoji_map = {
-                str(s.emoji): str(s.custom_emoji_id)
-                for s in _ss.stickers
-                if getattr(s, "emoji", None) and getattr(s, "custom_emoji_id", None)
-            }
-            _ids = [
-                s.custom_emoji_id for s in _ss.stickers
-                if getattr(s, "custom_emoji_id", None)
-            ]
+            _ids, _emoji_map = await _fetch_emoji_pack(_startup_pack)
             if _ids:
                 brand.set_pack(_ids, _startup_pack, _emoji_map)
                 print(f"✅ Emoji пак загружен: {_startup_pack} ({len(_ids)} emoji)")
         except Exception as _ex:
             print(f"⚠️ Не удалось загрузить emoji пак '{_startup_pack}': {_ex}")
+
+    # ── Подмешиваем дополнительные тематические паки ─────
+    _extra_pack_changed = False
+    for _extra_pack in EXTRA_EMOJI_PACKS:
+        try:
+            _extra_ids, _extra_map = await _fetch_emoji_pack(_extra_pack)
+            _before_ids = len(brand.get_pack())
+            _before_name = brand.get_pack_name()
+            brand.merge_pack(_extra_ids, _extra_pack, _extra_map)
+            if (
+                len(brand.get_pack()) != _before_ids
+                or _extra_pack not in _before_name.split("+")
+            ):
+                _extra_pack_changed = True
+            print(
+                f"✅ Emoji пак смешан: {_extra_pack} "
+                f"(+{len(brand.get_pack()) - _before_ids}, всего {len(brand.get_pack())})"
+            )
+        except Exception as _ex:
+            print(f"⚠️ Не удалось подмешать emoji пак '{_extra_pack}': {_ex}")
+    if _extra_pack_changed:
+        await save_state_now("автоматическое смешивание дополнительных emoji-паков")
 
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
@@ -16176,6 +16224,7 @@ async def main():
                 BotCommand(command="help", description="📖 Все команды"),
                 BotCommand(command="settings", description="🎨 Настройки и оформление"),
                 BotCommand(command="theme", description="🎨 Установить emoji-пак"),
+                BotCommand(command="addtheme", description="➕ Смешать emoji-пак"),
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="shop", description="💎 Магазин"),
             ],

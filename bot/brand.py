@@ -384,7 +384,7 @@ def set_pack(
     """Устанавливает emoji-пак и, если доступна, карту Unicode → custom ID."""
     global _pack_ids, _pack_name, _pack_enabled, _emoji_map
     previous_map = dict(_emoji_map)
-    _pack_ids = [str(value) for value in ids if str(value).strip()][:100]
+    _pack_ids = [str(value) for value in ids if str(value).strip()][:400]
     _pack_name = str(name or "")[:128]
     _pack_enabled = bool(_pack_ids)
     if emoji_map is not None:
@@ -402,6 +402,29 @@ def set_pack(
             for emoji, custom_id in previous_map.items()
             if custom_id in allowed
         }
+
+
+def merge_pack(
+    ids: list[str],
+    name: str = "",
+    emoji_map: dict[str, str] | None = None,
+) -> None:
+    """Добавляет второй pack к текущему, сохраняя порядок и уникальные ID."""
+    existing = list(_pack_ids)
+    known_ids = set(existing)
+    merged_ids = existing + [
+        str(value) for value in ids
+        if str(value).strip() and str(value) not in known_ids
+    ]
+    merged_map = dict(_emoji_map)
+    for emoji, custom_id in (emoji_map or {}).items():
+        # Основной пак остаётся источником истины при одинаковом fallback.
+        if str(emoji) and str(emoji) not in merged_map:
+            merged_map[str(emoji)] = str(custom_id)
+    names = [part.strip() for part in _pack_name.split("+") if part.strip()]
+    if name and name not in names:
+        names.append(str(name).strip())
+    set_pack(merged_ids, " + ".join(names), merged_map)
 
 
 def disable_pack_runtime() -> None:
