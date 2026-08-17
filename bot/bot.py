@@ -11710,6 +11710,19 @@ async def cmd_reissue_anketa(msg: Message):
             msg.reply_to_message.message_id,
         )
     if not target_uid:
+        # Старые модерационные карточки могли не сохранять message_id.
+        # В них всегда был напечатан Telegram ID автора.
+        reply_text = (
+            getattr(msg.reply_to_message, "text", None)
+            or getattr(msg.reply_to_message, "caption", None)
+            or ""
+        )
+        id_match = re.search(r"(?:🆔\s*)?ID\s*[:#]?\s*(\d{5,})", reply_text, re.IGNORECASE)
+        if id_match:
+            candidate_uid = int(id_match.group(1))
+            if _ank.get_approved_data(candidate_uid):
+                target_uid = candidate_uid
+    if not target_uid:
         return await msg.reply(
             "⚠️ Не удалось найти анкету в базе. "
             "Ответь именно на старое фото, альбом или карточку анкеты."
