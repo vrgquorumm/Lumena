@@ -11,6 +11,7 @@ _pack_ids: list[str] = []
 _pack_name: str = ""
 _pack_enabled: bool = True
 _emoji_map: dict[str, str] = {}
+_pack_cursor: int = 0
 
 # ── Кастомный стиль ───────────────────────────────────────
 _custom_style: dict[str, str] = {}
@@ -284,7 +285,7 @@ def e(role: str, fallback: str | None = None) -> str:
     Если выбран custom emoji-пак, Telegram получает настоящий тег tg-emoji.
     При недоступном Premium автоматически остаётся обычный Unicode fallback."""
     fallback = fallback if fallback is not None else _FALLBACK.get(role, "•")
-    custom_id = get_role_id(role)
+    custom_id = _next_pack_id()
     if custom_id and _pack_enabled:
         return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
     return fallback
@@ -292,7 +293,7 @@ def e(role: str, fallback: str | None = None) -> str:
 
 def ei(idx: int, fallback: str = "•") -> str:
     """Custom emoji из пака по индексу с безопасным Unicode fallback."""
-    custom_id = get_id(idx)
+    custom_id = _next_pack_id()
     if custom_id and _pack_enabled:
         return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
     return fallback
@@ -382,9 +383,10 @@ def set_pack(
     emoji_map: dict[str, str] | None = None,
 ) -> None:
     """Устанавливает emoji-пак и, если доступна, карту Unicode → custom ID."""
-    global _pack_ids, _pack_name, _pack_enabled, _emoji_map
+    global _pack_ids, _pack_name, _pack_enabled, _emoji_map, _pack_cursor
     previous_map = dict(_emoji_map)
     _pack_ids = [str(value) for value in ids if str(value).strip()][:400]
+    _pack_cursor = 0
     _pack_name = str(name or "")[:128]
     _pack_enabled = bool(_pack_ids)
     if emoji_map is not None:
@@ -508,6 +510,16 @@ def _custom_emoji_tag(emoji: str, custom_id: str) -> str:
     return f'<tg-emoji emoji-id="{custom_id}">{emoji}</tg-emoji>'
 
 
+def _next_pack_id() -> str | None:
+    """Возвращает следующий ID по кругу из всех объединённых паков."""
+    global _pack_cursor
+    if not _pack_ids or not _pack_enabled:
+        return None
+    custom_id = _pack_ids[_pack_cursor % len(_pack_ids)]
+    _pack_cursor += 1
+    return custom_id
+
+
 def replace_emojis_html(text: str | None) -> str | None:
     """Заменяет каждую emoji-последовательность на custom emoji пака.
 
@@ -530,17 +542,12 @@ def replace_emojis_html(text: str | None) -> str | None:
     safe = _TG_EMOJI_TAG_RE.sub(protect, text)
     safe = _HTML_TAG_RE.sub(protect, safe)
 
-    fallback_id = _pack_ids[0] if _pack_ids else None
-
     def replace_match(match) -> str:
         emoji = match.group(0)
-        custom_id = _emoji_map.get(emoji)
-        if custom_id is None:
-            # Убираем только variation selector при поиске альтернативной
-            # записи — Telegram sticker metadata иногда нормализует его.
-            normalized = emoji.replace("\ufe0f", "")
-            custom_id = _emoji_map.get(normalized)
-        custom_id = custom_id or fallback_id
+        # Карта fallback сохраняется для совместимости и восстановления, но
+        # отображение намеренно распределяется по всему объединённому списку:
+        # так в сообщениях участвуют все паки, а не только первые совпадения.
+        custom_id = _next_pack_id()
         return _custom_emoji_tag(emoji, custom_id) if custom_id else emoji
 
     safe = _EMOJI_SEQUENCE_RE.sub(replace_match, safe)
@@ -554,14 +561,9 @@ def replace_emojis_markdown(text: str | None, parse_mode: str) -> str | None:
     if not text or not has_pack():
         return text
     markdown_v2 = parse_mode == "MarkdownV2"
-    fallback_id = _pack_ids[0] if _pack_ids else None
-
     def replace_match(match) -> str:
         emoji = match.group(0)
-        custom_id = _emoji_map.get(emoji)
-        if custom_id is None:
-            custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
-        custom_id = custom_id or fallback_id
+        custom_id = _next_pack_id()
         if not custom_id:
             return emoji
         if markdown_v2:
@@ -604,6 +606,28 @@ def decorate_message_html(text: str | None) -> str | None:
     if "<tg-emoji" in (themed or "")[:500]:
         return themed
     return f'{e("header", _FALLBACK["header"])} {themed}'
+
+
+def prepare_rich_html(text: str | None) -> str | None:
+    """Делает fallback внутри tg-emoji безопасным для Rich Message.
+
+    Rich Message требует один простой fallback-символ; ZWJ, флаги,
+    keycap-emoji и variation-последовательности могут вызвать
+    RICH_MESSAGE_EMOJI_INVALID. Сам custom emoji ID при этом сохраняется.
+    """
+    if not text:
+        return text
+
+    def replace_tag(match) -> str:
+        opening, closing = match.group(1), match.group(2)
+        return f"{opening}🔹{closing}"
+
+    return re.sub(
+        r"(<tg-emoji\b[^>]*>).*?(</tg-emoji>)",
+        replace_tag,
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
 
 def downgrade_rich_html(text: str | None, strip_custom_emoji: bool = False) -> str | None:
@@ -681,16 +705,7 @@ def button_icon_id(text: str = "", callback_data: str | None = None,
     """Возвращает custom emoji для иконки кнопки из выбранного пака."""
     if not has_pack():
         return None
-    mapped_id = first_emoji_id(text)
-    if mapped_id:
-        return mapped_id
-    style = button_style(text, callback_data, url)
-    role = {
-        "danger": "cross",
-        "success": "ok",
-        "primary": "accent",
-    }[style]
-    return get_role_id(role) or (_pack_ids[0] if _pack_ids else None)
+    return _next_pack_id()
 
 
 def decorate_reply_markup(markup):

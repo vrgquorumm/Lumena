@@ -117,8 +117,10 @@ def _to_rich_html(text: str | None, entities, parse_mode) -> str | None:
         return None
     if entities:
         try:
-            return brand.decorate_message_html(
-                html_decoration.unparse(text, entities)
+            return brand.prepare_rich_html(
+                brand.decorate_message_html(
+                    html_decoration.unparse(text, entities)
+                )
             )
         except Exception:
             return None
@@ -129,7 +131,7 @@ def _to_rich_html(text: str | None, entities, parse_mode) -> str | None:
         parse_mode = None
     if parse_mode not in ("HTML", None):
         return None  # Markdown/MarkdownV2 — не конвертируем, шлём как раньше
-    return brand.decorate_message_html(text)
+    return brand.prepare_rich_html(brand.decorate_message_html(text))
 
 
 def _no_default(v):
@@ -241,6 +243,32 @@ async def _call_with_message_fallback(self, method, request_timeout=None):
         raise
 
 
+async def _call_rich_with_fallback(
+    self, rich_method, fallback_method, request_timeout=None
+):
+    """Пробует Rich Message, затем безопасно возвращается к Bot API HTML."""
+    try:
+        return await _orig_bot_call(self, rich_method, request_timeout)
+    except Exception as rich_error:
+        error_text = str(rich_error)
+        if not any(
+            marker in error_text
+            for marker in (
+                "RICH_MESSAGE_EMOJI_INVALID",
+                "ENTITY_TEXT_INVALID",
+                "can't parse entities",
+            )
+        ):
+            raise
+        logging.warning(
+            "⚠️ Rich Message отклонён, использую обычный HTML fallback: %s",
+            error_text,
+        )
+        return await _call_with_message_fallback(
+            self, fallback_method, request_timeout
+        )
+
+
 async def _rich_patched_call(self, method, request_timeout=None):
     try:
         method = _decorate_caption_container(method)
@@ -266,34 +294,54 @@ async def _rich_patched_call(self, method, request_timeout=None):
             )
             if themed_text != method.text:
                 method = method.model_copy(update={"text": themed_text})
-        # Rich Messages отклоняют часть tg-emoji fallback-последовательностей
-        # (RICH_MESSAGE_EMOJI_INVALID). Обычный Bot API HTML поддерживает
-        # custom emoji и совместим с остальными командами.
+        # Rich Message остаётся основным оформлением. Для custom emoji с
+        # безопасным однокодпоинтным fallback это работает, а при отказе
+        # Telegram ниже включается обычный HTML fallback.
         if brand.has_pack() and isinstance(method, SendMessage):
             html_text = _to_rich_html(
                 method.text, method.entities, method.parse_mode
             )
             if html_text:
-                method = method.model_copy(update={
+                fallback_method = method.model_copy(update={
                     "text": brand.downgrade_rich_html(html_text),
                     "entities": None,
                     "parse_mode": "HTML",
                 })
-                return await _call_with_message_fallback(
-                    self, method, request_timeout
+                rich_method = SendRichMessage(
+                    chat_id=method.chat_id,
+                    rich_message=InputRichMessage(html=html_text),
+                    business_connection_id=method.business_connection_id,
+                    message_thread_id=method.message_thread_id,
+                    direct_messages_topic_id=method.direct_messages_topic_id,
+                    disable_notification=_no_default(method.disable_notification),
+                    protect_content=_no_default(method.protect_content),
+                    allow_paid_broadcast=_no_default(method.allow_paid_broadcast),
+                    message_effect_id=method.message_effect_id,
+                    suggested_post_parameters=method.suggested_post_parameters,
+                    reply_parameters=method.reply_parameters,
+                    reply_markup=method.reply_markup,
+                )
+                return await _call_rich_with_fallback(
+                    self, rich_method, fallback_method, request_timeout
                 )
         if brand.has_pack() and isinstance(method, EditMessageText) and not method.rich_message:
             html_text = _to_rich_html(
                 method.text, method.entities, method.parse_mode
             )
             if html_text:
-                method = method.model_copy(update={
+                fallback_method = method.model_copy(update={
                     "text": brand.downgrade_rich_html(html_text),
                     "entities": None,
                     "parse_mode": "HTML",
                 })
-                return await _call_with_message_fallback(
-                    self, method, request_timeout
+                rich_method = method.model_copy(update={
+                    "rich_message": InputRichMessage(html=html_text),
+                    "text": None,
+                    "entities": None,
+                    "parse_mode": None,
+                })
+                return await _call_rich_with_fallback(
+                    self, rich_method, fallback_method, request_timeout
                 )
         if isinstance(method, SendRichMessage):
             rich_message = method.rich_message
