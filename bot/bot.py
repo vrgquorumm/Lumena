@@ -70,6 +70,8 @@ SUPER_IDS      = {OWNER_ID}
 # Постоянный заместитель с полным founder-доступом.
 # Это числовой Telegram ID, поэтому username не используется для авторизации.
 FOUNDER_DEPUTY_IDS = {1839566911}
+# Постоянная роль по числовому Telegram ID — не зависит от username.
+FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
 
@@ -1385,7 +1387,40 @@ def get_role(uid: int) -> str | None:
     """Возвращает роль пользователя или None."""
     if uid in FOUNDER_DEPUTY_IDS:
         return "founder_deputy"
+    if uid in FIXED_LEAD_ADMIN_IDS:
+        return "lead_admin"
     return ROLES.get(uid)
+
+
+def _role_sync_chat_ids(current_chat_id: int | None = None) -> list[int]:
+    """Уникальные чаты, где Telegram-права роли должны совпадать.
+
+    Главный чат хранится как pub_chat, закрытый админский — как observer_chat.
+    Текущий чат ставится первым, чтобы команда работала и до полной настройки
+    связки; повторяющиеся ID убираются.
+    """
+    result: list[int] = []
+    for raw_chat_id in (
+        current_chat_id,
+        _ank.get_pub_chat(),
+        _ank.get_observer_chat(),
+    ):
+        try:
+            chat_id = int(raw_chat_id)
+        except (TypeError, ValueError):
+            continue
+        if chat_id and chat_id not in result:
+            result.append(chat_id)
+    return result
+
+
+def _fixed_staff_roles() -> tuple[tuple[int, str], ...]:
+    """Постоянные сотрудники, которых синхронизируем после старта."""
+    return tuple(
+        [(uid, "founder_deputy") for uid in sorted(FOUNDER_DEPUTY_IDS)]
+        + [(uid, "lead_admin") for uid in sorted(FIXED_LEAD_ADMIN_IDS)]
+    )
+
 
 def get_role_display(uid: int, username: str = "") -> str | None:
     """Красивое название роли для отображения."""
@@ -2619,7 +2654,7 @@ def _can_manage_role(msg, target_role: str) -> bool:
     """True если отправитель вправе назначить/снять target_role."""
     if is_owner(msg):
         return True
-    user_role = ROLES.get(msg.from_user.id)
+    user_role = get_role(msg.from_user.id)
     allowed = _ROLE_CAN_ASSIGN.get(user_role, set())
     return target_role in allowed
 
@@ -2684,7 +2719,12 @@ async def _demote_in_chat(user_id: int, chat_id: int | None = None) -> tuple[boo
 
 async def _notify_role_assigned(user_id: int, role: str, assigner_name: str) -> None:
     """Отправляет DM юзеру о назначении роли с ссылкой на чат."""
-    chat_link = _ank.get_chat_link() or "https://t.me/+_K2SJRYIhq9hYjFi"
+    # Ролевое приглашение ведёт именно в закрытый админский чат, а не в
+    # главный чат публикаций/знакомств.
+    chat_link = (
+        _ank.get_observer_chat_link()
+        or OBSERVER_CHAT_INVITE_LINK
+    )
     role_icon = _ROLE_ICON.get(role, "🔹")
     role_name = ROLE_NAMES.get(role, role)
     try:
@@ -2845,21 +2885,15 @@ async def cmd_set_role(msg: Message, command=None):
     title_ok = False
     chat_err = ""
     if promoted_uid:
-        # Промоут в текущем чате (где выдана команда)
-        chat_ok, title_ok, chat_err = await _promote_in_chat(promoted_uid, role, msg.chat.id)
-        # Если текущий чат — не pub_chat, промоутим и там
-        pub_id = _ank.get_pub_chat()
-        if pub_id and pub_id != msg.chat.id:
-            ok2, tok2, err2 = await _promote_in_chat(promoted_uid, role, pub_id)
-            if ok2:
-                chat_ok = True
-                if tok2:
-                    title_ok = True
-                    chat_err = ""
-                elif not chat_err:
-                    chat_err = err2
-            elif not chat_ok:
-                chat_err = err2 or chat_err
+        # Одинаковые права в текущем, главном и закрытом админском чатах.
+        for role_chat_id in _role_sync_chat_ids(msg.chat.id):
+            ok, title, err = await _promote_in_chat(
+                promoted_uid, role, role_chat_id
+            )
+            chat_ok = chat_ok or ok
+            title_ok = title_ok or title
+            if not ok:
+                chat_err = err or chat_err
         assigner = msg.from_user.full_name
         await _notify_role_assigned(promoted_uid, role, assigner)
 
@@ -2981,15 +3015,17 @@ async def cmd_remove_role(msg: Message, command=None):
         u     = msg.reply_to_message.from_user
         uname = (u.username or "").lower().lstrip("@")
         old   = get_role(u.id)
+        if u.id in FIXED_LEAD_ADMIN_IDS:
+            return await msg.reply(
+                "⛔ Роль Ники закреплена по ID и не может быть снята этой командой."
+            )
         # Проверяем что у вызывающего есть право снять эту роль
         if old and not _can_manage_role(msg, old):
             return await msg.reply(f"⛔ Ты не можешь снять роль {_fmt_role(old)}")
         remove_role(u.id, uname)
         save_data()
-        await _demote_in_chat(u.id, msg.chat.id)
-        pub_id = _ank.get_pub_chat()
-        if pub_id and pub_id != msg.chat.id:
-            await _demote_in_chat(u.id, pub_id)
+        for role_chat_id in _role_sync_chat_ids(msg.chat.id):
+            await _demote_in_chat(u.id, role_chat_id)
         if old:
             await _notify_role_removed(u.id, old)
         mention = f"@{uname}" if uname else html.escape(u.full_name)
@@ -3020,10 +3056,8 @@ async def cmd_remove_role(msg: Message, command=None):
     _ROLE_USERNAMES.pop(uname, None)
     if found_uid:
         ROLES.pop(found_uid, None)
-        await _demote_in_chat(found_uid, msg.chat.id)
-        pub_id = _ank.get_pub_chat()
-        if pub_id and pub_id != msg.chat.id:
-            await _demote_in_chat(found_uid, pub_id)
+        for role_chat_id in _role_sync_chat_ids(msg.chat.id):
+            await _demote_in_chat(found_uid, role_chat_id)
         if old:
             await _notify_role_removed(found_uid, old)
     save_data()
@@ -3065,6 +3099,16 @@ async def cmd_roles(msg: Message, command=None):
                 seen_unames.add(uname)
                 break
         by_role[role].append(display)
+
+    # Постоянные роли по ID показываем даже если они не записывались через
+    # пользовательскую команду назначения роли.
+    for fixed_uid, fixed_role in _fixed_staff_roles():
+        if any(str(fixed_uid) in str(item) for item in by_role.get(fixed_role, [])):
+            continue
+        fixed_name = "Ника" if fixed_uid in FIXED_LEAD_ADMIN_IDS else f"ID {fixed_uid}"
+        by_role.setdefault(fixed_role, []).append(
+            f"{fixed_name} · ID {fixed_uid}"
+        )
 
     # Username-only записи (без ID)
     for uname, role in _ROLE_USERNAMES.items():
@@ -12496,6 +12540,32 @@ async def cmd_setpubchat(msg: Message):
     )
 
 
+@dp.message(Command("setadminchat", "setadmin"))
+async def cmd_setadminchat(msg: Message, command: CommandObject = None):
+    """Связывает текущую группу с главным чатом как закрытый админский чат."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Только фаундер")
+    if msg.chat.type == "private":
+        return await msg.reply(
+            "ℹ️ Выполни <code>/setadminchat</code> прямо внутри админ-чата.",
+            parse_mode="HTML",
+        )
+    raw_args = (command.args if command else "") or ""
+    link = raw_args.strip().split()[0] if raw_args.strip().startswith("http") else OBSERVER_CHAT_INVITE_LINK
+    _ank.set_observer_chat(msg.chat.id)
+    _ank.set_observer_chat_link(link)
+    staff_team_chats.add(msg.chat.id)
+    await save_state_now("привязка админ-чата к главному")
+    await msg.reply(
+        "✅ <b>Админ-чат связан с главным.</b>\n\n"
+        f"🆔 ID админ-чата: <code>{msg.chat.id}</code>\n"
+        f"🔗 Ссылка для ролей: {html.escape(link)}\n\n"
+        "Теперь роли, выданные в админ-чате или главном чате, "
+        "синхронизируются в обоих.",
+        parse_mode="HTML",
+    )
+
+
 @dp.message(Command("resetpubchat"))
 async def cmd_resetpubchat(msg: Message):
     """Скидає чат публікацій анкет."""
@@ -14044,6 +14114,8 @@ async def cmd_setchatlink(msg: Message):
 TEXT_COMMANDS.update({
     "сетсайтурл": cmd_setsiteurl, "setsiteurl": cmd_setsiteurl,
     "сетчатлинк": cmd_setchatlink, "setchatlink": cmd_setchatlink,
+    "админчат": cmd_setadminchat, "связатьадминчат": cmd_setadminchat,
+    "setadminchat": cmd_setadminchat,
 })
 
 
@@ -14643,7 +14715,11 @@ HIDDEN_FOUNDER_BIND_COMMANDS = {
     FOUNDER_BIND_OBSERVER_LEGACY,
 }
 MAIN_CHAT_INVITE_LINK = "https://t.me/+YpbPgv81SURkNzcy"
-OBSERVER_CHAT_INVITE_LINK = "https://t.me/+MbYXdYhmBMViYzI6"
+OBSERVER_CHAT_INVITE_LINK = "https://t.me/+zNmpsGYBo0MwYmMy"
+_EXPIRED_ADMIN_CHAT_LINKS = {
+    "https://t.me/+_K2SJRYIhq9hYjFi",
+    "https://t.me/+MbYXdYhmBMViYzI6",
+}
 
 
 async def cmd_founder_secret_console(msg: Message, command=None):
@@ -14669,6 +14745,7 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "/медалька", "/опрос", "/give", "/взять",
         "/сетвип", "/снятьвип", "/сетлевел",
         "/юзеринфо", "/овнер", "/setmodchat", "/setpubchat",
+        "/setadminchat",
         "/setemoji", "/setemojipack", "/sendlaunch",
         "/setsiteurl", "/setchatlink", "/ownerclaim",
         "/флюди",
@@ -14733,7 +14810,7 @@ async def cmd_founder_bind_main_chat(msg: Message, command=None):
 
 
 async def cmd_founder_bind_observer_chat(msg: Message, command=None):
-    """Связывает текущую группу с закрытым founder-наблюдательным чатом."""
+    """Связывает текущую группу с закрытым админским чатом."""
     if not is_owner(msg):
         return
     if msg.chat.type == "private":
@@ -14744,6 +14821,7 @@ async def cmd_founder_bind_observer_chat(msg: Message, command=None):
     link = args.split()[0] if args.startswith("http") else OBSERVER_CHAT_INVITE_LINK
     _ank.set_observer_chat(msg.chat.id)
     _ank.set_observer_chat_link(link)
+    staff_team_chats.add(msg.chat.id)
     await save_state_now("привязка founder-наблюдательного чата")
     try:
         await msg.delete()
@@ -16166,6 +16244,12 @@ async def main():
     await brand.restore_brand()
     load_data()
     _ank.load_anketa_settings()
+    # Обновляем только известные устаревшие ссылки админ-чата. Пользовательские
+    # ссылки, заданные фаундером вручную, не перезаписываем.
+    _stored_admin_link = _ank.get_observer_chat_link()
+    if _stored_admin_link in _EXPIRED_ADMIN_CHAT_LINKS:
+        _ank.set_observer_chat_link(OBSERVER_CHAT_INVITE_LINK)
+        await save_state_now("обновление ссылки админ-чата")
     # ── Захист від повторного спрацювання одноразових LMN-міграцій ──────────
     # Версії міграцій раніше зберігались лише всередині великого bot_data
     # знімку. Якщо його відновлення хоч раз пройде не повністю (гонка,
@@ -16293,6 +16377,13 @@ async def main():
             print(f"🔗 Связанные чаты: mod={_mod} → pub={_pub}")
     except Exception as _ex:
         print(f"⚠️ linked chats setup: {_ex}")
+
+    # Автоматически выдаём постоянным сотрудникам их роль в обоих связанных
+    # чатах. Ошибка здесь не останавливает polling: чат мог ещё не добавить
+    # пользователя или бот мог временно не иметь права промоушена.
+    for _fixed_uid, _fixed_role in _fixed_staff_roles():
+        for _role_chat_id in _role_sync_chat_ids():
+            await _promote_in_chat(_fixed_uid, _fixed_role, _role_chat_id)
 
     # ── Очищаем меню команд Telegram (команды работают без /)
     global _BOT_ID, _BOT_USERNAME
