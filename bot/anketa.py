@@ -391,7 +391,8 @@ def set_pending(uid: int):
 def set_approved(uid: int, answers: dict, username: str, full_name: str,
                  pub_msg_id: int | None = None, pub_chat_id: int | None = None,
                  anketa_num: int | None = None,
-                 media_msg_ids: list[int] | None = None):
+                 media_msg_ids: list[int] | None = None,
+                 pub_control_msg_id: int | None = None):
     _user_status[uid] = "approved"
     _approved_data[uid] = {
         "answers":       answers,
@@ -401,6 +402,7 @@ def set_approved(uid: int, answers: dict, username: str, full_name: str,
         "pub_chat_id":   pub_chat_id,
         "anketa_num":    anketa_num,
         "media_msg_ids": media_msg_ids or [],  # IDs медіа-повідомлень альбому
+        "pub_control_msg_id": pub_control_msg_id,
     }
     save_anketa_settings()
     _schedule_anketa_save()
@@ -425,7 +427,11 @@ def revoke_anketa(uid: int) -> dict | None:
 def get_uid_by_pub_msg(msg_id: int, chat_id: int | None = None) -> int | None:
     """Знаходить uid власника анкети за msg_id публічного поста."""
     for uid, d in _approved_data.items():
-        if d.get("pub_msg_id") == msg_id:
+        if (
+            d.get("pub_msg_id") == msg_id
+            or d.get("pub_control_msg_id") == msg_id
+            or msg_id in (d.get("media_msg_ids") or [])
+        ):
             if chat_id is None or d.get("pub_chat_id") == chat_id:
                 return uid
     return None
@@ -758,16 +764,30 @@ def is_on_photo_step(uid: int) -> bool:
 is_on_media_step = is_on_photo_step  # alias
 
 
-async def _send_media_group_to_chat(bot_obj, chat_id: int, media_items: list) -> list[int]:
-    """Відправляє альбом (2–10 медіа) без підпису та кнопок.
+async def _send_media_group_to_chat(
+    bot_obj,
+    chat_id: int,
+    media_items: list,
+    caption: str | None = None,
+    parse_mode: str | None = None,
+) -> list[int]:
+    """Відправляє альбом (2–10 медіа) з підписом на першому елементі.
+
+    Telegram не дозволяє прикріпити inline-клавіатуру до sendMediaGroup,
+    тому кнопки відправляються окремим reply-повідомленням викликаючого коду.
     Повертає список message_id надісланих повідомлень (потрібно для видалення).
     """
     group = []
-    for item in media_items:
+    for index, item in enumerate(media_items):
+        media_kwargs = {}
+        if index == 0 and caption:
+            media_kwargs["caption"] = caption
+            if parse_mode:
+                media_kwargs["parse_mode"] = parse_mode
         if item["type"] == "photo":
-            group.append(InputMediaPhoto(media=item["file_id"]))
+            group.append(InputMediaPhoto(media=item["file_id"], **media_kwargs))
         else:
-            group.append(InputMediaVideo(media=item["file_id"]))
+            group.append(InputMediaVideo(media=item["file_id"], **media_kwargs))
     sent = await bot_obj.send_media_group(chat_id, media=group)
     return [m.message_id for m in (sent or [])]
 
@@ -824,14 +844,22 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
                     reply_markup=_make_mod_kb(app_id),
                 )
         else:
-            # 2–10 медіа: спочатку альбом, потім картка з кнопками
+            # 2–10 медіа: карточка является подписью первого элемента альбома,
+            # а кнопки идут отдельным reply-сообщением к нему.
             mod_media_msg_ids = await _send_media_group_to_chat(
-                bot_obj, mod_chat, media_items
+                bot_obj,
+                mod_chat,
+                media_items,
+                caption=card,
+                parse_mode="HTML",
             )
             sent = await bot_obj.send_message(
-                mod_chat, card,
+                mod_chat,
+                "⚙️ Действия с анкетой:",
                 parse_mode="HTML",
                 reply_markup=_make_mod_kb(app_id),
+                reply_to_message_id=mod_media_msg_ids[0] if mod_media_msg_ids else None,
+                allow_sending_without_reply=True,
             )
 
         _pending[app_id] = {

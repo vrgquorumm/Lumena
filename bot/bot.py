@@ -11567,6 +11567,25 @@ def _is_anketa_moderator_callback(cb: CallbackQuery) -> bool:
     return is_owner(cb) or has_role(cb.from_user.id, *_ANKETA_MODERATOR_ROLES)
 
 
+async def _delete_anketa_messages(chat_id: int | None, *message_ids) -> None:
+    """Удаляет связанные сообщения анкеты без дублей и без остановки сценария."""
+    if not chat_id:
+        return
+    seen: set[int] = set()
+    for raw_id in message_ids:
+        try:
+            message_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if not message_id or message_id in seen:
+            continue
+        seen.add(message_id)
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+
+
 @dp.callback_query(F.data.startswith("anon_answer:"))
 async def cb_anon_answer(cb: CallbackQuery):
     qid = cb.data.split(":", 1)[1]
@@ -11713,7 +11732,9 @@ async def cb_ank_accept(cb: CallbackQuery):
     if len(parts) != 2 or not parts[1]:
         return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     app_id = parts[1]
-    app = _ank._pending.get(app_id)
+    # Забираем заявку атомарно до публикации: два модератора не смогут
+    # одновременно нажать «Принять» и создать дубликаты в паблике.
+    app = _ank._pending.pop(app_id, None)
     if not app:
         return await cb.answer("Заявка не найдена или уже обработана", show_alert=True)
     mod_name = cb.from_user.full_name
@@ -11722,6 +11743,7 @@ async def cb_ank_accept(cb: CallbackQuery):
     # 1. Публікуємо в паблік-чат, зберігаємо msg_id
     pub_chat  = _ank.get_pub_chat()
     pub_msg_id       = None
+    pub_control_msg_id = None
     pub_media_msg_ids: list[int] = []   # IDs альбому (2+ медіа) для видалення
     pub_ok    = False
     media_items = app["answers"].get("media", [])
@@ -11758,14 +11780,28 @@ async def cb_ank_accept(cb: CallbackQuery):
                         reply_markup=_rkb,
                     )
             else:
-                # 2–10 медіа: альбом, потім текст з реакціями
-                _media_ids = await _ank._send_media_group_to_chat(bot, pub_chat, media_items)
-                sent_pub = await bot.send_message(
-                    pub_chat, pub_text, parse_mode="HTML",
-                    reply_markup=_rkb,
+                # 2–10 медіа: карточка является подписью первого элемента
+                # альбома, а реакции — отдельным reply-сообщением.
+                _media_ids = await _ank._send_media_group_to_chat(
+                    bot,
+                    pub_chat,
+                    media_items,
+                    caption=pub_text,
+                    parse_mode="HTML",
                 )
-                pub_media_msg_ids = _media_ids  # зберігаємо для майбутнього видалення
-            pub_msg_id = sent_pub.message_id
+                sent_pub = await bot.send_message(
+                    pub_chat,
+                    "💞 Реакции на анкету:",
+                    parse_mode="HTML",
+                    reply_markup=_rkb,
+                    reply_to_message_id=_media_ids[0] if _media_ids else None,
+                    allow_sending_without_reply=True,
+                )
+                pub_media_msg_ids = _media_ids  # сохраняем для будущего удаления
+                pub_control_msg_id = sent_pub.message_id
+                pub_msg_id = _media_ids[0] if _media_ids else sent_pub.message_id
+            if pub_msg_id is None:
+                pub_msg_id = sent_pub.message_id
             pub_ok = True
             # Публікуємо анкету й одразу закріплюємо саме картку з реакціями.
             # Помилка прав Telegram не повинна скасовувати схвалення анкети:
@@ -11786,7 +11822,8 @@ async def cb_ank_accept(cb: CallbackQuery):
     _ank.set_approved(uid, app["answers"], app["username"], app["full_name"],
                       pub_msg_id=pub_msg_id, pub_chat_id=pub_chat,
                       anketa_num=app.get("anketa_num"),
-                      media_msg_ids=pub_media_msg_ids)
+                      media_msg_ids=pub_media_msg_ids,
+                      pub_control_msg_id=pub_control_msg_id)
 
     # 3. Уведомление в мод-чат об одобрении
     anketa_num = app.get("anketa_num", "")
@@ -11829,14 +11866,23 @@ async def cb_ank_accept(cb: CallbackQuery):
         old_text = cb.message.text or cb.message.caption or ""
         new_text = (old_text + f"\n\n{brand.chk()} <b>ПРИНЯТО</b> — {html.escape(mod_name)}"
                     + (" | опубликовано" if pub_ok else f" | {brand.e('warn')} чат публикаций не настроен"))
-        if cb.message.photo or cb.message.video:
+        if app.get("media_count") == 1 and (cb.message.photo or cb.message.video):
+            await cb.message.delete()
+        elif cb.message.photo or cb.message.video:
             await cb.message.edit_caption(new_text, parse_mode="HTML", reply_markup=None)
         else:
             await cb.message.edit_text(new_text, parse_mode="HTML", reply_markup=None)
     except Exception:
         pass
 
-    del _ank._pending[app_id]
+    # Для альбомов удаляем все исходные медиа после решения модератора.
+    # Карточка с кнопками уже заменена статусом выше и остаётся как журнал.
+    for _mid in (app.get("media_msg_ids") or []):
+        try:
+            await bot.delete_message(app["mod_chat_id"], _mid)
+        except Exception:
+            pass
+
     await cb.answer("✅ Принято и опубликовано!" if pub_ok else "✅ Принято", show_alert=True)
 
 
@@ -11848,7 +11894,7 @@ async def cb_ank_reject(cb: CallbackQuery):
     if len(parts) != 2 or not parts[1]:
         return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     app_id = parts[1]
-    app = _ank._pending.get(app_id)
+    app = _ank._pending.pop(app_id, None)
     if not app:
         return await cb.answer("Заявка не найдена или уже обработана", show_alert=True)
     mod_name = cb.from_user.full_name
@@ -11869,13 +11915,22 @@ async def cb_ank_reject(cb: CallbackQuery):
     try:
         old_text = cb.message.text or cb.message.caption or ""
         new_text = old_text + f"\n\n❌ <b>ОТКЛОНЕНО</b> — {html.escape(mod_name)}"
-        if cb.message.photo or cb.message.video:
+        if app.get("media_count") == 1 and (cb.message.photo or cb.message.video):
+            await cb.message.delete()
+        elif cb.message.photo or cb.message.video:
             await cb.message.edit_caption(new_text, parse_mode="HTML", reply_markup=None)
         else:
             await cb.message.edit_text(new_text, parse_mode="HTML", reply_markup=None)
     except Exception:
         pass
-    del _ank._pending[app_id]
+
+    # Отклонённая заявка тоже не должна оставлять альбом в мод-чате.
+    for _mid in (app.get("media_msg_ids") or []):
+        try:
+            await bot.delete_message(app["mod_chat_id"], _mid)
+        except Exception:
+            pass
+
     await cb.answer("❌ Отклонено", show_alert=True)
 
 
@@ -12072,10 +12127,23 @@ async def cb_ank_mycard_private(cb: CallbackQuery):
                     await bot.send_video(uid, video=item["file_id"], caption=card_text,
                                          parse_mode="HTML", reply_markup=_ank.make_my_anketa_kb(uid))
             else:
-                # 2–10 медіа: альбом + текст з кнопками
-                await _ank._send_media_group_to_chat(bot, uid, media_items)
-                await bot.send_message(uid, card_text, parse_mode="HTML",
-                                       reply_markup=_ank.make_my_anketa_kb(uid))
+                # 2–10 медіа: карточка является подписью первого элемента
+                # альбома, управление — отдельным reply-сообщением.
+                _my_media_ids = await _ank._send_media_group_to_chat(
+                    bot,
+                    uid,
+                    media_items,
+                    caption=card_text,
+                    parse_mode="HTML",
+                )
+                await bot.send_message(
+                    uid,
+                    "⚙️ Управление анкетой:",
+                    parse_mode="HTML",
+                    reply_markup=_ank.make_my_anketa_kb(uid),
+                    reply_to_message_id=_my_media_ids[0] if _my_media_ids else None,
+                    allow_sending_without_reply=True,
+                )
         else:
             await bot.send_message(uid, "Анкета не найдена.", reply_markup=_anketa_kb(uid))
     elif status == "pending":
@@ -12113,32 +12181,22 @@ async def cb_ank_delete(cb: CallbackQuery):
 
     # Удаляем карточку из чата модерации, если заявка была ещё pending.
     if data and data.get("mod_chat_id"):
-        mod_chat = data["mod_chat_id"]
-        if data.get("mod_msg_id"):
-            try:
-                await bot.delete_message(mod_chat, data["mod_msg_id"])
-            except Exception:
-                pass
-        for _mid in (data.get("media_msg_ids") or []):
-            try:
-                await bot.delete_message(mod_chat, _mid)
-            except Exception:
-                pass
+        await _delete_anketa_messages(
+            data["mod_chat_id"],
+            data.get("mod_msg_id"),
+            *(data.get("media_msg_ids") or []),
+        )
     else:
         # Удаляем опубликованную карточку (текст + медиа-альбом).
         pub_chat = data.get("pub_chat_id") if data else None
         pub_chat = pub_chat or _ank.get_pub_chat()
         if pub_chat and data:
-            if data.get("pub_msg_id"):
-                try:
-                    await bot.delete_message(pub_chat, data["pub_msg_id"])
-                except Exception:
-                    pass
-            for _mid in (data.get("media_msg_ids") or []):
-                try:
-                    await bot.delete_message(pub_chat, _mid)
-                except Exception:
-                    pass
+            await _delete_anketa_messages(
+                pub_chat,
+                data.get("pub_msg_id"),
+                data.get("pub_control_msg_id"),
+                *(data.get("media_msg_ids") or []),
+            )
 
     await cb.message.edit_reply_markup(reply_markup=None)
     await _send_custom(
@@ -12165,16 +12223,12 @@ async def cb_ank_user_edit(cb: CallbackQuery):
     data = _ank.delete_user_anketa(uid)
     pub_chat = (data.get("pub_chat_id") if data else None) or _ank.get_pub_chat()
     if pub_chat and data:
-        if data.get("pub_msg_id"):
-            try:
-                await bot.delete_message(pub_chat, data["pub_msg_id"])
-            except Exception:
-                pass
-        for _mid in (data.get("media_msg_ids") or []):
-            try:
-                await bot.delete_message(pub_chat, _mid)
-            except Exception:
-                pass
+        await _delete_anketa_messages(
+            pub_chat,
+            data.get("pub_msg_id"),
+            data.get("pub_control_msg_id"),
+            *(data.get("media_msg_ids") or []),
+        )
 
     await cb.message.edit_reply_markup(reply_markup=None)
     _ank._sessions[uid] = {
@@ -15532,11 +15586,13 @@ async def cmd_revoke_anketa(msg: Message):
     # Удаляем пост из паб-чата
     pub_msg  = data.get("pub_msg_id")
     pub_chat = data.get("pub_chat_id") or _ank.get_pub_chat()
-    if pub_msg and pub_chat:
-        try:
-            await bot.delete_message(pub_chat, pub_msg)
-        except Exception:
-            pass
+    if pub_chat:
+        await _delete_anketa_messages(
+            pub_chat,
+            pub_msg,
+            data.get("pub_control_msg_id"),
+            *(data.get("media_msg_ids") or []),
+        )
 
     # Уведомляем пользователя
     try:
@@ -15658,18 +15714,12 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
     pub_chat       = data.get("pub_chat_id") or _ank.get_pub_chat()
     media_msg_ids  = data.get("media_msg_ids") or []
     if pub_chat:
-        # Видаляємо текстову картку
-        if pub_msg:
-            try:
-                await bot.delete_message(pub_chat, pub_msg)
-            except Exception:
-                pass
-        # Видаляємо медіа-альбом (якщо був)
-        for _mid in media_msg_ids:
-            try:
-                await bot.delete_message(pub_chat, _mid)
-            except Exception:
-                pass
+        await _delete_anketa_messages(
+            pub_chat,
+            pub_msg,
+            data.get("pub_control_msg_id"),
+            *media_msg_ids,
+        )
 
     # ── Повідомляємо автора анкети ────────────────────────────
     name_hint  = data.get("full_name") or data.get("username") or str(target_uid)
@@ -15886,9 +15936,21 @@ async def universal_handler(msg: Message):
                                                parse_mode="Markdown",
                                                reply_markup=_ank.make_my_anketa_kb(uid))
                 else:
-                    await _ank._send_media_group_to_chat(bot, uid, media_items)
-                    await msg.answer(card_text, parse_mode="Markdown",
-                                     reply_markup=_ank.make_my_anketa_kb(uid))
+                    _my_media_ids = await _ank._send_media_group_to_chat(
+                        bot,
+                        uid,
+                        media_items,
+                        caption=card_text,
+                        parse_mode="HTML",
+                    )
+                    await bot.send_message(
+                        uid,
+                        "⚙️ Управление анкетой:",
+                        parse_mode="HTML",
+                        reply_markup=_ank.make_my_anketa_kb(uid),
+                        reply_to_message_id=_my_media_ids[0] if _my_media_ids else None,
+                        allow_sending_without_reply=True,
+                    )
             else:
                 await msg.answer("Анкета не найдена. Попробуй подать снова.",
                                  reply_markup=_anketa_kb(uid))
