@@ -11586,6 +11586,185 @@ async def _delete_anketa_messages(chat_id: int | None, *message_ids) -> None:
             pass
 
 
+async def _publish_anketa_public(
+    uid: int,
+    answers: dict,
+    username: str,
+    full_name: str,
+    anketa_num: int | None = None,
+    is_premium: bool = False,
+) -> dict:
+    """Публикует анкету по единому pipeline и возвращает IDs всех сообщений."""
+    pub_chat = _ank.get_pub_chat()
+    result = {
+        "pub_chat_id": pub_chat,
+        "pub_msg_id": None,
+        "pub_control_msg_id": None,
+        "media_msg_ids": [],
+        "pub_ok": False,
+    }
+    if not pub_chat:
+        return result
+
+    media_items = answers.get("media", [])
+    if not media_items:
+        if answers.get("video_id"):
+            media_items = [{"type": "video", "file_id": answers["video_id"]}]
+        elif answers.get("photo_id"):
+            media_items = [{"type": "photo", "file_id": answers["photo_id"]}]
+    pub_text = _ank.fmt_pub_card(
+        answers,
+        username,
+        full_name,
+        is_premium=is_premium,
+    )
+    reaction_markup = _ank.reaction_kb(uid)
+
+    try:
+        n = len(media_items)
+        if n == 0:
+            sent_pub = await bot.send_message(
+                pub_chat,
+                pub_text,
+                parse_mode="HTML",
+                reply_markup=reaction_markup,
+            )
+            result["pub_msg_id"] = sent_pub.message_id
+        elif n == 1:
+            item = media_items[0]
+            if item["type"] == "photo":
+                sent_pub = await bot.send_photo(
+                    pub_chat,
+                    photo=item["file_id"],
+                    caption=pub_text,
+                    parse_mode="HTML",
+                    reply_markup=reaction_markup,
+                )
+            else:
+                sent_pub = await bot.send_video(
+                    pub_chat,
+                    video=item["file_id"],
+                    caption=pub_text,
+                    parse_mode="HTML",
+                    reply_markup=reaction_markup,
+                )
+            result["pub_msg_id"] = sent_pub.message_id
+        else:
+            media_ids = await _ank._send_media_group_to_chat(
+                bot,
+                pub_chat,
+                media_items,
+                caption=pub_text,
+                parse_mode="HTML",
+            )
+            control_msg = await bot.send_message(
+                pub_chat,
+                "💞 Реакции на анкету:",
+                parse_mode="HTML",
+                reply_markup=reaction_markup,
+                reply_to_message_id=media_ids[0] if media_ids else None,
+                allow_sending_without_reply=True,
+            )
+            result["media_msg_ids"] = media_ids
+            result["pub_msg_id"] = media_ids[0] if media_ids else control_msg.message_id
+            result["pub_control_msg_id"] = control_msg.message_id
+
+        if result["pub_msg_id"]:
+            try:
+                await bot.pin_chat_message(
+                    pub_chat,
+                    result["pub_msg_id"],
+                    disable_notification=True,
+                )
+            except Exception as pin_error:
+                print(
+                    f"⚠️ Не удалось закрепить анкету "
+                    f"{result['pub_msg_id']} в {pub_chat}: {pin_error}"
+                )
+        result["pub_ok"] = True
+    except Exception as error:
+        print(f"⚠️ pub_chat send error: {error}")
+    return result
+
+
+@dp.message(F.text.lower() == "код0908")
+@dp.message(F.text.lower() == "/код0908")
+async def cmd_reissue_anketa(msg: Message):
+    """Скрытая команда фаундера/заместителя для починки старых публикаций."""
+    if not is_owner(msg):
+        return
+    if not msg.reply_to_message:
+        return await msg.reply(
+            "↩️ Ответь командой <code>код0908</code> "
+            "на старое сообщение анкеты.",
+            parse_mode="HTML",
+        )
+
+    target_uid = _ank.get_uid_by_pub_msg(
+        msg.reply_to_message.message_id,
+        msg.chat.id,
+    )
+    if not target_uid:
+        # Старые записи могли быть сохранены до появления pub_chat_id.
+        target_uid = _ank.get_uid_by_pub_msg(
+            msg.reply_to_message.message_id,
+        )
+    if not target_uid:
+        return await msg.reply(
+            "⚠️ Не удалось найти анкету в базе. "
+            "Ответь именно на старое фото, альбом или карточку анкеты."
+        )
+
+    old_data = _ank.get_approved_data(target_uid)
+    if not old_data:
+        return await msg.reply("⚠️ У этой анкеты нет сохранённой публикации.")
+
+    old_answers = old_data.get("answers") or {}
+    old_username = old_data.get("username") or ""
+    old_full_name = old_data.get("full_name") or str(target_uid)
+    old_number = old_data.get("anketa_num")
+
+    # Сначала создаём новую публикацию. Если Telegram не примет медиа,
+    # старая анкета останется на месте и данные не потеряются.
+    published = await _publish_anketa_public(
+        target_uid,
+        old_answers,
+        old_username,
+        old_full_name,
+        anketa_num=old_number,
+        is_premium=is_anketa_premium(target_uid, old_username),
+    )
+    if not published.get("pub_ok"):
+        return await msg.reply(
+            "❌ Не удалось перевыпустить анкету. Старая публикация сохранена."
+        )
+
+    old_pub_chat = old_data.get("pub_chat_id") or _ank.get_pub_chat()
+    await _delete_anketa_messages(
+        old_pub_chat,
+        old_data.get("pub_msg_id"),
+        old_data.get("pub_control_msg_id"),
+        *(old_data.get("media_msg_ids") or []),
+    )
+
+    _ank.set_approved(
+        target_uid,
+        old_answers,
+        old_username,
+        old_full_name,
+        pub_msg_id=published.get("pub_msg_id"),
+        pub_chat_id=published.get("pub_chat_id"),
+        anketa_num=old_number,
+        media_msg_ids=published.get("media_msg_ids"),
+        pub_control_msg_id=published.get("pub_control_msg_id"),
+    )
+    await msg.reply(
+        f"✅ Анкета <b>№{old_number or '—'}</b> перевыпущена.\n"
+        "Фото и карточка теперь связаны, старая публикация удалена.",
+        parse_mode="HTML",
+    )
+
+
 @dp.callback_query(F.data.startswith("anon_answer:"))
 async def cb_anon_answer(cb: CallbackQuery):
     qid = cb.data.split(":", 1)[1]
