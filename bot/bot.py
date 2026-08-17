@@ -148,16 +148,18 @@ def _decorate_caption_container(model):
     updates = {}
     try:
         if entities:
-            themed_caption = brand.decorate_message_html(
+            themed_caption = brand.downgrade_rich_html(brand.decorate_message_html(
                 html_decoration.unparse(caption, entities)
-            )
+            ))
             updates.update({
                 "caption": themed_caption,
                 "caption_entities": None,
                 "parse_mode": "HTML",
             })
         elif isinstance(parse_mode, Default) or parse_mode in ("HTML", None):
-            themed_caption = brand.decorate_message_html(caption)
+            themed_caption = brand.downgrade_rich_html(
+                brand.decorate_message_html(caption)
+            )
             if themed_caption != caption:
                 updates["caption"] = themed_caption
                 updates["parse_mode"] = "HTML"
@@ -195,6 +197,31 @@ async def _rich_patched_call(self, method, request_timeout=None):
             )
             if themed_text != method.text:
                 method = method.model_copy(update={"text": themed_text})
+        # Rich Messages отклоняют часть tg-emoji fallback-последовательностей
+        # (RICH_MESSAGE_EMOJI_INVALID). Обычный Bot API HTML поддерживает
+        # custom emoji и совместим с остальными командами.
+        if brand.has_pack() and isinstance(method, SendMessage):
+            html_text = _to_rich_html(
+                method.text, method.entities, method.parse_mode
+            )
+            if html_text:
+                method = method.model_copy(update={
+                    "text": brand.downgrade_rich_html(html_text),
+                    "entities": None,
+                    "parse_mode": "HTML",
+                })
+                return await _orig_bot_call(self, method, request_timeout)
+        if brand.has_pack() and isinstance(method, EditMessageText) and not method.rich_message:
+            html_text = _to_rich_html(
+                method.text, method.entities, method.parse_mode
+            )
+            if html_text:
+                method = method.model_copy(update={
+                    "text": brand.downgrade_rich_html(html_text),
+                    "entities": None,
+                    "parse_mode": "HTML",
+                })
+                return await _orig_bot_call(self, method, request_timeout)
         if isinstance(method, SendRichMessage):
             rich_message = method.rich_message
             rich_html = getattr(rich_message, "html", None)

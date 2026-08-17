@@ -606,6 +606,38 @@ def decorate_message_html(text: str | None) -> str | None:
     return f'{e("header", _FALLBACK["header"])} {themed}'
 
 
+def downgrade_rich_html(text: str | None, strip_custom_emoji: bool = False) -> str | None:
+    """Преобразует Rich HTML в обычный Bot API HTML.
+
+    Обычный Telegram HTML поддерживает tg-emoji, но не Rich-теги h1/hr.
+    strip_custom_emoji используется только как последний аварийный fallback,
+    если Telegram отверг конкретный custom emoji ID.
+    """
+    if not text:
+        return text
+    result = text
+    if strip_custom_emoji:
+        result = _TG_EMOJI_TAG_RE.sub(
+            lambda match: re.sub(r"<[^>]+>", "", match.group(0)),
+            result,
+        )
+    result = re.sub(r"<h[1-3]\b[^>]*>", "<b>", result, flags=re.IGNORECASE)
+    result = re.sub(r"</h[1-3]\s*>", "</b>", result, flags=re.IGNORECASE)
+    result = re.sub(
+        r"<hr\s*/?>", "\n────────────\n", result, flags=re.IGNORECASE
+    )
+    result = re.sub(r"<br\s*/?>", "\n", result, flags=re.IGNORECASE)
+    result = re.sub(
+        r"</?(?:details|summary|table|thead|tbody|tr|td|th)[^>]*>",
+        "",
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(r"<li\s*>", "• ", result, flags=re.IGNORECASE)
+    result = re.sub(r"</li\s*>", "\n", result, flags=re.IGNORECASE)
+    return result
+
+
 # ── Стили Telegram-кнопок ─────────────────────────────────────
 # Bot API поддерживает три официальных цвета: primary (синий),
 # success (зелёный) и danger (красный). Произвольные HEX-цвета
