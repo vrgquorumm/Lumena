@@ -159,6 +159,10 @@ def _decorate_caption_container(model):
             if themed_caption != caption:
                 updates["caption"] = themed_caption
                 updates["parse_mode"] = "HTML"
+        elif parse_mode in ("Markdown", "MarkdownV2"):
+            themed_caption = brand.replace_emojis_markdown(caption, parse_mode)
+            if themed_caption != caption:
+                updates["caption"] = themed_caption
     except Exception:
         return model
     return model.model_copy(update=updates) if updates else model
@@ -179,6 +183,16 @@ async def _rich_patched_call(self, method, request_timeout=None):
         if getattr(method, "reply_markup", None) is not None:
             decorated_markup = brand.decorate_reply_markup(method.reply_markup)
             method = method.model_copy(update={"reply_markup": decorated_markup})
+        if (
+            isinstance(method, (SendMessage, EditMessageText))
+            and getattr(method, "text", None)
+            and getattr(method, "parse_mode", None) in ("Markdown", "MarkdownV2")
+        ):
+            themed_text = brand.replace_emojis_markdown(
+                method.text, method.parse_mode
+            )
+            if themed_text != method.text:
+                method = method.model_copy(update={"text": themed_text})
         if isinstance(method, SendRichMessage):
             rich_message = method.rich_message
             rich_html = getattr(rich_message, "html", None)

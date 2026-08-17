@@ -526,6 +526,31 @@ def replace_emojis_html(text: str | None) -> str | None:
     return safe
 
 
+def replace_emojis_markdown(text: str | None, parse_mode: str) -> str | None:
+    """Заменяет emoji в Markdown-потоке без потери его форматирования."""
+    if not text or not has_pack():
+        return text
+    markdown_v2 = parse_mode == "MarkdownV2"
+    fallback_id = _pack_ids[0] if _pack_ids else None
+
+    def replace_match(match) -> str:
+        emoji = match.group(0)
+        custom_id = _emoji_map.get(emoji)
+        if custom_id is None:
+            custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
+        custom_id = custom_id or fallback_id
+        if not custom_id:
+            return emoji
+        if markdown_v2:
+            # Официальное представление custom emoji в MarkdownV2.
+            return f"![](tg://emoji?id={custom_id})"
+        # Legacy Markdown поддерживает обычные ссылки; Telegram распознаёт
+        # tg://emoji и отображает ссылку как custom emoji.
+        return f"[{emoji}](tg://emoji?id={custom_id})"
+
+    return _EMOJI_SEQUENCE_RE.sub(replace_match, text)
+
+
 def first_emoji_id(text: str | None) -> str | None:
     """Находит custom ID первого emoji в подписи кнопки."""
     if not text or not has_pack():
