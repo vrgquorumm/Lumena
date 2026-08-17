@@ -5,9 +5,11 @@
 """
 from __future__ import annotations
 import os
+import re
 
 _pack_ids: list[str] = []
 _pack_name: str = ""
+_pack_enabled: bool = True
 
 # ── Кастомный стиль ───────────────────────────────────────
 _custom_style: dict[str, str] = {}
@@ -278,13 +280,20 @@ _ROLE_IDX: dict[str, int] = {
 
 def e(role: str, fallback: str | None = None) -> str:
     """Текстовый символ для HTML-сообщений.
-    Боты без Premium-подписки не могут отправлять <tg-emoji> через parse_mode=HTML —
-    Telegram возвращает ENTITY_TEXT_INVALID. Используем простые Unicode-символы."""
-    return fallback if fallback is not None else _FALLBACK.get(role, "•")
+    Если выбран custom emoji-пак, Telegram получает настоящий тег tg-emoji.
+    При недоступном Premium автоматически остаётся обычный Unicode fallback."""
+    fallback = fallback if fallback is not None else _FALLBACK.get(role, "•")
+    custom_id = get_role_id(role)
+    if custom_id and _pack_enabled:
+        return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
+    return fallback
 
 
 def ei(idx: int, fallback: str = "•") -> str:
-    """Текстовый символ для HTML-сообщений (по индексу — возвращает fallback)."""
+    """Custom emoji из пака по индексу с безопасным Unicode fallback."""
+    custom_id = get_id(idx)
+    if custom_id and _pack_enabled:
+        return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
     return fallback
 
 
@@ -368,9 +377,37 @@ def code_block(text: str, lang: str = "") -> str:
 
 def set_pack(ids: list[str], name: str = "") -> None:
     """Устанавливает emoji пак по списку ID."""
-    global _pack_ids, _pack_name
-    _pack_ids = list(ids)
-    _pack_name = name
+    global _pack_ids, _pack_name, _pack_enabled
+    _pack_ids = [str(value) for value in ids if str(value).strip()][:100]
+    _pack_name = str(name or "")[:128]
+    _pack_enabled = bool(_pack_ids)
+
+
+def disable_pack_runtime() -> None:
+    """Временно отключает custom emoji до следующего успешного set_pack()."""
+    global _pack_enabled
+    _pack_enabled = False
+
+
+def pack_name_from_reference(value: str) -> str:
+    """Извлекает имя custom emoji-пака из URL или короткого имени.
+
+    Поддерживаются ссылки Telegram вида:
+    https://t.me/addemoji/PackName
+    https://t.me/addstickers/PackName
+    а также обычное имя пака для /setemojipack.
+    """
+    raw = str(value or "").strip()
+    match = re.search(
+        r"(?:https?://)?(?:t\.me|telegram\.me)/(?:addemoji|addstickers)/([A-Za-z0-9_]+)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return match.group(1)
+    if re.fullmatch(r"[A-Za-z0-9_]{1,128}", raw):
+        return raw
+    return ""
 
 
 def get_pack() -> list[str]:
@@ -382,7 +419,7 @@ def get_pack_name() -> str:
 
 
 def has_pack() -> bool:
-    return len(_pack_ids) > 0
+    return bool(_pack_ids) and _pack_enabled
 
 
 def preview(n: int = 12) -> str:
@@ -392,6 +429,88 @@ def preview(n: int = 12) -> str:
         eid = _pack_ids[i]
         parts.append(f'<tg-emoji emoji-id="{eid}">[{i}]</tg-emoji>')
     return "".join(parts) if parts else "(пак не загружен)"
+
+
+# ── Стили Telegram-кнопок ─────────────────────────────────────
+# Bot API поддерживает три официальных цвета: primary (синий),
+# success (зелёный) и danger (красный). Произвольные HEX-цвета
+# Telegram-клиент для bot-кнопок пока не принимает.
+_DANGER_BUTTON_WORDS = (
+    "cancel", "отмена", "reset", "сброс", "delete", "удал", "remove",
+    "reject", "отказ", "deny", "no", "нет", "close", "закры", "divorce",
+    "развод", "ban", "мут", "danger",
+)
+_SUCCESS_BUTTON_WORDS = (
+    "confirm", "подтверд", "accept", "прин", "approve", "одобр", "verify",
+    "вериф", "start", "начать", "claim", "забрать", "buy", "купить",
+    "deposit", "вклад", "bid", "ставк", "save", "сохран", "yes", "да",
+)
+
+
+def button_style(text: str = "", callback_data: str | None = None,
+                 url: str | None = None) -> str:
+    """Выбирает безопасный официальный цвет кнопки по её назначению."""
+    haystack = " ".join(
+        str(value or "").lower() for value in (text, callback_data, url)
+    )
+    if any(word in haystack for word in _DANGER_BUTTON_WORDS):
+        return "danger"
+    if any(word in haystack for word in _SUCCESS_BUTTON_WORDS):
+        return "success"
+    return "primary"
+
+
+def button_icon_id(text: str = "", callback_data: str | None = None,
+                   url: str | None = None) -> str | None:
+    """Возвращает custom emoji для иконки кнопки из выбранного пака."""
+    if not has_pack():
+        return None
+    style = button_style(text, callback_data, url)
+    role = {
+        "danger": "cross",
+        "success": "ok",
+        "primary": "accent",
+    }[style]
+    return get_role_id(role) or (_pack_ids[0] if _pack_ids else None)
+
+
+def decorate_reply_markup(markup):
+    """Добавляет стили и custom emoji-иконки ко всем типам клавиатур.
+
+    Возвращает копию aiogram-модели, поэтому общие клавиатуры в обработчиках
+    не мутируются и могут безопасно переиспользоваться.
+    """
+    if markup is None or not hasattr(markup, "model_copy"):
+        return markup
+    rows = getattr(markup, "inline_keyboard", None)
+    field_name = "inline_keyboard"
+    if rows is None:
+        rows = getattr(markup, "keyboard", None)
+        field_name = "keyboard"
+    if rows is None:
+        return markup
+
+    decorated_rows = []
+    for row in rows:
+        decorated_row = []
+        for button in row:
+            if not hasattr(button, "model_copy"):
+                decorated_row.append(button)
+                continue
+            text = getattr(button, "text", "") or ""
+            callback_data = getattr(button, "callback_data", None)
+            url = getattr(button, "url", None)
+            updates = {}
+            if getattr(button, "style", None) is None:
+                updates["style"] = button_style(text, callback_data, url)
+            icon_id = button_icon_id(text, callback_data, url)
+            if icon_id and getattr(button, "icon_custom_emoji_id", None) is None:
+                updates["icon_custom_emoji_id"] = icon_id
+            decorated_row.append(
+                button.model_copy(update=updates) if updates else button
+            )
+        decorated_rows.append(decorated_row)
+    return markup.model_copy(update={field_name: decorated_rows})
 
 
 # ── Кастомные тексты от фаундера ─────────────────────────

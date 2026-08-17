@@ -129,6 +129,12 @@ def _no_default(v):
 
 async def _rich_patched_call(self, method, request_timeout=None):
     try:
+        # Bot API 9.4+ поддерживает style и icon_custom_emoji_id у кнопок.
+        # Декорируем клавиатуры централизованно, чтобы не переписывать
+        # сотни отдельных обработчиков и не пропустить динамические меню.
+        if getattr(method, "reply_markup", None) is not None:
+            decorated_markup = brand.decorate_reply_markup(method.reply_markup)
+            method = method.model_copy(update={"reply_markup": decorated_markup})
         if isinstance(method, SendMessage):
             html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
             if html_text:
@@ -13405,19 +13411,18 @@ async def handle_btn_edit_input(msg: Message):
     )
 
 
-@dp.message(Command("setemojipack"))
-async def cmd_setemojipack(msg: Message):
-    """Загружает стикер-пак из Telegram и использует его emoji в оформлении бота."""
+async def _apply_emoji_pack(msg: Message, reference: str):
+    """Загружает custom emoji-пак и применяет его к сообщениям и кнопкам."""
     if not is_owner(msg):
         return
-    parts = (msg.text or "").split(maxsplit=1)
-    pack_name = parts[1].strip() if len(parts) > 1 else ""
+    pack_name = brand.pack_name_from_reference(reference)
     if not pack_name:
         cur = brand.get_pack_name() or "не задан"
         return await msg.reply(
             f"Текущий пак: <code>{html.escape(cur)}</code>\n\n"
             "Использование:\n"
-            "<code>/setemojipack adaptiveqp_by_emsetbot</code>",
+            "<code>/theme https://t.me/addemoji/PackName</code>\n"
+            "или просто отправь эту ссылку в личку боту.",
             parse_mode="HTML"
         )
     status_msg = await msg.reply(f"⏳ Загружаю пак <code>{html.escape(pack_name)}</code>…", parse_mode="HTML")
@@ -13431,14 +13436,16 @@ async def cmd_setemojipack(msg: Message):
                 parse_mode="HTML"
             )
         brand.set_pack(ids, pack_name)
-        save_data()
+        saved = await save_state_now("загрузка custom emoji-пака")
         await status_msg.edit_text(
             f"✅ <b>Пак загружен!</b>\n\n"
             f"📦 <code>{html.escape(pack_name)}</code> — {len(ids)} emoji\n\n"
             f"Превью первых 12:\n{brand.preview(12)}\n\n"
             f"Заголовок: {brand.hdr()}\n"
             f"Разделитель: {brand.div()}\n\n"
-            "Все сообщения бота теперь используют этот пак.",
+            "✅ Все новые сообщения и кнопки используют этот пак.\n"
+            "🎨 Кнопки получили синие, зелёные и красные акценты Telegram."
+            + ("" if saved else "\n\n⚠️ PostgreSQL недоступен: пак пока сохранён только локально."),
             parse_mode="HTML"
         )
     except Exception as ex:
@@ -13448,6 +13455,27 @@ async def cmd_setemojipack(msg: Message):
             "Проверь название пака (часть URL после /addemoji/).",
             parse_mode="HTML"
         )
+
+
+@dp.message(Command("setemojipack", "theme", "тема", "эмодзи"))
+async def cmd_setemojipack(msg: Message):
+    """Загружает custom emoji-пак по имени или ссылке Telegram."""
+    parts = (msg.text or "").split(maxsplit=1)
+    reference = parts[1].strip() if len(parts) > 1 else ""
+    await _apply_emoji_pack(msg, reference)
+
+
+def _is_owner_emoji_pack_link(msg: Message) -> bool:
+    """Фильтр прямой отправки ссылки на пак владельцем в личку."""
+    if not is_owner(msg) or not getattr(msg, "text", None):
+        return False
+    return bool(brand.pack_name_from_reference(msg.text.strip()))
+
+
+@dp.message(F.chat.type == "private", F.func(_is_owner_emoji_pack_link))
+async def handle_emoji_pack_link(msg: Message):
+    """Позволяет владельцу отправить одну ссылку без команды."""
+    await _apply_emoji_pack(msg, msg.text or "")
 
 
 # ═══════════════════════════════════════════════════════
@@ -16063,6 +16091,7 @@ async def main():
                 BotCommand(command="profile", description="👑 Мой профиль"),
                 BotCommand(command="help", description="📖 Все команды"),
                 BotCommand(command="settings", description="🎨 Настройки и оформление"),
+                BotCommand(command="theme", description="🎨 Установить emoji-пак"),
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="shop", description="💎 Магазин"),
             ],
