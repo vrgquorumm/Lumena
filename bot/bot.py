@@ -83,7 +83,10 @@ OWNER_AUTO_CREDIT_ENABLED = False  # после общего сброса фау
 FOUNDER_GRANT_VERSION = 1
 FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
 # Дополнительные тематические паки, которые смешиваются с основным при старте.
-EXTRA_EMOJI_PACKS = ("metallic_by_emsetbot",)
+EXTRA_EMOJI_PACKS = (
+    "metallic_by_emsetbot",
+    "BlackRandom_by_emsetbot",
+)
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
