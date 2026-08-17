@@ -155,9 +155,12 @@ def _decorate_caption_container(model):
     updates = {}
     try:
         if entities:
-            themed_caption = brand.downgrade_rich_html(brand.decorate_message_html(
-                html_decoration.unparse(caption, entities)
-            ))
+            themed_caption = brand.downgrade_rich_html(
+                brand.decorate_message_html(
+                    html_decoration.unparse(caption, entities)
+                ),
+                strip_custom_emoji=True,
+            )
             updates.update({
                 "caption": themed_caption,
                 "caption_entities": None,
@@ -165,7 +168,8 @@ def _decorate_caption_container(model):
             })
         elif isinstance(parse_mode, Default) or parse_mode in ("HTML", None):
             themed_caption = brand.downgrade_rich_html(
-                brand.decorate_message_html(caption)
+                brand.decorate_message_html(caption),
+                strip_custom_emoji=True,
             )
             if themed_caption != caption:
                 updates["caption"] = themed_caption
@@ -275,7 +279,16 @@ async def _rich_patched_call(self, method, request_timeout=None):
     try:
         method = _decorate_caption_container(method)
         nested_media = getattr(method, "media", None)
-        if nested_media is not None:
+        if isinstance(nested_media, (list, tuple)):
+            themed_media = [
+                _decorate_caption_container(media) for media in nested_media
+            ]
+            if any(
+                updated is not original
+                for updated, original in zip(themed_media, nested_media)
+            ):
+                method = method.model_copy(update={"media": themed_media})
+        elif nested_media is not None:
             themed_media = _decorate_caption_container(nested_media)
             if themed_media is not nested_media:
                 method = method.model_copy(update={"media": themed_media})
