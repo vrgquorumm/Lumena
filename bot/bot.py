@@ -112,9 +112,16 @@ def _to_rich_html(text: str | None, entities, parse_mode) -> str | None:
         return None
     if entities:
         try:
-            return html_decoration.unparse(text, entities)
+            return brand.decorate_message_html(
+                html_decoration.unparse(text, entities)
+            )
         except Exception:
             return None
+    # Default(...) означает отсутствие локального override. Rich Message
+    # использует собственный HTML-парсер, поэтому это безопасно превращать
+    # в themed HTML и для сообщений без явного parse_mode.
+    if isinstance(parse_mode, Default):
+        parse_mode = None
     if parse_mode not in ("HTML", None):
         return None  # Markdown/MarkdownV2 — не конвертируем, шлём как раньше
     return brand.decorate_message_html(text)
@@ -127,14 +134,61 @@ def _no_default(v):
     return None if isinstance(v, Default) else v
 
 
+def _decorate_caption_container(model):
+    """Тематизирует caption у media-сообщений и вложенных InputMedia."""
+    if model is None or not hasattr(model, "model_copy"):
+        return model
+    caption = getattr(model, "caption", None)
+    if not caption:
+        return model
+    parse_mode = getattr(model, "parse_mode", None)
+    entities = getattr(model, "caption_entities", None)
+    updates = {}
+    try:
+        if entities:
+            themed_caption = brand.decorate_message_html(
+                html_decoration.unparse(caption, entities)
+            )
+            updates.update({
+                "caption": themed_caption,
+                "caption_entities": None,
+                "parse_mode": "HTML",
+            })
+        elif isinstance(parse_mode, Default) or parse_mode in ("HTML", None):
+            themed_caption = brand.decorate_message_html(caption)
+            if themed_caption != caption:
+                updates["caption"] = themed_caption
+                updates["parse_mode"] = "HTML"
+    except Exception:
+        return model
+    return model.model_copy(update=updates) if updates else model
+
+
 async def _rich_patched_call(self, method, request_timeout=None):
     try:
+        method = _decorate_caption_container(method)
+        nested_media = getattr(method, "media", None)
+        if nested_media is not None:
+            themed_media = _decorate_caption_container(nested_media)
+            if themed_media is not nested_media:
+                method = method.model_copy(update={"media": themed_media})
+
         # Bot API 9.4+ поддерживает style и icon_custom_emoji_id у кнопок.
         # Декорируем клавиатуры централизованно, чтобы не переписывать
         # сотни отдельных обработчиков и не пропустить динамические меню.
         if getattr(method, "reply_markup", None) is not None:
             decorated_markup = brand.decorate_reply_markup(method.reply_markup)
             method = method.model_copy(update={"reply_markup": decorated_markup})
+        if isinstance(method, SendRichMessage):
+            rich_message = method.rich_message
+            rich_html = getattr(rich_message, "html", None)
+            themed_html = brand.decorate_message_html(rich_html)
+            if themed_html != rich_html:
+                method = method.model_copy(update={
+                    "rich_message": rich_message.model_copy(
+                        update={"html": themed_html}
+                    )
+                })
         if isinstance(method, SendMessage):
             html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
             if html_text:
@@ -428,6 +482,7 @@ def _build_main_payload() -> dict:
         "verified_users": list(_verified_users),
         "brand_emoji_pack": brand.get_pack(),
         "brand_pack_name":  brand.get_pack_name(),
+        "brand_emoji_map":  brand.get_pack_emoji_map(),
         "aura":           {str(u): v for u, v in aura.items()},
         "roles":          {str(u): r for u, r in ROLES.items()},
         "role_usernames": dict(_ROLE_USERNAMES),
@@ -13428,14 +13483,22 @@ async def _apply_emoji_pack(msg: Message, reference: str):
     status_msg = await msg.reply(f"⏳ Загружаю пак <code>{html.escape(pack_name)}</code>…", parse_mode="HTML")
     try:
         sticker_set = await bot.get_sticker_set(pack_name)
-        ids = [s.custom_emoji_id for s in sticker_set.stickers if getattr(s, "custom_emoji_id", None)]
+        emoji_map = {
+            str(s.emoji): str(s.custom_emoji_id)
+            for s in sticker_set.stickers
+            if getattr(s, "emoji", None) and getattr(s, "custom_emoji_id", None)
+        }
+        ids = [
+            s.custom_emoji_id for s in sticker_set.stickers
+            if getattr(s, "custom_emoji_id", None)
+        ]
         if not ids:
             return await status_msg.edit_text(
                 f"⚠️ Пак <code>{html.escape(pack_name)}</code> найден, но не содержит custom emoji.\n"
                 "Убедись что это пак именно с <b>custom emoji</b>, а не обычными стикерами.",
                 parse_mode="HTML"
             )
-        brand.set_pack(ids, pack_name)
+        brand.set_pack(ids, pack_name, emoji_map)
         saved = await save_state_now("загрузка custom emoji-пака")
         await status_msg.edit_text(
             f"✅ <b>Пак загружен!</b>\n\n"
@@ -15985,13 +16048,20 @@ async def main():
 
     # ── Загружаем emoji пак при старте ───────────────────
     _startup_pack = brand.get_pack_name() or "adaptiveqp_by_emsetbot"
-    if not brand.has_pack():
+    if not brand.has_pack() or not brand.has_emoji_map():
         try:
             _ss = await bot.get_sticker_set(_startup_pack)
-            _ids = [s.custom_emoji_id for s in _ss.stickers
-                    if getattr(s, "custom_emoji_id", None)]
+            _emoji_map = {
+                str(s.emoji): str(s.custom_emoji_id)
+                for s in _ss.stickers
+                if getattr(s, "emoji", None) and getattr(s, "custom_emoji_id", None)
+            }
+            _ids = [
+                s.custom_emoji_id for s in _ss.stickers
+                if getattr(s, "custom_emoji_id", None)
+            ]
             if _ids:
-                brand.set_pack(_ids, _startup_pack)
+                brand.set_pack(_ids, _startup_pack, _emoji_map)
                 print(f"✅ Emoji пак загружен: {_startup_pack} ({len(_ids)} emoji)")
         except Exception as _ex:
             print(f"⚠️ Не удалось загрузить emoji пак '{_startup_pack}': {_ex}")
@@ -16271,7 +16341,11 @@ def _apply_data(data: dict) -> None:
         _ROLE_USERNAMES[uname] = r
     _saved_pack = data.get("brand_emoji_pack", [])
     if _saved_pack:
-        brand.set_pack(_saved_pack, data.get("brand_pack_name", ""))
+        brand.set_pack(
+            _saved_pack,
+            data.get("brand_pack_name", ""),
+            data.get("brand_emoji_map") or None,
+        )
     global _last_rain_time
     _last_rain_time = data.get("last_rain_time", 0)
     for c, v in data.get("link_guard", {}).items():
