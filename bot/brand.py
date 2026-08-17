@@ -431,6 +431,19 @@ def preview(n: int = 12) -> str:
     return "".join(parts) if parts else "(пак не загружен)"
 
 
+def decorate_message_html(text: str | None) -> str | None:
+    """Добавляет фирменный custom emoji-акцент к обычным HTML-сообщениям.
+
+    Сообщения, которые уже содержат tg-emoji (например, превью пака или
+    брендовый заголовок), не получают второй акцент.
+    """
+    if not text or not has_pack():
+        return text
+    if "<tg-emoji" in text[:500]:
+        return text
+    return f'{e("header", _FALLBACK["header"])} {text}'
+
+
 # ── Стили Telegram-кнопок ─────────────────────────────────────
 # Bot API поддерживает три официальных цвета: primary (синий),
 # success (зелёный) и danger (красный). Произвольные HEX-цвета

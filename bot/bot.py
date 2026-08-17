@@ -117,7 +117,7 @@ def _to_rich_html(text: str | None, entities, parse_mode) -> str | None:
             return None
     if parse_mode not in ("HTML", None):
         return None  # Markdown/MarkdownV2 — не конвертируем, шлём как раньше
-    return text
+    return brand.decorate_message_html(text)
 
 
 def _no_default(v):
