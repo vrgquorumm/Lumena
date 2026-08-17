@@ -12700,6 +12700,11 @@ async def cmd_start_private(msg: Message, command: CommandObject = None):
         except (ValueError, IndexError):
             pass
 
+    # Deep-link из публичной кнопки «Создать анкету» должен сразу запускать
+    # тот же flow, что и ручная команда /анкета.
+    if (command.args or "").strip().lower() in {"anketa", "анкета"}:
+        return await cmd_anketa(msg)
+
     if is_verified(uid):
         kb = build_main_kb()
         # Фаундеру добавляем кнопку редактора
@@ -12842,6 +12847,14 @@ async def cmd_anketa(msg: Message):
             reply_markup=kb,
         )
     await _ank.start_anketa(bot, msg, force=True)
+
+
+# Поддерживаем также ввод «анкета» без слеша — это используется кнопками
+# обычной reply-клавиатуры и не мешает специализированному Command-фильтру.
+TEXT_COMMANDS.update({
+    "анкета": cmd_anketa,
+    "anketa": cmd_anketa,
+})
 
 
 @dp.message(Command("premium", "vip", "купить_премиум"))
@@ -16887,6 +16900,7 @@ async def main():
                 BotCommand(command="addtheme", description="➕ Смешать emoji-пак"),
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="shop", description="💎 Магазин"),
+                BotCommand(command="anketa", description="📝 Создать анкету"),
             ],
             scope=BotCommandScopeAllPrivateChats(),
         )
