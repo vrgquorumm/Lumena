@@ -5259,9 +5259,6 @@ def _bank_keyboard(uid: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="✨ Забрать проценты", callback_data="bank:term:claim"),
             InlineKeyboardButton(text="🔓 Закрыть вклад", callback_data="bank:term:close"),
         ])
-    rows.append([
-        InlineKeyboardButton(text="💱 Ввод / вывод / обмен", callback_data="money:menu"),
-    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -11047,30 +11044,24 @@ async def cmd_premium_stock(msg: Message):
 def _money_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💳 Ввод в банк", callback_data="money:deposit"),
-            InlineKeyboardButton(text="📤 Вывод из банка", callback_data="money:withdraw"),
+            InlineKeyboardButton(text="📥 Ввод", callback_data="money:deposit"),
+            InlineKeyboardButton(text="📤 Вывод", callback_data="money:withdraw"),
         ],
         [
-            InlineKeyboardButton(text="💱 Обмен LMN", callback_data="money:exchange"),
-            InlineKeyboardButton(text="🏦 Открыть банк", callback_data="money:bank"),
+            InlineKeyboardButton(text="💱 Обмен на крипту", callback_data="money:exchange"),
         ],
     ])
 
 
-def _money_card_text(uid: int) -> str:
-    wallet = get_balance(uid)
-    vault = get_bank(uid)
+def _money_card_text(uid: int = 0) -> str:
     return (
         f"{brand.hdr()}\n\n"
         f"💱 <b>Операции с {brand.currency()}</b>\n\n"
-        f"💳 Кошелёк: <b>{fmt_lmn(wallet)}</b> {brand.currency()}\n"
-        f"🏦 В банке: <b>{fmt_lmn(vault)}</b> {brand.currency()}\n\n"
-        "Выбери действие:\n"
-        "• <b>Ввод в банк</b> — защищённо сохранить весь кошелёк;\n"
-        "• <b>Вывод из банка</b> — вернуть средства в кошелёк;\n"
-        "• <b>Обмен LMN</b> — открыть внутренние операции Lumena.\n\n"
-        "<i>Внешний обмен на USD/EUR/UAH и вывод на TON требуют "
-        "отдельного платёжного шлюза и здесь пока не выполняются автоматически.</i>\n\n"
+        "📥 Ввод через банковскую карту или криптовалюту\n"
+        "📤 Вывод на карту или криптокошелёк\n"
+        "💱 Обмен LMN на криптовалюту\n\n"
+        "⚙️ <i>Эти операции временно недоступны.</i>\n"
+        "Следи за обновлениями — мы сообщим, когда подключим платёжные направления.\n\n"
         f"{brand.div()}"
     )
 
@@ -11096,83 +11087,18 @@ async def cb_money_actions(cb: CallbackQuery):
         )
         return await cb.answer()
 
-    if action == "deposit":
-        amount = _move_wallet_to_bank(uid)
-        if amount <= 0:
-            return await cb.answer(
-                "В кошельке нет LMN для ввода в банк.",
-                show_alert=True,
-            )
-        schedule_state_save("ввод LMN через меню")
+    if action in {"deposit", "withdraw", "exchange"}:
         await cb.message.edit_text(
-            _money_card_text(uid)
-            + f"\n\n✅ В банк введено <b>{fmt_lmn(amount)} LMN</b>.",
+            _money_card_text(uid),
             parse_mode="HTML",
             reply_markup=_money_keyboard(),
         )
-        return await cb.answer("LMN введены в банк")
-
-    if action == "withdraw":
-        vault = get_bank(uid)
-        now = now_kyiv()
-        last_wd = bank_withdraw_cd.get(uid)
-        if last_wd and (now - last_wd).total_seconds() < 7200:
-            mins = 120 - int((now - last_wd).total_seconds()) // 60
-            return await cb.answer(
-                f"Следующий вывод через {mins} мин.",
-                show_alert=True,
-            )
-        if vault <= 0:
-            return await cb.answer(
-                "В банке нет LMN для вывода.",
-                show_alert=True,
-            )
-        credited = add_balance(uid, vault)
-        if credited <= 0:
-            return await cb.answer(
-                "Кошелёк достиг лимита аккаунта.",
-                show_alert=True,
-            )
-        bank_balances[uid] = vault - credited
-        bank_withdraw_cd[uid] = now
-        schedule_state_save("вывод LMN через меню")
-        await cb.message.edit_text(
-            _money_card_text(uid)
-            + f"\n\n✅ Из банка выведено <b>{fmt_lmn(credited)} LMN</b>.",
-            parse_mode="HTML",
-            reply_markup=_money_keyboard(),
-        )
-        return await cb.answer("LMN выведены в кошелёк")
-
-    if action == "exchange":
-        await cb.message.edit_text(
-            f"{brand.hdr()}\n\n"
-            f"💱 <b>Внутренний обмен {brand.currency()}</b>\n\n"
-            "В Lumena доступны два безопасных направления:\n"
-            "• 💳 кошелёк → банк — кнопка «Ввод в банк»;\n"
-            "• 📤 банк → кошелёк — кнопка «Вывод из банка».\n\n"
-            "Баланс не создаётся из воздуха: каждая операция проходит "
-            "через общий лимит аккаунта и сохраняется.\n\n"
-            "<i>Обмен LMN на реальные USD/EUR/UAH или TON будет подключён "
-            "отдельно через платёжный шлюз.</i>\n\n"
-            f"{brand.div()}",
-            parse_mode="HTML",
-            reply_markup=_money_keyboard(),
-        )
-        return await cb.answer("Внутренний обмен открыт")
-
-    if action == "bank":
-        await cb.message.edit_text(
-            _bank_card_text(uid),
-            parse_mode="HTML",
-            reply_markup=_bank_keyboard(uid),
-        )
-        return await cb.answer()
+        return await cb.answer("⚙️ Временно недоступно", show_alert=True)
 
     return await cb.answer("Некорректная операция", show_alert=True)
 
 
-@dp.message(Command("exchange", "обмен", "обменять"))
+@dp.message(Command("exchange", "обмен", "обменять", "вывод", "withdraw"))
 async def cmd_exchange_slash(msg: Message):
     await _exchange_soon(msg)
 
@@ -11219,10 +11145,8 @@ TEXT_COMMANDS.update({
     "аукцион": auction_manager.cmd_auction, "auction": auction_manager.cmd_auction,
     "ставка": auction_manager.cmd_bid, "bid": auction_manager.cmd_bid,
     "коллекция": auction_manager.cmd_collection, "мояколлекция": auction_manager.cmd_collection,
-    "ввод": _bank_deposit, "внести": _bank_deposit,
     "сохранить": _bank_deposit, "save": _bank_deposit,
     "снять": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
-    "вывод": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
     "вывести": lambda m: _bank_withdraw(m, " ".join((m.text or "").split()[1:])),
     "дать": cmd_give, "перевести": cmd_give,
     "топбогачей": cmd_richest, "топ богачей": cmd_richest,
@@ -11330,6 +11254,8 @@ TEXT_COMMANDS.update({
     "премиум": _premium_soon, "тгпремиум": _premium_soon, "premium": _premium_soon,
     "остатокпремиум": cmd_premium_stock, "премиумостаток": cmd_premium_stock,
     "остаток премиум": cmd_premium_stock, "premiumstock": cmd_premium_stock,
+    "ввод": _exchange_soon, "внести": _exchange_soon,
+    "вывод": _exchange_soon, "withdraw": _exchange_soon,
     "обмен": _exchange_soon, "обменять": _exchange_soon, "exchange": _exchange_soon,
     # Алхимия
     "алхимия": cmd_alchemy,
