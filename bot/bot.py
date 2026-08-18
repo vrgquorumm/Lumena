@@ -511,6 +511,7 @@ referrals:         dict[int, int]  = {}   # uid → referrer_uid
 referral_counts:   dict[int, int]  = {}   # uid → кол-во приглашённых
 raid_mode:         dict[int, bool] = {}   # chat_id → bool
 antispam_mode:     dict[int, bool] = {}   # chat_id → bool
+night_mode:        dict[int, bool] = {}   # chat_id → запрет сообщений в главном чате
 antispam_tracker:  dict[int, dict] = {}   # chat_id → {uid: {hash,count,ts}}
 rep_votes:         dict[tuple, int] = {}  # (chat_id,voter_uid,target_uid) → +1/-1
 report_cooldown:   dict[tuple, str] = {}  # (chat_id,from_uid,target_uid) → ISO date
@@ -778,6 +779,7 @@ def _build_main_payload() -> dict:
         "referral_counts":   {str(u): v for u, v in referral_counts.items()},
         "raid_mode":         {str(c): v for c, v in raid_mode.items()},
         "antispam_mode":     {str(c): v for c, v in antispam_mode.items()},
+        "night_mode":        {str(c): v for c, v in night_mode.items()},
         "games_played":      {str(u): v for u, v in _games_played.items()},
         "games_won":         {str(u): v for u, v in _games_won.items()},
         "v6_announced":      v6_announced,
@@ -1775,6 +1777,11 @@ async def cmd_staff_chat_remove(msg: Message):
     await msg.reply("✅ Этот чат больше не считается командным.", parse_mode="HTML")
 
 
+@dp.message(Command("ночнойрежим", "nightmode"))
+async def cmd_night_mode_slash(msg: Message, command: CommandObject):
+    await cmd_night_mode(msg, command)
+
+
 def role_badge(uid: int, username: str = "") -> str:
     """Возвращает строку-бейдж для роли, или пустую строку."""
     r = get_role(uid)
@@ -1842,6 +1849,115 @@ def _command_chat_id(msg: Message) -> int | None:
                 pass
         return getattr(msg.chat, "id", None)
     return getattr(msg.chat, "id", None)
+
+
+def _night_mode_command_message(event: Message) -> bool:
+    """True для команды, которой founder может управлять ночью."""
+    text = (getattr(event, "text", None) or "").strip().casefold()
+    if text.startswith(("/", "!")):
+        text = text[1:].strip()
+    parts = text.split()
+    if not parts:
+        return False
+    command = parts[0].split("@", 1)[0]
+    return command in {"ночнойрежим", "nightmode"} or (
+        command == "ночной" and len(parts) >= 2 and parts[1] == "режим"
+    )
+
+
+def _night_mode_permissions(enabled: bool) -> ChatPermissions:
+    """Права по умолчанию для открытого/закрытого режима чата."""
+    if enabled:
+        return ChatPermissions(can_send_messages=False)
+    return ChatPermissions(
+        can_send_messages=True,
+        can_send_media_messages=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True,
+    )
+
+
+async def _apply_night_mode_permissions(chat_id: int, enabled: bool) -> None:
+    """Закрывает/открывает отправку сообщений для обычных участников.
+
+    Администраторы Telegram технически обходят default permissions. Их
+    сообщения во время ночного режима удаляет middleware ниже — поэтому
+    режим действительно действует и на админов/модераторов, без снятия ролей.
+    """
+    await bot.set_chat_permissions(
+        chat_id,
+        permissions=_night_mode_permissions(enabled),
+    )
+
+
+async def _restore_night_mode_permissions() -> None:
+    """Повторно применяет сохранённый режим после перезапуска."""
+    for raw_chat_id, enabled in list(night_mode.items()):
+        if not enabled:
+            continue
+        try:
+            await _apply_night_mode_permissions(int(raw_chat_id), True)
+        except Exception as exc:
+            logging.warning(
+                "⚠️ Не удалось восстановить ночной режим chat=%s: %s",
+                raw_chat_id,
+                exc,
+            )
+
+
+async def cmd_night_mode(msg: Message, command: CommandObject | None = None):
+    """Founder-переключатель запрета сообщений в главном чате."""
+    if not is_owner(msg):
+        return await msg.reply("⛔ Ночной режим может включать и выключать только фаундер.")
+
+    chat_id = _founder_main_chat_id(msg)
+    if chat_id is None:
+        return await msg.reply(
+            "❌ Главный чат ещё не связан.\n"
+            "Сначала используй команду <code>привязатьчат</code> в главном чате.",
+            parse_mode="HTML",
+        )
+
+    raw_args = ((command.args if command else "") or "").strip().casefold()
+    if not raw_args:
+        enabled = not bool(night_mode.get(chat_id, False))
+    elif raw_args in {"вкл", "включить", "on", "1", "да"}:
+        enabled = True
+    elif raw_args in {"выкл", "выключить", "off", "0", "нет"}:
+        enabled = False
+    else:
+        return await msg.reply(
+            "Использование: <code>/ночнойрежим вкл</code> или "
+            "<code>/ночнойрежим выкл</code>\n"
+            "Без аргумента режим переключается.",
+            parse_mode="HTML",
+        )
+
+    try:
+        await _apply_night_mode_permissions(chat_id, enabled)
+    except Exception as exc:
+        logging.exception("night mode permissions failed for chat=%s", chat_id)
+        return await msg.reply(
+            f"❌ Telegram не применил режим: <code>{html.escape(str(exc)[:240])}</code>",
+            parse_mode="HTML",
+        )
+
+    night_mode[chat_id] = enabled
+    await save_state_now("включение ночного режима" if enabled else "отключение ночного режима")
+    if enabled:
+        return await msg.reply(
+            "🌙 <b>Ночной режим включён.</b>\n\n"
+            "Главный чат закрыт для сообщений всем участникам, "
+            "включая админов и модераторов.\n"
+            "Выключить: <code>/ночнойрежим выкл</code>",
+            parse_mode="HTML",
+        )
+    return await msg.reply(
+        "☀️ <b>Ночной режим выключен.</b>\n\n"
+        "Отправка сообщений в главном чате снова разрешена всем.",
+        parse_mode="HTML",
+    )
+
 
 # Пользователи, которым разрешено редактировать все тексты/кнопки бота
 _EDITOR_USERNAMES = {OWNER_USERNAME.lower(), "veroniksssxa"}
@@ -11493,6 +11609,24 @@ class PropagandaMiddleware(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
+        # В ночном режиме обычные участники уже блокируются Telegram default
+        # permissions. Сообщения админов/модераторов Telegram пропускает, поэтому
+        # удаляем их здесь до любого бизнес-хендлера. Founder-команда управления
+        # режимом остаётся доступной, чтобы его можно было выключить.
+        if (
+            isinstance(event, Message)
+            and event.from_user
+            and not event.from_user.is_bot
+            and event.chat.type in ("group", "supergroup")
+            and night_mode.get(event.chat.id, False)
+            and not (is_owner(event) and _night_mode_command_message(event))
+        ):
+            try:
+                await event.delete()
+            except Exception:
+                pass
+            return
+
         if isinstance(event, Message) and event.from_user and not event.from_user.is_bot:
             if _remember_user(
                 event.from_user,
@@ -14585,6 +14719,8 @@ TEXT_COMMANDS.update({
     "сетчатлинк": cmd_setchatlink, "setchatlink": cmd_setchatlink,
     "админчат": cmd_setadminchat, "связатьадминчат": cmd_setadminchat,
     "setadminchat": cmd_setadminchat,
+    "ночнойрежим": cmd_night_mode, "nightmode": cmd_night_mode,
+    "ночной режим": cmd_night_mode,
 })
 
 
@@ -16720,6 +16856,7 @@ async def main():
     await _ank.restore_anketa()
     await brand.restore_brand()
     load_data()
+    await _restore_night_mode_permissions()
     _ank.load_anketa_settings()
     # Обновляем только известные устаревшие ссылки админ-чата. Пользовательские
     # ссылки, заданные фаундером вручную, не перезаписываем.
@@ -17310,6 +17447,8 @@ def _apply_data(data: dict) -> None:
         raid_mode[int(c)] = bool(v)
     for c, v in data.get("antispam_mode", {}).items():
         antispam_mode[int(c)] = bool(v)
+    for c, v in data.get("night_mode", {}).items():
+        night_mode[int(c)] = bool(v)
     for u, v in data.get("games_played", {}).items():
         _games_played[int(u)] = int(v)
     for u, v in data.get("games_won", {}).items():
