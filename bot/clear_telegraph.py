@@ -2,6 +2,7 @@
 Очищает обе Telegraph-страницы и выводит их текст.
 """
 import json, os, urllib.request
+from pathlib import Path
 from create_telegraph import PAGE1, PAGE2
 
 def post(url, data):
@@ -51,8 +52,14 @@ def extract_text(nodes, indent=0):
                 out.append(text)
     return "\n".join(filter(lambda x: x is not None, out))
 
-token = open("telegraph_token.txt").read().strip()
-urls_file = "telegraph_url.txt"
+token = os.getenv("TELEGRAPH_TOKEN", "").strip()
+if not token:
+    token_file = Path(__file__).with_name("telegraph_token.txt")
+    if token_file.exists():
+        token = token_file.read_text().strip()
+if not token:
+    raise RuntimeError("TELEGRAPH_TOKEN is required to clear Telegraph pages")
+urls_file = Path(__file__).with_name("telegraph_url.txt")
 
 # Текст обеих страниц
 print("=" * 60)
