@@ -1814,11 +1814,19 @@ def role_badge(uid: int, username: str = "") -> str:
 
 
 def is_owner(msg) -> bool:
-    """Founder-equivalent доступ по числовому Telegram ID."""
+    """Founder-equivalent доступ по числовому Telegram ID.
+
+    Разработчик получает тот же доступ без назначения роли, но остаётся
+    защищённым от банов и мутов отдельными проверками модерации.
+    """
     u = getattr(msg, "from_user", None)
     if u is None:
         return False
-    return u.id == OWNER_ID or u.id in FOUNDER_DEPUTY_IDS
+    return (
+        u.id == OWNER_ID
+        or u.id in FOUNDER_DEPUTY_IDS
+        or u.id in PROTECTED_DEVELOPER_IDS
+    )
 
 
 def _founder_main_chat_id(msg: Message | CallbackQuery = None) -> int | None:
