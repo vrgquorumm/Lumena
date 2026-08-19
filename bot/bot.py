@@ -72,6 +72,9 @@ SUPER_IDS      = {OWNER_ID}
 FOUNDER_DEPUTY_IDS = {1839566911}
 # Постоянная роль по числовому Telegram ID — не зависит от username.
 FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
+# Разработчики проекта: их нельзя банить или мутить ни одной модерационной
+# командой, включая force-команды и автоматические санкции.
+PROTECTED_DEVELOPER_IDS = {8318351777}
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
 
@@ -1341,6 +1344,16 @@ async def auto_moderate_propaganda(msg: Message) -> bool:
         return False
     chat_id = msg.chat.id
     uid = user.id
+
+    if uid in PROTECTED_DEVELOPER_IDS:
+        await bot.send_message(
+            chat_id,
+            f"🛡️ <a href=\"tg://user?id={uid}\">{html.escape(user.full_name)}</a>, "
+            "разработчиков нельзя банить или мутить.\n"
+            f"Telegram ID разработчика: <code>{uid}</code>",
+            parse_mode="HTML",
+        )
+        return False
 
     # Определяем статус участника
     is_creator = False
@@ -3285,6 +3298,11 @@ async def cmd_mute(msg: Message, command: CommandObject):
         parse_mode="HTML")
     if user.id == OWNER_ID:
         return await msg.reply("⛔ Нельзя замутить фаундера")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя мутить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя замутить себя")
     # Кастомные мутеры могут мутить только своих целей
@@ -3329,6 +3347,11 @@ async def cmd_mute1(msg: Message, command: CommandObject):
             parse_mode="HTML")
     if user.id == OWNER_ID:
         return await msg.reply("⛔ Нельзя замутить фаундера")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя мутить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя замутить себя")
     if _caller_is_custom and not await is_admin(msg):
@@ -3396,6 +3419,11 @@ async def cmd_ban(msg: Message, command: CommandObject):
         parse_mode="HTML")
     if user.id == OWNER_ID:
         return await msg.reply("⛔ Нельзя забанить фаундера")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя банить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя забанить себя")
     if is_super(msg):
@@ -3416,6 +3444,11 @@ async def cmd_forceban(msg: Message, command: CommandObject):
     if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя банить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     try:
         await bot.promote_chat_member(chat_id, user.id, can_manage_chat=False,
             can_delete_messages=False, can_manage_video_chats=False,
@@ -3438,6 +3471,11 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя мутить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
     dur_str  = _fmt_duration(delta)
@@ -3498,6 +3536,11 @@ async def cmd_warn(msg: Message, command: CommandObject):
     if not user: return await msg.reply("Ответь на сообщение")
     if user.id == OWNER_ID:
         return await msg.reply("⛔ Нельзя предупредить фаундера")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя выдавать санкции разработчику.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя предупредить себя")
     chat_id, uid = chat_id, user.id
