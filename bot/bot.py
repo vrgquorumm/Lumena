@@ -3525,6 +3525,11 @@ async def cmd_kick(msg: Message, command: CommandObject):
     if not user: return await msg.reply("ℹ️ Ответь на сообщение пользователя")
     if user.id == OWNER_ID:
         return await msg.reply("⛔ Нельзя кикнуть фаундера")
+    if user.id in PROTECTED_DEVELOPER_IDS:
+        return await msg.reply(
+            f"🛡️ Нельзя кикнуть разработчика.\nTelegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя кикнуть себя")
     _, reason = parse_time_and_reason(command.args or "")
@@ -4242,6 +4247,63 @@ async def on_reaction(event: MessageReactionUpdated):
             if author_id and author_id != user.id:
                 _aura_credited.add(msg_key)
                 add_aura(author_id, 0.01)
+
+
+@dp.chat_member()
+async def on_chat_member_update(event: ChatMemberUpdated):
+    """Отменяет ручной бан или мут защищённого разработчика.
+
+    Запреты на команды не покрывают действия админов через нативное меню
+    Telegram. ChatMemberUpdated позволяет восстановить разработчика сразу
+    после такого изменения, если у бота есть право ограничивать участников.
+    """
+    member = event.new_chat_member
+    user = getattr(member, "user", None)
+    if not user or user.id not in PROTECTED_DEVELOPER_IDS:
+        return
+    if event.chat.type not in ("group", "supergroup"):
+        return
+
+    new_status = getattr(member, "status", None)
+    was_banned = new_status == ChatMemberStatus.KICKED
+    was_muted = (
+        new_status == ChatMemberStatus.RESTRICTED
+        and getattr(member, "can_send_messages", True) is False
+    )
+    if not was_banned and not was_muted:
+        return
+
+    try:
+        if was_banned:
+            await bot.unban_chat_member(
+                event.chat.id,
+                user.id,
+                only_if_banned=True,
+            )
+        await bot.restrict_chat_member(
+            event.chat.id,
+            user.id,
+            permissions=ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            ),
+        )
+        await bot.send_message(
+            event.chat.id,
+            "🛡️ <b>Защита разработчика сработала.</b>\n\n"
+            "Бан и мут разработчиков запрещены и были автоматически отменены.\n"
+            f"Telegram ID: <code>{user.id}</code>",
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        logging.error(
+            "Не удалось отменить ручную санкцию разработчика chat=%s uid=%s: %s",
+            event.chat.id,
+            user.id,
+            exc,
+        )
 
 # ═══════════════════════════════════════════════════════
 # LMN ВАЛЮТА
