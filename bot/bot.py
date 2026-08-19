@@ -75,6 +75,10 @@ FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 # Разработчики проекта: их нельзя банить или мутить ни одной модерационной
 # командой, включая force-команды и автоматические санкции.
 PROTECTED_DEVELOPER_IDS = {8318351777}
+# ID, которым основной фаундер явно отозвал founder-equivalent доступ.
+# Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
+REVOKED_FOUNDER_ACCESS_IDS: set[int] = set()
+FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
 
@@ -669,6 +673,11 @@ def _build_main_payload() -> dict:
         "aura":           {str(u): v for u, v in aura.items()},
         "roles":          {str(u): r for u, r in ROLES.items()},
         "role_usernames": dict(_ROLE_USERNAMES),
+        "revoked_founder_access_ids": sorted(REVOKED_FOUNDER_ACCESS_IDS),
+        "founder_access_revocations": {
+            str(uid): dict(note)
+            for uid, note in FOUNDER_ACCESS_REVOCATIONS.items()
+        },
         "last_rain_time": _last_rain_time,
         "link_guard":       {str(c): v for c, v in _link_guard.items()},
         "link_guard_warns": {str(c): {str(u): v for u, v in w.items()}
@@ -1413,6 +1422,8 @@ async def auto_moderate_propaganda(msg: Message) -> bool:
 # ── Хелперы ролей ─────────────────────────────────────
 def get_role(uid: int) -> str | None:
     """Возвращает роль пользователя или None."""
+    if uid in REVOKED_FOUNDER_ACCESS_IDS:
+        return None
     if uid in FOUNDER_DEPUTY_IDS:
         return "founder_deputy"
     if uid in FIXED_LEAD_ADMIN_IDS:
@@ -1821,6 +1832,8 @@ def is_owner(msg) -> bool:
     """
     u = getattr(msg, "from_user", None)
     if u is None:
+        return False
+    if u.id in REVOKED_FOUNDER_ACCESS_IDS:
         return False
     return (
         u.id == OWNER_ID
@@ -2910,6 +2923,87 @@ async def _notify_role_removed(user_id: int, role: str) -> None:
         )
     except Exception:
         pass
+
+
+async def _notify_access_revoked(
+    user_id: int, comment: str, assigner_name: str
+) -> None:
+    """Уведомляет пользователя об отзыве founder-equivalent доступа."""
+    try:
+        await bot.send_message(
+            user_id,
+            f"{brand.hdr()}\n\n"
+            "⛔ <b>Права разработчика отозваны</b>\n\n"
+            f"👤 Решение: <b>{html.escape(assigner_name)}</b>\n"
+            f"📝 Комментарий: <i>{html.escape(comment)}</i>\n\n"
+            "Founder-доступ, роли и права администратора сняты.\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+
+@dp.message(Command("снятьправа", "отозватьправа", "revokeaccess"))
+async def cmd_revoke_access(msg: Message, command: CommandObject = None):
+    """Основной фаундер отзывает весь доступ сотрудника с обязательной причиной."""
+    if msg.from_user.id != OWNER_ID:
+        return await msg.reply("⛔ Отозвать права может только основной фаундер.")
+
+    raw_args = ((command.args if command else "") or "").strip()
+    target = msg.reply_to_message.from_user if msg.reply_to_message else None
+    comment = raw_args
+
+    if target is None:
+        parts = raw_args.split(maxsplit=1)
+        if not parts or not parts[0].lstrip("@").isdigit():
+            return await msg.reply(
+                "Ответь на сообщение сотрудника и укажи комментарий:\n"
+                "<code>/снятьправа причина отзыва</code>\n\n"
+                "Или укажи Telegram ID:\n"
+                "<code>/снятьправа 8318351777 причина отзыва</code>",
+                parse_mode="HTML",
+            )
+        target_id = int(parts[0].lstrip("@"))
+        comment = parts[1].strip() if len(parts) > 1 else ""
+        target_name = str(target_id)
+    else:
+        target_id = target.id
+        target_name = target.full_name
+
+    if target_id == OWNER_ID:
+        return await msg.reply("⛔ Нельзя отозвать права у основного фаундера.")
+    if len(comment) < 3:
+        return await msg.reply(
+            "📝 Нужен обязательный комментарий к отзыву прав.",
+            parse_mode="HTML",
+        )
+
+    old_role = get_role(target_id)
+    username = (getattr(target, "username", "") or "").lower().lstrip("@")
+    REVOKED_FOUNDER_ACCESS_IDS.add(target_id)
+    FOUNDER_ACCESS_REVOCATIONS[target_id] = {
+        "comment": comment[:1000],
+        "revoked_by": msg.from_user.id,
+        "revoked_at": now_kyiv().strftime("%Y-%m-%d %H:%M"),
+    }
+    remove_role(target_id, username)
+    for role_chat_id in _role_sync_chat_ids(msg.chat.id):
+        await _demote_in_chat(target_id, role_chat_id)
+    save_data()
+    await _notify_access_revoked(target_id, comment, msg.from_user.full_name)
+
+    role_text = f"\nБыла роль: {_fmt_role(old_role)}" if old_role else ""
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        "✅ <b>Доступ отозван</b>\n\n"
+        f"👤 {html.escape(target_name)}\n"
+        f"📝 Комментарий: <i>{html.escape(comment)}</i>"
+        f"{role_text}\n\n"
+        "Сняты founder-права, роль и права администратора в связанных чатах."
+        f"\n{brand.div()}",
+        parse_mode="HTML",
+    )
 
 
 @dp.message(Command("setrole"))
@@ -11399,6 +11493,8 @@ TEXT_COMMANDS.update({
     "роль": cmd_set_role, "setrole": cmd_set_role,
     "повысить": cmd_promote, "повыситьдо": cmd_promote, "promote": cmd_promote,
     "убратьроль": cmd_remove_role, "снятьроль": cmd_remove_role, "removerole": cmd_remove_role,
+    "снятьправа": cmd_revoke_access, "отозватьправа": cmd_revoke_access,
+    "revokeaccess": cmd_revoke_access,
     "роли": cmd_roles, "roles": cmd_roles,
     "командныйчат": cmd_staff_chat, "чаткоманды": cmd_staff_chat, "staffchat": cmd_staff_chat,
     "снятькомандныйчат": cmd_staff_chat_remove, "снятьчаткоманды": cmd_staff_chat_remove,
@@ -17369,6 +17465,19 @@ def _apply_data(data: dict) -> None:
         ROLES[int(u)] = r
     for uname, r in data.get("role_usernames", {}).items():
         _ROLE_USERNAMES[uname] = r
+    REVOKED_FOUNDER_ACCESS_IDS.update(
+        int(uid) for uid in data.get("revoked_founder_access_ids", [])
+    )
+    for uid, note in data.get("founder_access_revocations", {}).items():
+        try:
+            if isinstance(note, dict):
+                FOUNDER_ACCESS_REVOCATIONS[int(uid)] = {
+                    "comment": str(note.get("comment", ""))[:1000],
+                    "revoked_by": int(note.get("revoked_by", OWNER_ID)),
+                    "revoked_at": str(note.get("revoked_at", ""))[:40],
+                }
+        except (TypeError, ValueError):
+            pass
     _saved_pack = data.get("brand_emoji_pack", [])
     if _saved_pack:
         brand.set_pack(
