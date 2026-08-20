@@ -3,6 +3,7 @@
 Версия 6.0
 """
 import asyncio
+import calendar
 import html
 import io
 import json
@@ -2283,9 +2284,33 @@ def add_rep(chat_id: int, uid: int, n: int):
 def is_married(chat_id: int, uid: int) -> bool:
     return uid in marriages.get(econ_cid(chat_id), {})
 
+def _add_months(value: date, months: int) -> date:
+    total = value.year * 12 + (value.month - 1) + months
+    year, month_index = divmod(total, 12)
+    month = month_index + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+def _marriage_duration(start: date, end: date | None = None) -> str:
+    """Возвращает календарный срок брака: «3 мес. 10 дн.»."""
+    end = end or today_kyiv()
+    if start > end:
+        return "0 дн."
+    months = (end.year - start.year) * 12 + end.month - start.month
+    anniversary = _add_months(start, months)
+    if anniversary > end:
+        months -= 1
+        anniversary = _add_months(start, months)
+    days = (end - anniversary).days
+    parts = []
+    if months:
+        parts.append(f"{months} мес.")
+    if days or not parts:
+        parts.append(f"{days} дн.")
+    return " ".join(parts)
+
 def _marriage_days_str(uid1: int, uid2: int | None) -> str:
-    """Возвращает строку вида ' · 42 дн. вместе 💑'.
-    Если дата не записана — регистрирует сегодня и возвращает 0 дн."""
+    """Возвращает строку вида ' · 3 мес. 10 дн. вместе 💑'."""
     if not uid2:
         return ""
     pair_key = f"{min(uid1, uid2)}_{max(uid1, uid2)}"
@@ -2293,8 +2318,8 @@ def _marriage_days_str(uid1: int, uid2: int | None) -> str:
         marriage_dates[pair_key] = today_kyiv().isoformat()
         schedule_state_save("инициализация даты брака")
     try:
-        days = (today_kyiv() - date.fromisoformat(marriage_dates[pair_key])).days
-        return f" · {days} дн. вместе 💑"
+        duration = _marriage_duration(date.fromisoformat(marriage_dates[pair_key]))
+        return f" · {duration} вместе 💑"
     except Exception:
         return ""
 
@@ -4200,8 +4225,7 @@ async def cmd_marriages(msg: Message):
                 schedule_state_save("инициализация даты брака")
             try:
                 wed = date.fromisoformat(marriage_dates[pair_key])
-                days_together = (today_kyiv() - wed).days
-                days_str = f"{days_together} дн."
+                days_str = _marriage_duration(wed)
             except Exception:
                 days_str = "—"
             pair_rows += (
