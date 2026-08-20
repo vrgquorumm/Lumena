@@ -418,6 +418,11 @@ ru_army_warns = {}
 marriages = {}
 marriage_proposals = {}
 marriage_dates: dict[str, str] = {}  # "min_uid_max_uid" → ISO date свадьбы
+# Одноразовая миграция пользовательской даты брака фаундера и заместителя.
+FOUNDER_DEPUTY_MARRIAGE_PAIR = "1839566911_8655306548"
+FOUNDER_DEPUTY_MARRIAGE_DATE = "2026-05-10"
+MARRIAGE_DATE_MIGRATION_VERSION = 1
+marriage_date_migration_version = 0
 streaks = {}
 lmn_balances = {}
 reputation = {}
@@ -662,6 +667,8 @@ def _build_main_payload() -> dict:
         "poll_extra_sessions": {
             str(uid): poll_id for uid, poll_id in poll_extra_sessions.items()
         },
+        "marriage_dates": dict(marriage_dates),
+        "marriage_date_migration_version": marriage_date_migration_version,
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
         "chat_rules":   {str(c): r for c, r in chat_rules.items()},
@@ -2308,6 +2315,15 @@ def _marriage_duration(start: date, end: date | None = None) -> str:
     if days or not parts:
         parts.append(f"{days} дн.")
     return " ".join(parts)
+
+def apply_marriage_date_migrations() -> bool:
+    """Однократно закрепляет согласованную дату брака founder-пары."""
+    global marriage_date_migration_version
+    if marriage_date_migration_version >= MARRIAGE_DATE_MIGRATION_VERSION:
+        return False
+    marriage_dates[FOUNDER_DEPUTY_MARRIAGE_PAIR] = FOUNDER_DEPUTY_MARRIAGE_DATE
+    marriage_date_migration_version = MARRIAGE_DATE_MIGRATION_VERSION
+    return True
 
 def _marriage_days_str(uid1: int, uid2: int | None) -> str:
     """Возвращает строку вида ' · 3 мес. 10 дн. вместе 💑'."""
@@ -17089,6 +17105,8 @@ async def main():
     await _ank.restore_anketa()
     await brand.restore_brand()
     load_data()
+    if apply_marriage_date_migrations():
+        await save_state_now("миграция даты брака фаундера и заместителя")
     await _restore_night_mode_permissions()
     _ank.load_anketa_settings()
     # Обновляем только известные устаревшие ссылки админ-чата. Пользовательские
@@ -17362,6 +17380,10 @@ def _apply_data(data: dict) -> None:
     """Заповнює in-memory сховища зі словника (з PostgreSQL або JSON-файлу)."""
     for cid, m in data.get("marriages", {}).items():
         marriages[int(cid)] = {int(u): int(v) for u, v in m.items()}
+    global marriage_date_migration_version
+    marriage_date_migration_version = int(
+        data.get("marriage_date_migration_version", 0) or 0
+    )
     for cid, users in data.get("streaks", {}).items():
         streaks[int(cid)] = {}
         for uid, d in users.items():
