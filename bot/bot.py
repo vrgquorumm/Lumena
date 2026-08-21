@@ -87,6 +87,9 @@ LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
 CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
 LMN_BALANCE_RESET_TARGET = 7_000_000_000
 LMN_BALANCE_RESET_VERSION = 3  # v3: компенсация 7 млрд всем пользователям
+# Компенсация остаётся стартовым балансом, но не должна навсегда блокировать
+# заработок. Общий потолок аккаунта включает кошелёк, банк и вклад.
+LMN_ACCOUNT_CAP = 7_000_000_000_000
 LMN_TRANSFER_VERSION = 2  # перевод всех балансов фаундеру
 LMN_GLOBAL_ZERO_VERSION = 2  # ручное обнуление кошельков и банков всех пользователей
 OWNER_AUTO_CREDIT_ENABLED = False  # после общего сброса фаундеру не начисляются монеты автоматически
@@ -2170,14 +2173,14 @@ def get_balance(uid: int) -> int:
     return lmn_balances.get(uid, 0)
 
 def add_balance(uid: int, amount: int) -> int:
-    """Меняет кошелёк, не позволяя превысить общий лимит аккаунта 7 млрд."""
+    """Меняет кошелёк, не позволяя превысить общий лимит аккаунта 7 трлн."""
     requested = int(amount)
     wallet = max(0, int(lmn_balances.get(uid, 0) or 0))
     protected = max(0, int(bank_balances.get(uid, 0) or 0))
     term = bank_term_deposits.get(uid) or {}
     protected += max(0, int(term.get("principal", 0) or 0))
     if requested > 0:
-        allowed = max(0, LMN_BALANCE_RESET_TARGET - wallet - protected)
+        allowed = max(0, LMN_ACCOUNT_CAP - wallet - protected)
         applied = min(requested, allowed)
     else:
         applied = max(-wallet, requested)
@@ -15106,7 +15109,7 @@ async def cmd_founder_extra(msg: Message, command=None):
             total = wallet + protected
             if total > 0:
                 total_users += 1
-            if total >= LMN_BALANCE_RESET_TARGET:
+            if total >= LMN_ACCOUNT_CAP:
                 cap_hits += 1
             max_total = max(max_total, total)
         return await msg.reply(
@@ -15114,7 +15117,7 @@ async def cmd_founder_extra(msg: Message, command=None):
             "🔎 Запустил диагностику начисления LMN.\n"
             f"👥 Пользователей в проверке: <b>{len(ids)}</b>\n"
             f"💰 С балансом: <b>{total_users}</b>\n"
-            f"🚧 Уперлись в лимит 7 млрд: <b>{cap_hits}</b>\n"
+            f"🚧 Уперлись в лимит 7 трлн: <b>{cap_hits}</b>\n"
             f"📈 Максимальный общий баланс: <b>{fmt_lmn(max_total)} LMN</b>\n\n"
             "Проверяю общий лимит кошелька, банка и вклада, "
             "а также сохранение начислений в PostgreSQL.",
