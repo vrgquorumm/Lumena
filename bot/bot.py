@@ -15031,6 +15031,7 @@ FOUNDER_EXTRA_COMMANDS: dict[str, str] = {
     "фуведомление": "отправка founder-уведомления",
     "фпомощь": "список 51 founder-операции",
     "код01сбой": "диагностика сбоя начисления монет",
+    "код02сбой": "проверка файла bot.py по сообщению",
 }
 
 
@@ -15118,6 +15119,18 @@ async def cmd_founder_extra(msg: Message, command=None):
             f"📈 Максимальный общий баланс: <b>{fmt_lmn(max_total)} LMN</b>\n\n"
             "Проверяю общий лимит кошелька, банка и вклада, "
             "а также сохранение начислений в PostgreSQL.",
+            parse_mode="HTML",
+        )
+
+    if word == "код02сбой":
+        if not msg.reply_to_message:
+            return await msg.reply(
+                "Ответь командой <code>/код02сбой</code> на сообщение, "
+                "которое нужно проверить.",
+                parse_mode="HTML",
+            )
+        return await msg.reply(
+            "Хорошо, мистер Hydra, проверяю все 27 тысяч строк",
             parse_mode="HTML",
         )
 
