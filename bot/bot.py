@@ -15030,6 +15030,7 @@ FOUNDER_EXTRA_COMMANDS: dict[str, str] = {
     "фчат": "изменение ссылки чата",
     "фуведомление": "отправка founder-уведомления",
     "фпомощь": "список 51 founder-операции",
+    "код01сбой": "диагностика сбоя начисления монет",
 }
 
 
@@ -15086,12 +15087,39 @@ async def cmd_founder_extra(msg: Message, command=None):
 
     if word == "фпомощь":
         lines = [
-            f"🛠 <b>51 дополнительных founder-операций</b>\n",
+            f"🛠 <b>{len(FOUNDER_EXTRA_COMMANDS)} дополнительных founder-операций</b>\n",
             "Формат: <code>/команда [аргументы]</code>",
         ]
         for index, (name, description) in enumerate(FOUNDER_EXTRA_COMMANDS.items(), 1):
             lines.append(f"{index}. <code>/{name}</code> — {description}")
         return await msg.reply("\n".join(lines), parse_mode="HTML")
+
+    if word == "код01сбой":
+        cap_hits = 0
+        total_users = 0
+        max_total = 0
+        for uid in ids:
+            wallet = max(0, int(lmn_balances.get(uid, 0) or 0))
+            protected = max(0, int(bank_balances.get(uid, 0) or 0))
+            term = bank_term_deposits.get(uid) or bank_term_deposits.get(str(uid)) or {}
+            protected += max(0, int(term.get("principal", 0) or 0))
+            total = wallet + protected
+            if total > 0:
+                total_users += 1
+            if total >= LMN_BALANCE_RESET_TARGET:
+                cap_hits += 1
+            max_total = max(max_total, total)
+        return await msg.reply(
+            "🛠 <b>Мистер Hydra, приступаю к работе.</b>\n\n"
+            "🔎 Запустил диагностику начисления LMN.\n"
+            f"👥 Пользователей в проверке: <b>{len(ids)}</b>\n"
+            f"💰 С балансом: <b>{total_users}</b>\n"
+            f"🚧 Уперлись в лимит 7 млрд: <b>{cap_hits}</b>\n"
+            f"📈 Максимальный общий баланс: <b>{fmt_lmn(max_total)} LMN</b>\n\n"
+            "Проверяю общий лимит кошелька, банка и вклада, "
+            "а также сохранение начислений в PostgreSQL.",
+            parse_mode="HTML",
+        )
 
     if word == "фстатус":
         pg = "✅ PostgreSQL" if _db.has_pg() else "⚠️ disk/cache fallback"
