@@ -2527,7 +2527,16 @@ async def _mute_or_soft_mute(
         )
         return True, False, ""
     except Exception as error:
-        return False, False, str(error)
+        error_text = str(error)
+        if "CHAT_ADMIN_REQUIRED" in error_text:
+            return (
+                False,
+                False,
+                "Telegram не разрешил изменить права этого администратора. "
+                "Поставь бота выше него в списке администраторов чата "
+                "и включи право «Добавлять администраторов».",
+            )
+        return False, False, error_text
 
 
 def _clear_soft_mute(chat_id: int, user_id: int) -> bool:
