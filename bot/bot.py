@@ -524,6 +524,7 @@ user_achievements: dict[int, list] = {}   # uid → [achievement_id, ...]
 founder_medals:    dict[int, list[dict]] = {}  # uid → [{title, description, ...}, ...]
 mod_logs:          dict[int, list] = {}   # chat_id → [{action,uid,by,ts}]
 soft_mutes:        dict[int, dict[int, str]] = {}  # chat_id → uid → expiry ISO
+admin_mute_snapshots: dict[int, dict[int, dict]] = {}  # chat_id → uid → saved admin permissions
 reports_db:        dict[int, list] = {}   # chat_id → [{from_uid,target_uid,reason,ts}]
 referrals:         dict[int, int]  = {}   # uid → referrer_uid
 referral_counts:   dict[int, int]  = {}   # uid → кол-во приглашённых
@@ -772,6 +773,11 @@ def _build_main_payload() -> dict:
         "soft_mutes":        {
             str(c): {str(u): str(until) for u, until in users.items()}
             for c, users in soft_mutes.items()
+            if users
+        },
+        "admin_mute_snapshots": {
+            str(c): {str(u): dict(snapshot) for u, snapshot in users.items()}
+            for c, users in admin_mute_snapshots.items()
             if users
         },
         "reports_db":        {str(c): v for c, v in reports_db.items()},
@@ -2482,8 +2488,36 @@ async def _mute_or_soft_mute(
         if member.status == ChatMemberStatus.CREATOR:
             return False, False, "создателя чата нельзя ограничить"
         if member.status == ChatMemberStatus.ADMINISTRATOR:
+            permission_names = (
+                "can_manage_chat", "can_delete_messages",
+                "can_manage_video_chats", "can_restrict_members",
+                "can_promote_members", "can_change_info",
+                "can_invite_users", "can_pin_messages",
+                "can_manage_topics",
+            )
+            snapshot = {
+                name: bool(getattr(member, name, False))
+                for name in permission_names
+            }
+            snapshot["role"] = get_role(user_id)
+            snapshot["custom_title"] = getattr(member, "custom_title", None)
+            admin_mute_snapshots.setdefault(int(chat_id), {})[int(user_id)] = snapshot
+            await bot.promote_chat_member(
+                chat_id, user_id,
+                **{name: False for name in permission_names if name != "can_manage_topics"},
+            )
+            demoted = await bot.get_chat_member(chat_id, user_id)
+            if demoted.status == ChatMemberStatus.ADMINISTRATOR:
+                admin_mute_snapshots.get(int(chat_id), {}).pop(int(user_id), None)
+                return False, False, "не удалось временно снять права администратора"
             soft_mutes.setdefault(int(chat_id), {})[int(user_id)] = until.isoformat()
-            schedule_state_save("мягкий мут администратора")
+            await bot.restrict_chat_member(
+                chat_id,
+                user_id,
+                permissions=_muted_permissions(),
+                until_date=until,
+            )
+            schedule_state_save("полный мут администратора")
             return True, True, ""
         await bot.restrict_chat_member(
             chat_id,
@@ -2505,6 +2539,50 @@ def _clear_soft_mute(chat_id: int, user_id: int) -> bool:
     if removed:
         schedule_state_save("снятие мягкого мута")
     return removed
+
+
+async def _restore_admin_mute(chat_id: int, user_id: int) -> bool:
+    """Возвращает админские права после полного admin-mute."""
+    snapshot = admin_mute_snapshots.get(int(chat_id), {}).get(int(user_id))
+    if not snapshot:
+        return False
+    try:
+        await bot.restrict_chat_member(
+            chat_id, user_id, permissions=_unmuted_permissions()
+        )
+        role = snapshot.get("role")
+        restored = False
+        if role and role in _ROLE_PERMISSIONS:
+            restored, _, _ = await _promote_in_chat(user_id, role, chat_id)
+        if not restored:
+            permissions = {
+                name: bool(snapshot.get(name, False))
+                for name in (
+                    "can_manage_chat", "can_delete_messages",
+                    "can_manage_video_chats", "can_restrict_members",
+                    "can_promote_members", "can_change_info",
+                    "can_invite_users", "can_pin_messages",
+                )
+            }
+            await bot.promote_chat_member(chat_id, user_id, **permissions)
+        admin_mute_snapshots.get(int(chat_id), {}).pop(int(user_id), None)
+        if not admin_mute_snapshots.get(int(chat_id)):
+            admin_mute_snapshots.pop(int(chat_id), None)
+        schedule_state_save("восстановление прав после admin-mute")
+        return True
+    except Exception:
+        logging.exception("Не удалось восстановить права admin-mute uid=%s chat=%s", user_id, chat_id)
+        return False
+
+
+async def admin_mute_restore_loop():
+    """Автоматически выпускает админов из режима «Призрак чата»."""
+    while True:
+        for chat_id, users in list(soft_mutes.items()):
+            for user_id in list(users):
+                if _soft_mute_until(chat_id, user_id) is None:
+                    await _restore_admin_mute(chat_id, user_id)
+        await asyncio.sleep(10)
 
 
 async def _enforce_soft_mute(event: Message) -> bool:
@@ -3501,8 +3579,12 @@ async def cmd_mute(msg: Message, command: CommandObject):
         if not muted:
             raise RuntimeError(mute_error)
         if soft:
-            title = f"Мягкий мут 🔇 на {dur_str}"
-            extra = "Сообщения администратора будут удаляться автоматически"
+            title = f"Призрак чата 👻 на {dur_str}"
+            extra = (
+                "Админ остаётся в чате, но не может писать, отправлять медиа "
+                "или пользоваться полномочиями. Права вернутся автоматически.\n"
+                "🎭 Фишка: админ онлайн, но его кнопка «Отправить» взяла отпуск."
+            )
         _log_mod(chat_id, "soft_mute" if soft else "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(title, user, reason=reason, extra=extra),
@@ -3548,11 +3630,13 @@ async def cmd_mute1(msg: Message, command: CommandObject):
         _log_mod(chat_id, "soft_mute" if soft else "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(
-                "Мягкий мут 🔇 на 1 мин" if soft else "Мут 🔇 на 1 мин",
+                "Призрак чата 👻 на 1 мин" if soft else "Мут 🔇 на 1 мин",
                 user,
                 reason=reason,
                 extra=(
-                    "Сообщения администратора будут удаляться автоматически"
+                    "Админ временно лишён сообщений, медиа и полномочий. "
+                    "Права вернутся автоматически.\n"
+                    "🎭 Его кнопка «Отправить» взяла отпуск."
                     if soft else f"⏰ До {until.strftime('%H:%M')}"
                 ),
             ),
@@ -3569,8 +3653,11 @@ async def cmd_unmute(msg: Message, command: CommandObject):
     if not user: return await msg.reply("Ответь на сообщение")
     try:
         if _clear_soft_mute(chat_id, user.id):
+            restored = await _restore_admin_mute(chat_id, user.id)
+            if not restored:
+                return await msg.reply("❌ Не удалось восстановить права администратора.")
             _log_mod(chat_id, "unmute", user.id, msg.from_user.id)
-            return await msg.reply(mod_card("Мягкий мут снят 🔊", user), parse_mode="HTML")
+            return await msg.reply(mod_card("Призрак чата снят 🔊", user), parse_mode="HTML")
         await bot.restrict_chat_member(
             chat_id,
             user.id,
@@ -3662,8 +3749,11 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
         if not muted:
             raise RuntimeError(mute_error)
         if soft:
-            title = "Принудительный мягкий мут 🔇" if is_perma else f"Принудительный мягкий мут 🔇 на {dur_str}"
-            extra2 = "Сообщения администратора будут удаляться автоматически"
+            title = "Принудительный призрак чата 👻" if is_perma else f"Принудительный призрак чата 👻 на {dur_str}"
+            extra2 = (
+                "Админ временно лишён сообщений, медиа и полномочий. "
+                "Права вернутся автоматически."
+            )
         _log_mod(chat_id, "soft_mute" if soft else "mute", user.id, msg.from_user.id)
         await msg.reply(
             mod_card(title, user, extra=extra2, reason=reason),
@@ -16017,13 +16107,15 @@ async def _founder_apply_user_mod(
             if not muted:
                 raise RuntimeError(mute_error)
             title = (
-                f"Мягкий мут 🔇 на {duration_label}"
+                f"Призрак чата 👻 на {duration_label}"
                 if soft else f"Мут 🔇 на {duration_label}"
             )
             log_action = "soft_mute" if soft else "mute"
         elif action == "unmute":
             if _clear_soft_mute(target_chat, uid):
-                title = "Мягкий мут снят 🔊"
+                if not await _restore_admin_mute(target_chat, uid):
+                    raise RuntimeError("не удалось восстановить права администратора")
+                title = "Призрак чата снят 🔊"
             else:
                 await bot.restrict_chat_member(
                     target_chat,
@@ -17328,6 +17420,7 @@ async def main():
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
     asyncio.create_task(auction_loop())
+    asyncio.create_task(admin_mute_restore_loop())
 
     # V6-объявление больше НЕ отправляется автоматически при старте —
     # только вручную через /announce_v6 (иначе каждый редеплой спамил чат).
@@ -17755,6 +17848,17 @@ def _apply_data(data: dict) -> None:
                 soft_mutes[int(c)] = clean
         except (AttributeError, TypeError, ValueError):
             logging.warning("⚠️ Некорректный soft-mute для chat=%s пропущен", c)
+    for c, users in data.get("admin_mute_snapshots", {}).items():
+        try:
+            clean = {
+                int(uid): dict(snapshot)
+                for uid, snapshot in (users or {}).items()
+                if isinstance(snapshot, dict)
+            }
+            if clean:
+                admin_mute_snapshots[int(c)] = clean
+        except (AttributeError, TypeError, ValueError):
+            logging.warning("⚠️ Некорректный снимок admin-mute для chat=%s пропущен", c)
     for c, v in data.get("reports_db", {}).items():
         reports_db[int(c)] = list(v)
     for c, pairs in data.get("staff_relations", {}).items():
