@@ -15,6 +15,7 @@ import re
 import string
 import uuid
 from datetime import datetime, timedelta, date, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 UTC = timezone.utc   # используется в restrict_chat_member until_date
@@ -82,6 +83,7 @@ REVOKED_FOUNDER_ACCESS_IDS: set[int] = set()
 FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
+ADMIN_RULES_FILE = Path(__file__).with_name("admin_rules.txt")
 
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
 CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
@@ -2486,7 +2488,7 @@ async def _mute_or_soft_mute(
         await bot.restrict_chat_member(
             chat_id,
             user_id,
-            permissions=ChatPermissions(can_send_messages=False),
+            permissions=_muted_permissions(),
             until_date=until,
         )
         return True, False, ""
@@ -2522,6 +2524,38 @@ async def _enforce_soft_mute(event: Message) -> bool:
             error,
         )
     return True
+
+
+def _muted_permissions() -> ChatPermissions:
+    """Полностью запрещает отправку контента обычному участнику."""
+    return ChatPermissions(
+        can_send_messages=False,
+        can_send_audios=False,
+        can_send_documents=False,
+        can_send_photos=False,
+        can_send_videos=False,
+        can_send_video_notes=False,
+        can_send_voice_notes=False,
+        can_send_polls=False,
+        can_send_other_messages=False,
+        can_add_web_page_previews=False,
+    )
+
+
+def _unmuted_permissions() -> ChatPermissions:
+    """Полностью восстанавливает стандартные права отправки участника."""
+    return ChatPermissions(
+        can_send_messages=True,
+        can_send_audios=True,
+        can_send_documents=True,
+        can_send_photos=True,
+        can_send_videos=True,
+        can_send_video_notes=True,
+        can_send_voice_notes=True,
+        can_send_polls=True,
+        can_send_other_messages=True,
+        can_add_web_page_previews=True,
+    )
 
 # ── Премиум-карточки ────────────────────────────────────
 _LMN_HDR = "✨  L U M E N A  ✨"  # plain fallback для legacy-мест
@@ -3540,12 +3574,7 @@ async def cmd_unmute(msg: Message, command: CommandObject):
         await bot.restrict_chat_member(
             chat_id,
             user.id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_media_messages=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True,
-            ),
+            permissions=_unmuted_permissions(),
         )
         _log_mod(chat_id, "unmute", user.id, msg.from_user.id)
         await msg.reply(mod_card("Размучен 🔊", user), parse_mode="HTML")
@@ -4420,12 +4449,7 @@ async def on_chat_member_update(event: ChatMemberUpdated):
         await bot.restrict_chat_member(
             event.chat.id,
             user.id,
-            permissions=ChatPermissions(
-                can_send_messages=True,
-                can_send_media_messages=True,
-                can_send_other_messages=True,
-                can_add_web_page_previews=True,
-            ),
+            permissions=_unmuted_permissions(),
         )
         await bot.send_message(
             event.chat.id,
@@ -8347,6 +8371,42 @@ async def cmd_rules(msg: Message):
     r = chat_rules.get(msg.chat.id, DEFAULT_RULES)
     await msg.reply(f"📋 {r}", parse_mode="HTML")
 
+async def cmd_admin_rules(msg: Message):
+    """Показывает единые правила администрации из приложенного документа."""
+    uid = msg.from_user.id
+    if msg.chat.type == "private":
+        allowed = is_owner(msg) or has_role(
+            uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator"
+        )
+    else:
+        allowed = await is_admin(msg)
+    if not allowed:
+        return await msg.reply("⛔ Правила администрации доступны только администрации.")
+    try:
+        rules = ADMIN_RULES_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        logging.exception("Не удалось прочитать файл правил администрации")
+        return await msg.reply("❌ Файл правил администрации временно недоступен.")
+    if not rules:
+        return await msg.reply("❌ Правила администрации пока не заполнены.")
+
+    # Telegram принимает максимум 4096 символов в одном текстовом сообщении.
+    chunks: list[str] = []
+    remaining = rules
+    while remaining:
+        if len(remaining) <= 3800:
+            chunks.append(remaining)
+            break
+        cut = remaining.rfind("\n", 0, 3800)
+        if cut < 1000:
+            cut = 3800
+        chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip("\n")
+
+    for index, chunk in enumerate(chunks, 1):
+        prefix = "📜 ЕДИНЫЕ ПРАВИЛА АДМИНИСТРАЦИИ\n\n" if index == 1 else ""
+        await msg.reply(prefix + chunk)
+
 async def cmd_setrules(msg: Message, command: CommandObject = None):
     if not await is_admin(msg): return await msg.reply("⛔ Только админы")
     if not (command and command.args): return await msg.reply("Укажи текст правил")
@@ -11487,6 +11547,8 @@ TEXT_COMMANDS.update({
     # Модерация
     "мут": cmd_mute, "mute": cmd_mute,
     "замутить": cmd_mute, "замут": cmd_mute,
+    "адмправила": cmd_admin_rules, "админправила": cmd_admin_rules,
+    "правилаадминистрации": cmd_admin_rules,
     "бан": cmd_ban, "ban": cmd_ban,
     "забанить": cmd_ban, "забан": cmd_ban,
     "форсбан": cmd_forceban, "forceban": cmd_forceban,
@@ -15966,12 +16028,7 @@ async def _founder_apply_user_mod(
                 await bot.restrict_chat_member(
                     target_chat,
                     uid,
-                    permissions=ChatPermissions(
-                        can_send_messages=True,
-                        can_send_media_messages=True,
-                        can_send_other_messages=True,
-                        can_add_web_page_previews=True,
-                    ),
+                    permissions=_unmuted_permissions(),
                 )
                 title = "Размучен 🔊"
             log_action = "unmute"
