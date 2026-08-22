@@ -12104,7 +12104,10 @@ class PropagandaMiddleware(BaseMiddleware):
 
         return await handler(event, data)
 
-dp.message.middleware(PropagandaMiddleware())
+# Outer middleware выполняется для любого Message до фильтров handlers.
+# Это важно для soft-mute: стикеры, GIF, альбомы и часть медиа не имеют
+# отдельного обработчика и иначе могли проходить мимо проверки.
+dp.message.outer_middleware(PropagandaMiddleware())
 
 # ═══════════════════════════════════════════════════════
 # ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ
