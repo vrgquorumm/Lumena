@@ -2605,32 +2605,18 @@ async def _enforce_soft_mute(event: Message) -> bool:
 
 
 def _muted_permissions() -> ChatPermissions:
-    """Полностью запрещает отправку контента обычному участнику."""
-    return ChatPermissions(
-        can_send_messages=False,
-        can_send_audios=False,
-        can_send_documents=False,
-        can_send_photos=False,
-        can_send_videos=False,
-        can_send_video_notes=False,
-        can_send_voice_notes=False,
-        can_send_polls=False,
-        can_send_other_messages=False,
-        can_add_web_page_previews=False,
-    )
+    """Надёжно запрещает отправку любого контента участнику."""
+    # can_send_messages=False блокирует текст и весь контент целиком.
+    # Не передаём дополнительные поля: старые версии Bot API/права чата
+    # иногда отклоняют расширенный объект ChatPermissions.
+    return ChatPermissions(can_send_messages=False)
 
 
 def _unmuted_permissions() -> ChatPermissions:
-    """Полностью восстанавливает стандартные права отправки участника."""
+    """Восстанавливает стандартные права отправки участника."""
     return ChatPermissions(
         can_send_messages=True,
-        can_send_audios=True,
-        can_send_documents=True,
-        can_send_photos=True,
-        can_send_videos=True,
-        can_send_video_notes=True,
-        can_send_voice_notes=True,
-        can_send_polls=True,
+        can_send_media_messages=True,
         can_send_other_messages=True,
         can_add_web_page_previews=True,
     )
