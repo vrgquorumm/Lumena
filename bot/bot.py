@@ -425,8 +425,8 @@ marriage_proposals = {}
 marriage_dates: dict[str, str] = {}  # "min_uid_max_uid" → ISO date свадьбы
 # Одноразовая миграция пользовательской даты брака фаундера и заместителя.
 FOUNDER_DEPUTY_MARRIAGE_PAIR = "1839566911_8655306548"
-FOUNDER_DEPUTY_MARRIAGE_DATE = "2026-05-10"
-MARRIAGE_DATE_MIGRATION_VERSION = 1
+FOUNDER_DEPUTY_MARRIAGE_DATE = "2026-08-07"
+MARRIAGE_DATE_MIGRATION_VERSION = 2
 marriage_date_migration_version = 0
 streaks = {}
 lmn_balances = {}
