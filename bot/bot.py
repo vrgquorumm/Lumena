@@ -66,8 +66,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Не найден BOT_TOKEN!")
 
-OWNER_USERNAME = "hdrttttttt"
-OWNER_ID       = 8655306548
+OWNER_USERNAME = "lumena_founder"
+OWNER_ID       = 8663692155
 SUPER_IDS      = {OWNER_ID}
 # Постоянный заместитель с полным founder-доступом.
 # Это числовой Telegram ID, поэтому username не используется для авторизации.
@@ -79,7 +79,7 @@ FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 PROTECTED_DEVELOPER_IDS = {8318351777}
 # ID, которым основной фаундер явно отозвал founder-equivalent доступ.
 # Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
-REVOKED_FOUNDER_ACCESS_IDS: set[int] = set()
+REVOKED_FOUNDER_ACCESS_IDS: set[int] = {8655306548}
 FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
