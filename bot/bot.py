@@ -469,6 +469,9 @@ founder_polls: dict[str, dict] = {}
 poll_extra_sessions: dict[int, str] = {}
 chat_members = {}
 support_sessions = {}
+SUPPORT_AGENT_ID = 8663692155
+help_sessions: set[int] = set()
+help_forward_map: dict[int, int] = {}  # message_id сотрудника → ID пользователя
 _active_rain: dict = {}
 _last_rain_time: float = 0.0
 
@@ -660,6 +663,11 @@ def _build_main_payload() -> dict:
         "anon_answer_sessions": {str(u): qid for u, qid in anon_answer_sessions.items()},
         "anon_reply_sessions": {str(u): qid for u, qid in anon_reply_sessions.items()},
         "anon_ask_sessions": {str(u): target for u, target in anon_ask_sessions.items()},
+        "help_sessions": sorted(help_sessions),
+        "help_forward_map": {
+            str(message_id): int(user_id)
+            for message_id, user_id in help_forward_map.items()
+        },
         "shop_reservations": {
             str(owner): {
                 str(item): max(0, int(quantity))
@@ -11195,6 +11203,89 @@ async def cmd_support(msg: Message):
     )
 
 
+@dp.message(Command("helplum"))
+async def cmd_helplum(msg: Message):
+    """Открывает постоянный канал жалоб и вопросов с ответственным сотрудником."""
+    uid = msg.from_user.id
+    if msg.chat.type != "private":
+        return await msg.reply(
+            "📩 Напиши мне в личные сообщения и используй <code>/helplum</code>.",
+            parse_mode="HTML",
+        )
+    help_sessions.add(uid)
+    schedule_state_save("открытие канала Lumena Help")
+    await msg.reply(
+        "📩 <b>Lumena Help</b>\n\n"
+        "Канал обращений открыт. Отправляй жалобы или вопросы следующим сообщением — "
+        "они будут переданы ответственному сотруднику.\n\n"
+        "Диалог не ограничен по количеству сообщений.\n"
+        "Для завершения напиши <code>/helpcancel</code>.",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("helpcancel"))
+async def cmd_helpcancel(msg: Message):
+    if msg.chat.type != "private":
+        return
+    if msg.from_user.id in help_sessions:
+        help_sessions.discard(msg.from_user.id)
+        schedule_state_save("закрытие канала Lumena Help")
+        await msg.reply("✅ Канал обращений закрыт. При необходимости снова используй /helplum.")
+    else:
+        await msg.reply("ℹ️ Активного обращения нет. Для связи используй /helplum.")
+
+
+def _is_help_routed_message(msg: Message) -> bool:
+    """Личные сообщения пользователя или ответ сотрудника в постоянном Help-диалоге."""
+    if msg.chat.type != "private":
+        return False
+    if msg.text and msg.text.startswith("/"):
+        return False
+    if msg.from_user.id == SUPPORT_AGENT_ID:
+        reply = msg.reply_to_message
+        return bool(reply and reply.message_id in help_forward_map)
+    return msg.from_user.id in help_sessions
+
+
+@dp.message(F.func(_is_help_routed_message))
+async def handle_helplum_message(msg: Message):
+    """Пересылает обращения и неограниченные ответы между пользователем и сотрудником."""
+    sender_id = msg.from_user.id
+    try:
+        if sender_id == SUPPORT_AGENT_ID:
+            target_id = help_forward_map.get(msg.reply_to_message.message_id)
+            if not target_id:
+                return
+            await msg.copy_to(target_id)
+            await bot.send_message(target_id, "↩️ Ответ ответственного сотрудника доставлен.")
+            return
+
+        user = msg.from_user
+        tag = f"@{html.escape(user.username)}" if user.username else html.escape(user.full_name)
+        await bot.send_message(
+            SUPPORT_AGENT_ID,
+            f"📩 <b>Новое сообщение Lumena Help</b>\n\n"
+            f"👤 {tag} (ID: <code>{user.id}</code>)\n"
+            f"Чтобы ответить, используй reply на это сообщение.",
+            parse_mode="HTML",
+        )
+        forwarded = await msg.copy_to(SUPPORT_AGENT_ID)
+        help_forward_map[forwarded.message_id] = user.id
+        if len(help_forward_map) > 5000:
+            for old_id in list(help_forward_map)[:1000]:
+                help_forward_map.pop(old_id, None)
+        schedule_state_save("сообщение Lumena Help")
+        await bot.send_message(
+            user.id,
+            "✅ Сообщение передано. Можешь продолжать диалог без ограничений.",
+        )
+    except Exception:
+        logging.exception("Ошибка маршрутизации Lumena Help для uid=%s", sender_id)
+        if sender_id != SUPPORT_AGENT_ID:
+            await msg.reply("❌ Не удалось передать сообщение. Попробуй ещё раз.")
+
+
 async def _farm_soon(msg: Message):
     await msg.reply("🌾 <b>Ферма</b>\n\n<i>Скоро открытие! Следи за обновлениями 🚀</i>", parse_mode="HTML")
 
@@ -17498,6 +17589,7 @@ async def main():
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="shop", description="💎 Магазин"),
                 BotCommand(command="anketa", description="📝 Создать анкету"),
+                BotCommand(command="helplum", description="📩 Жалобы и вопросы"),
             ],
             scope=BotCommandScopeAllPrivateChats(),
         )
@@ -17624,6 +17716,16 @@ def _apply_data(data: dict) -> None:
     for u, target in data.get("anon_ask_sessions", {}).items():
         try:
             anon_ask_sessions[int(u)] = int(target)
+        except (TypeError, ValueError):
+            pass
+    for u in data.get("help_sessions", []):
+        try:
+            help_sessions.add(int(u))
+        except (TypeError, ValueError):
+            pass
+    for message_id, user_id in data.get("help_forward_map", {}).items():
+        try:
+            help_forward_map[int(message_id)] = int(user_id)
         except (TypeError, ValueError):
             pass
     for owner, items in data.get("shop_reservations", {}).items():
