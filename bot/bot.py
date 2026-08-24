@@ -16438,6 +16438,7 @@ _ADMIN_TARGETS = {
     "верхушка","команда","хдр","hdr","hdrttt","начальник","начальники",
     "боты","бот","lumena","лумена","лумена",
 }
+AUTO_INSULT_MODERATION_ENABLED = False
 
 async def _delete_later(message: Message, delay: float) -> None:
     """Удаляет сообщение через `delay` секунд, игнорируя ошибки."""
@@ -16449,7 +16450,9 @@ async def _delete_later(message: Message, delay: float) -> None:
 
 
 async def _check_chat_insult(msg: Message) -> bool:
-    """Удаляет оскорбление и выдаёт участнику мут на 10 минут."""
+    """Автоматическая реакция бота на оскорбления отключена."""
+    if not AUTO_INSULT_MODERATION_ENABLED:
+        return False
     if not msg.text or not msg.from_user or msg.chat.type == "private":
         return False
     uid = msg.from_user.id
@@ -16482,7 +16485,9 @@ async def _check_chat_insult(msg: Message) -> bool:
 
 
 async def _check_admin_insult(msg: Message) -> bool:
-    """Автомут за оскорбление верхушки. Возвращает True если был применён мут."""
+    """Автомут за оскорбление верхушки, если функция включена."""
+    if not AUTO_INSULT_MODERATION_ENABLED:
+        return False
     if not msg.text or not msg.from_user:
         return False
     if msg.chat.type == "private":
