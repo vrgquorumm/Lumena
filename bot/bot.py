@@ -976,7 +976,7 @@ def _known_user_label(uid: int, record: dict) -> str:
         return f"@{username}"
     if full_name:
         return full_name
-    return f"ID {uid}"
+    return "Пользователь"
 
 
 async def _restore_anon_ask_session(uid: int) -> None:
@@ -1385,8 +1385,7 @@ async def auto_moderate_propaganda(msg: Message) -> bool:
         await bot.send_message(
             chat_id,
             f"🛡️ <a href=\"tg://user?id={uid}\">{html.escape(user.full_name)}</a>, "
-            "разработчиков нельзя банить или мутить.\n"
-            f"Telegram ID разработчика: <code>{uid}</code>",
+            "разработчиков нельзя банить или мутить.",
             parse_mode="HTML",
         )
         return False
@@ -1552,7 +1551,7 @@ def _staff_name(chat_id: int, uid: int, fallback: str = "") -> str:
     return (
         chat_members.get(chat_id, {}).get(uid)
         or fallback
-        or f"ID {uid}"
+        or "Пользователь"
     )
 
 
@@ -3095,7 +3094,7 @@ async def cmd_revoke_access(msg: Message, command: CommandObject = None):
             return await msg.reply(
                 "Ответь на сообщение сотрудника и укажи комментарий:\n"
                 "<code>/снятьправа причина отзыва</code>\n\n"
-                "Или укажи Telegram ID:\n"
+                "Или укажи username:\n"
                 "<code>/снятьправа 8318351777 причина отзыва</code>",
                 parse_mode="HTML",
             )
@@ -3468,7 +3467,7 @@ async def cmd_roles(msg: Message, command=None):
         if role not in by_role:
             by_role.setdefault(role, [])
         # Имя: ищем в chat_members
-        display = f"ID {uid}"
+        display = "Пользователь"
         for cid_m in chat_members.values():
             if uid in cid_m:
                 display = cid_m[uid]
@@ -3486,9 +3485,9 @@ async def cmd_roles(msg: Message, command=None):
     for fixed_uid, fixed_role in _fixed_staff_roles():
         if any(str(fixed_uid) in str(item) for item in by_role.get(fixed_role, [])):
             continue
-        fixed_name = "Ника" if fixed_uid in FIXED_LEAD_ADMIN_IDS else f"ID {fixed_uid}"
+        fixed_name = "Ника" if fixed_uid in FIXED_LEAD_ADMIN_IDS else "Пользователь"
         by_role.setdefault(fixed_role, []).append(
-            f"{fixed_name} · ID {fixed_uid}"
+            fixed_name
         )
 
     # Username-only записи (без ID)
@@ -3537,7 +3536,7 @@ async def cmd_mute(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя замутить фаундера")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя мутить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя мутить разработчика.",
             parse_mode="HTML",
         )
     if user.id == msg.from_user.id:
@@ -3590,7 +3589,7 @@ async def cmd_mute1(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя замутить фаундера")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя мутить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя мутить разработчика.",
             parse_mode="HTML",
         )
     if user.id == msg.from_user.id:
@@ -3661,7 +3660,7 @@ async def cmd_ban(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя забанить фаундера")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя банить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя банить разработчика.",
             parse_mode="HTML",
         )
     if user.id == msg.from_user.id:
@@ -3686,7 +3685,7 @@ async def cmd_forceban(msg: Message, command: CommandObject):
     if not user: return await msg.reply("Ответь на сообщение")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя банить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя банить разработчика.",
             parse_mode="HTML",
         )
     try:
@@ -3713,7 +3712,7 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     if not user: return await msg.reply("Ответь на сообщение")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя мутить разработчика.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя мутить разработчика.",
             parse_mode="HTML",
         )
     delta, reason = parse_time_and_reason(command.args or "")
@@ -3762,7 +3761,7 @@ async def cmd_kick(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя кикнуть фаундера")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя кикнуть разработчика.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя кикнуть разработчика.",
             parse_mode="HTML",
         )
     if user.id == msg.from_user.id:
@@ -3786,7 +3785,7 @@ async def cmd_warn(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Нельзя предупредить фаундера")
     if user.id in PROTECTED_DEVELOPER_IDS:
         return await msg.reply(
-            f"🛡️ Нельзя выдавать санкции разработчику.\nTelegram ID: <code>{user.id}</code>",
+            "🛡️ Нельзя выдавать санкции разработчику.",
             parse_mode="HTML",
         )
     if user.id == msg.from_user.id:
@@ -4053,7 +4052,7 @@ async def cmd_forcemarry(msg: Message, command: CommandObject):
         second_member = await bot.get_chat_member(msg.chat.id, target_id)
         second = second_member.user
     except (IndexError, ValueError):
-        return await msg.reply("ℹ️ После команды укажи числовой Telegram ID второго человека.")
+        return await msg.reply("ℹ️ После команды укажи username второго человека.")
     except Exception:
         return await msg.reply("❌ Не удалось найти второго человека в этом чате по ID.")
 
@@ -4523,7 +4522,7 @@ async def on_chat_member_update(event: ChatMemberUpdated):
             event.chat.id,
             "🛡️ <b>Защита разработчика сработала.</b>\n\n"
             "Бан и мут разработчиков запрещены и были автоматически отменены.\n"
-            f"Telegram ID: <code>{user.id}</code>",
+            "Данные разработчика скрыты.",
             parse_mode="HTML",
         )
     except Exception as exc:
@@ -7825,7 +7824,7 @@ async def cmd_compatibility(msg: Message):
 # ═══════════════════════════════════════════════════════
 async def cmd_myid(msg: Message):
     target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
-    await msg.reply(f"🆔 ID пользователя <b>{target.full_name}</b>: <code>{target.id}</code>", parse_mode="HTML")
+    await msg.reply("🔒 Персональный идентификатор скрыт.", parse_mode="HTML")
 
 async def cmd_whois(msg: Message):
     """Команда 'кто я' — полная информация о пользователе + интернет-поиск."""
@@ -7903,7 +7902,6 @@ async def cmd_whois(msg: Message):
         f"{brand.div()}",
         f"👤 Имя: {first} {last}".strip(),
         f"🔗 Имя пользователя: {username}",
-        f"🆔 ID: <code>{uid}</code>",
         f"🌐 Язык: {lang}",
         f"⭐ Премиум: {is_premium}",
     ]
@@ -7941,7 +7939,6 @@ async def cmd_chatinfo(msg: Message):
         f"{brand.hdr()}\n\n"
         f"ℹ️ Информация о чате\n\n"
         f"🏷 Название: <b>{chat.title or 'Личный чат'}</b>\n"
-        f"🆔 ID: <code>{chat.id}</code>\n"
         f"📋 Тип: <b>{chat.type}</b>\n"
          f"🔗 Имя пользователя: @{chat.username or '—'}\n\n"
         f"{brand.div()}",
@@ -8258,7 +8255,7 @@ async def cmd_password(msg: Message, command: CommandObject = None):
     await msg.reply(f"🔐 Пароль:\n`{pwd}`", parse_mode="Markdown")
 
 async def cmd_uuid_gen(msg: Message):
-    await msg.reply(f"🆔 `{uuid.uuid4()}`", parse_mode="Markdown")
+    await msg.reply("🔒 Системный идентификатор скрыт.", parse_mode="Markdown")
 
 async def cmd_fact(msg: Message):
     facts = [
@@ -10629,7 +10626,7 @@ async def cmd_userinfo(msg: Message):
     refs   = referral_counts.get(uid, 0)
     await msg.reply(
         f"{brand.hdr()}\n\n🔍 <b>Инфо: {html.escape(target.full_name)}</b>\n\n{brand.div()}\n"
-        f"🆔 ID: <code>{uid}</code>\n@{target.username or '—'}\n\n"
+        f"@{target.username or '—'}\n\n"
         f"💰 Кошелёк: <b>{fmt_lmn(bal)}</b>\n🏦 Банк: <b>{fmt_lmn(bank)}</b>\n"
         f"✨ XP: <b>{xp:,}</b> ({lvl})\n🔥 Стрик: <b>{stk} дн.</b>\n"
         f"⚠️ Варны: <b>{warns}</b>\n🏅 Роль: <b>{role}</b>\n"
@@ -11041,7 +11038,7 @@ _HELP_SECTIONS = {
         "📋 <b>Профиль:</b>\n"
         "<code>профиль</code> — карточка участника\n"
         "<code>досье</code> — полное досье (ответом)\n"
-        "<code>айди</code> — Telegram ID\n"
+        "<code>айди</code> — персональные данные скрыты\n"
         "<code>инфочат</code> — информация о чате\n"
         "<code>статистика</code> · <code>пинг</code> · <code>версия</code>\n\n"
         "✏️ <b>Настройки:</b>\n"
@@ -11266,7 +11263,7 @@ async def handle_helplum_message(msg: Message):
         await bot.send_message(
             SUPPORT_AGENT_ID,
             f"📩 <b>Новое сообщение Lumena Help</b>\n\n"
-            f"👤 {tag} (ID: <code>{user.id}</code>)\n"
+            f"👤 {tag}\n"
             f"Чтобы ответить, используй reply на это сообщение.",
             parse_mode="HTML",
         )
@@ -12688,7 +12685,6 @@ async def cb_ank_accept(cb: CallbackQuery):
                 f"{brand.chk()} <b>Анкета принята</b>\n\n"
                 f"📋 Номер: <b>№{anketa_num or '—'}</b>\n"
                 f"👤 Владелец: <b>{html.escape(app['full_name'])}</b> ({html.escape(owner_uname)})\n"
-                f"🆔 ID: <code>{uid}</code>\n"
                 f"👮 Принял: {html.escape(mod_tag)}\n"
                 + (f"🔗 Опубликовано в паблике\n" if pub_ok else f"{brand.e('warn')} Чат публикаций не настроен\n")
                 + f"\n{brand.div()}",
@@ -13591,7 +13587,6 @@ async def cmd_setmodchat(msg: Message):
     _ank.save_anketa_settings()
     await msg.reply(
         f"✅ <b>Чат модерации анкет установлен!</b>\n"
-        f"🆔 ID: <code>{msg.chat.id}</code>\n\n"
         f"Сюда будут поступать анкеты на проверку.",
         parse_mode="HTML"
     )
@@ -13605,7 +13600,6 @@ async def cmd_setpubchat(msg: Message):
     _ank.save_anketa_settings()
     await msg.reply(
         f"✅ <b>Чат публикаций анкет установлен!</b>\n"
-        f"🆔 ID: <code>{msg.chat.id}</code>\n\n"
         f"Сюда будут публиковаться одобренные анкеты.",
         parse_mode="HTML"
     )
@@ -13629,7 +13623,6 @@ async def cmd_setadminchat(msg: Message, command: CommandObject = None):
     await save_state_now("привязка админ-чата к главному")
     await msg.reply(
         "✅ <b>Админ-чат связан с главным.</b>\n\n"
-        f"🆔 ID админ-чата: <code>{msg.chat.id}</code>\n"
         f"🔗 Ссылка для ролей: {html.escape(link)}\n\n"
         "Теперь роли, выданные в админ-чате или главном чате, "
         "синхронизируются в обоих.",
@@ -16021,7 +16014,6 @@ def _founder_user_detail_text(uid: int, record: dict) -> str:
         "👤 <b>Карточка пользователя</b>\n\n"
         f"Имя: <b>{html.escape(full_name)}</b>\n"
         f"Username: <b>{username_line}</b>\n"
-        f"🆔 ID: <code>{uid}</code>\n"
         f"Последняя активность: <code>{last_seen}</code>\n"
         f"Писал боту в ЛС: {private_started}\n\n"
         "Для группового чата используй латинские команды с адресацией боту:\n"
@@ -16260,7 +16252,7 @@ async def cmd_all_balances(msg: Message, command: CommandObject = None):
             name = f"{name} (@{info['username']})"
         crown = "👑 " if uid == OWNER_ID else ""
         lines.append(
-            f"{crown}<b>{name}</b> [<code>{uid}</code>]\n"
+            f"{crown}<b>{name}</b>\n"
             f"    💳 {fmt_lmn(wallet)} · 🏦 {fmt_lmn(bank)} · Σ {fmt_lmn(total)} LMN"
         )
 
@@ -16671,7 +16663,6 @@ async def cmd_revoke_anketa(msg: Message):
                 f"🗑 *Анкета разжалована*\n\n"
                 f"📋 Номер анкеты: *№{ank_num}*\n"
                 f"👤 Владелец: *{name_hint}* ({uname_hint})\n"
-                f"🆔 ID: `{target_uid}`\n"
                 f"👮 Разжаловал: {revoker}\n\n"
                 f"══════════════════════",
                 parse_mode="Markdown"
@@ -16690,7 +16681,7 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
     Синтаксис:
       /delanket               — у відповідь на пост анкети в паб-чаті
       /delanket @username     — за username
-      /delanket 123456789     — за Telegram ID
+      /delanket @username     — по username
       /delanket @username причина   — з поясненням для юзера
     """
     if not is_owner(msg):
@@ -16729,7 +16720,7 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
             if not target_uid:
                 not_found_hint = (
                     f"Пользователь <code>@{html.escape(first)}</code> не найден в базе анкет.\n"
-                    "Проверь username или укажи Telegram ID."
+                    "Проверь username."
                 )
 
     if not target_uid:
@@ -16794,7 +16785,6 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
         f"{brand.hdr()}\n\n"
         f"🗑 <b>Анкета видалена</b>\n\n"
         f"👤 {html.escape(name_hint)} ({uname_hint})\n"
-        f"🆔 <code>{target_uid}</code>\n"
         f"📋 Номер анкети: <b>№{ank_num}</b>\n"
         f"{reason_line}\n\n"
         f"{notified}\n\n"
@@ -16811,7 +16801,6 @@ async def cmd_delanket(msg: Message, command: CommandObject = None):
                 f"{brand.hdr()}\n\n"
                 f"🗑 <b>Анкета видалена фаундером</b>\n\n"
                 f"👤 {html.escape(name_hint)} ({uname_hint})\n"
-                f"🆔 <code>{target_uid}</code>\n"
                 f"📋 №{ank_num}{reason_line}\n\n"
                 f"{brand.div()}",
                 parse_mode="HTML",
@@ -17337,7 +17326,7 @@ async def on_bot_added(event: ChatMemberUpdated):
             f"<b>Настройка анкет</b> (только фаундер):\n\n"
             f"{mod_set} <code>/setmodchat</code> — чат модерации анкет\n"
             f"{pub_set} <code>/setpubchat</code> — чат публикаций анкет\n\n"
-            f"🆔 ID чата: <code>{chat_id}</code>",
+            "",
             parse_mode="HTML",
             reply_markup=kb,
         )
