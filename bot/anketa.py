@@ -1,10 +1,8 @@
 """
-Система анкет знайомств Lumena
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Користувач заповнює анкету в особистих →
-Карточка летить у чат МОДЕРАЦІЇ (з кнопками) →
-Після схвалення — публікується в чат ПУБЛІКАЦІЙ
-Статуси: none → pending → approved / rejected
+Система анкет знайомств Lumena.
+
+Новые анкеты после заполнения публикуются в основном чате, а просмотр,
+реакции и жалобы доступны карточками прямо в личке бота.
 """
 
 import json
@@ -35,6 +33,8 @@ _sessions:      dict        = {}       # uid → незавершена анке
 _pending:       dict[str, dict] = {}    # app_id → заявка, що очікує модерації
 _reactions:     dict[int, dict] = {}    # uid → реакції під опублікованою анкетою
 _mod_commenting: dict[int, str] = {}    # mod_uid → app_id (чекає коментар-правку)
+_feed_cursors:  dict[int, int] = {}    # viewer uid → index in the private feed
+DEFAULT_PUBLIC_CHAT_ID = -1004401287309
 
 
 def _md_to_html(s: str) -> str:
@@ -501,6 +501,96 @@ def get_approved_data(uid: int) -> dict | None:
     return _approved_data.get(uid)
 
 
+def feed_uids(viewer_uid: int) -> list[int]:
+    """Возвращает опубликованные анкеты для личной ленты без своей анкеты."""
+    candidates = [
+        (uid, data)
+        for uid, data in _approved_data.items()
+        if uid != viewer_uid and _user_status.get(uid) == "approved"
+    ]
+    candidates.sort(
+        key=lambda item: (
+            int(item[1].get("anketa_num") or 0),
+            int(item[0]),
+        )
+    )
+    return [uid for uid, _ in candidates]
+
+
+def feed_position(viewer_uid: int, owner_uid: int | None = None) -> tuple[int, int] | None:
+    """Возвращает (индекс, размер) для карточки в ленте."""
+    uids = feed_uids(viewer_uid)
+    if not uids:
+        return None
+    if owner_uid in uids:
+        index = uids.index(owner_uid)
+    else:
+        index = _feed_cursors.get(viewer_uid, 0) % len(uids)
+    _feed_cursors[viewer_uid] = index
+    return index, len(uids)
+
+
+def set_feed_cursor(viewer_uid: int, index: int) -> None:
+    uids = feed_uids(viewer_uid)
+    if uids:
+        _feed_cursors[viewer_uid] = index % len(uids)
+
+
+def feed_owner(viewer_uid: int, index: int | None = None) -> int | None:
+    """Возвращает владельца карточки по позиции ленты."""
+    uids = feed_uids(viewer_uid)
+    if not uids:
+        return None
+    if index is None:
+        index = _feed_cursors.get(viewer_uid, 0)
+    index %= len(uids)
+    _feed_cursors[viewer_uid] = index
+    return uids[index]
+
+
+def feed_kb(owner_uid: int, index: int, total: int) -> InlineKeyboardMarkup:
+    """Кнопки интерактивной карточки в личной ленте."""
+    reaction_data = _reactions.get(owner_uid, {})
+    likes = len(reaction_data.get("hearts", {}))
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=f"❤️ Лайк{f' · {likes}' if likes else ''}",
+                callback_data=f"ank_feed:like:{owner_uid}:{index}",
+            ),
+            InlineKeyboardButton(
+                text="➡️ Следующая",
+                callback_data=f"ank_feed:next:{owner_uid}:{index}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="👤 Подробнее",
+                callback_data=f"ank_feed:detail:{owner_uid}:{index}",
+            ),
+            InlineKeyboardButton(
+                text="🚩 Жалоба",
+                callback_data=f"ank_feed:report:{owner_uid}:{index}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=f"📋 {index + 1}/{total}",
+                callback_data=f"ank_feed:position:{owner_uid}:{index}",
+            ),
+        ],
+    ])
+
+
+def feed_empty_text() -> str:
+    return (
+        f"{brand.hdr()}\n\n"
+        "💌 <b>Анкеты пока закончились</b>\n\n"
+        "Новых опубликованных анкет сейчас нет. "
+        "Загляни позже или создай свою через <code>/анкета</code>."
+    )
+
+
 # ──────────────────────────────────────────
 # ФОРМАТУВАННЯ КАРТОК
 # ──────────────────────────────────────────
@@ -826,7 +916,7 @@ async def handle_lang_select(bot_obj, cb) -> None:
     header = (
         f"{brand.hdr()}\n\n"
         f"{brand.acc()} <b>Анкета знакомств</b>\n\n"
-        "Отвечай на вопросы по очереди — после заполнения анкета уйдёт на модерацию.\n"
+        "Отвечай на вопросы по очереди — после заполнения анкета будет опубликована.\n"
         "Напиши /отмена чтобы отменить.\n\n"
         f"{brand.div()}\n\n"
     )
@@ -881,7 +971,7 @@ async def _send_media_group_to_chat(
 
 
 async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
-    """Завершує анкету і надсилає в чат модерації."""
+    """Завершает анкету и сразу публикует её в основном чате."""
     answers     = session["answers"]
     media_items = session.get("media_items", [])
     answers["media"] = media_items        # список {"type","file_id"}
@@ -890,85 +980,83 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
     username  = session["username"]
     full_name = session["full_name"]
 
-    mod_chat = get_mod_chat()
-    if not mod_chat:
+    # Основной чат уже закреплён в рабочей конфигурации проекта. Настройка
+    # остаётся переопределяемой через /setpubchat, но пустое старое значение
+    # не должно снова блокировать публикацию после удаления мод-чата.
+    pub_chat = get_pub_chat() or DEFAULT_PUBLIC_CHAT_ID
+    if not pub_chat:
         try:
             await bot_obj.send_message(
                 uid,
                 "✅ Анкета заполнена!\n\n"
-                "⚠️ Чат модерации ещё не настроен — обратитесь к администратору."
+                "⚠️ Главный чат для публикации анкет ещё не настроен — "
+                "обратитесь к администратору."
             )
         except Exception:
             pass
         return
 
     anketa_num = next_anketa_number()
-    card       = fmt_mod_card(answers, uid, username, full_name, anketa_num=anketa_num)
-    app_id     = _app_id(uid)
-    _pending.pop(app_id, None)
+    card = fmt_pub_card(answers, username, full_name)
 
     try:
         n = len(media_items)
-        mod_media_msg_ids: list[int] = []
+        media_msg_ids: list[int] = []
+        control_msg_id = None
+        reaction_markup = reaction_kb(uid)
         if n == 0:
-            # Без медіа — тільки текст
             sent = await bot_obj.send_message(
-                mod_chat, card,
+                pub_chat, card,
                 parse_mode="HTML",
-                reply_markup=_make_mod_kb(app_id),
+                reply_markup=reaction_markup,
             )
         elif n == 1:
             item = media_items[0]
             if item["type"] == "photo":
                 sent = await bot_obj.send_photo(
-                    mod_chat, photo=item["file_id"],
+                    pub_chat, photo=item["file_id"],
                     caption=card, parse_mode="HTML",
-                    reply_markup=_make_mod_kb(app_id),
+                    reply_markup=reaction_markup,
                 )
             else:
                 sent = await bot_obj.send_video(
-                    mod_chat, video=item["file_id"],
+                    pub_chat, video=item["file_id"],
                     caption=card, parse_mode="HTML",
-                    reply_markup=_make_mod_kb(app_id),
+                    reply_markup=reaction_markup,
                 )
         else:
-            # 2–10 медіа: карточка является подписью первого элемента альбома,
-            # а кнопки идут отдельным reply-сообщением к нему.
-            mod_media_msg_ids = await _send_media_group_to_chat(
+            media_msg_ids = await _send_media_group_to_chat(
                 bot_obj,
-                mod_chat,
+                pub_chat,
                 media_items,
                 caption=card,
                 parse_mode="HTML",
             )
             sent = await bot_obj.send_message(
-                mod_chat,
-                "⚙️ Действия с анкетой:",
+                pub_chat,
+                "💞 Действия с анкетой:",
                 parse_mode="HTML",
-                reply_markup=_make_mod_kb(app_id),
-                reply_to_message_id=mod_media_msg_ids[0] if mod_media_msg_ids else None,
+                reply_markup=reaction_markup,
+                reply_to_message_id=media_msg_ids[0] if media_msg_ids else None,
                 allow_sending_without_reply=True,
             )
+            control_msg_id = sent.message_id
 
-        _pending[app_id] = {
-            "user_id":     uid,
-            "answers":     answers,
-            "username":    username,
-            "full_name":   full_name,
-            "mod_msg_id":  sent.message_id,
-            "mod_chat_id": mod_chat,
-            "media_count": n,
-            "media_msg_ids": mod_media_msg_ids,
-            "anketa_num":  anketa_num,
-        }
-        set_pending(uid)
+        set_approved(
+            uid, answers, username, full_name,
+            pub_msg_id=media_msg_ids[0] if media_msg_ids else sent.message_id,
+            pub_chat_id=pub_chat,
+            anketa_num=anketa_num,
+            media_msg_ids=media_msg_ids,
+            pub_control_msg_id=control_msg_id,
+        )
         await _send_custom(
             bot_obj, uid, "anketa_confirm",
             f"{brand.hdr()}\n\n"
-            f"{brand.acc()} <b>Анкета №{anketa_num} отправлена!</b>\n\n"
-            "Администраторы рассмотрят её и уведомят тебя.\n\n"
+            f"{brand.acc()} <b>Анкета №{anketa_num} опубликована!</b>\n\n"
+            "Теперь её можно листать и оценивать через бота.\n\n"
             f"{brand.div()}",
-            reply_markup=make_pending_anketa_kb(uid),
+            reply_markup=make_my_anketa_kb(uid),
         )
     except Exception as e:
         await bot_obj.send_message(uid, f"❌ Ошибка отправки: {e}")
