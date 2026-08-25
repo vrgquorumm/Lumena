@@ -66,8 +66,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Не найден BOT_TOKEN!")
 
-OWNER_USERNAME = "lumena_founder"
-OWNER_ID       = 8663692155
+OWNER_USERNAME = "hdrttttttt"
+OWNER_ID       = 8655306548
 SUPER_IDS      = {OWNER_ID}
 # Постоянный заместитель с полным founder-доступом.
 # Это числовой Telegram ID, поэтому username не используется для авторизации.
@@ -79,7 +79,7 @@ FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 PROTECTED_DEVELOPER_IDS = {8318351777}
 # ID, которым основной фаундер явно отозвал founder-equivalent доступ.
 # Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
-REVOKED_FOUNDER_ACCESS_IDS: set[int] = {8655306548}
+REVOKED_FOUNDER_ACCESS_IDS: set[int] = {8663692155}
 FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
 DATA_FILE = "data/bot_data.json"
@@ -12853,6 +12853,167 @@ async def _send_anketa_private_preview(
     return True
 
 
+async def _send_anketa_feed_card(
+    recipient_uid: int,
+    owner_uid: int | None = None,
+    index: int | None = None,
+) -> bool:
+    """Отправляет одну карточку из личной ленты анкет."""
+    position = _ank.feed_position(recipient_uid, owner_uid)
+    if not position:
+        await bot.send_message(
+            recipient_uid,
+            _ank.feed_empty_text(),
+            parse_mode="HTML",
+        )
+        return False
+
+    card_index, total = position
+    owner_uid = _ank.feed_owner(recipient_uid, card_index)
+    data = _ank.get_approved_data(owner_uid) if owner_uid else None
+    if not data:
+        await bot.send_message(recipient_uid, _ank.feed_empty_text(), parse_mode="HTML")
+        return False
+
+    answers = data.get("answers") or {}
+    data_username = data.get("username", "")
+    data_full_name = data.get("full_name", "")
+    premium = is_anketa_premium(owner_uid, data_username)
+    card_text = (
+        f"{brand.hdr()}\n\n"
+        f"💌 <b>Анкета {card_index + 1}/{total}</b>\n\n"
+        f"{_ank.fmt_pub_card(answers, data_username, data_full_name, is_premium=premium)}"
+    )
+    markup = _ank.feed_kb(owner_uid, card_index, total)
+    media_items = answers.get("media", [])
+    if not media_items:
+        if answers.get("video_id"):
+            media_items = [{"type": "video", "file_id": answers["video_id"]}]
+        elif answers.get("photo_id"):
+            media_items = [{"type": "photo", "file_id": answers["photo_id"]}]
+
+    if not media_items:
+        await bot.send_message(recipient_uid, card_text, parse_mode="HTML", reply_markup=markup)
+    elif len(media_items) == 1:
+        item = media_items[0]
+        if item["type"] == "photo":
+            await bot.send_photo(
+                recipient_uid, photo=item["file_id"], caption=card_text,
+                parse_mode="HTML", reply_markup=markup,
+            )
+        else:
+            await bot.send_video(
+                recipient_uid, video=item["file_id"], caption=card_text,
+                parse_mode="HTML", reply_markup=markup,
+            )
+    else:
+        media_ids = await _ank._send_media_group_to_chat(
+            bot, recipient_uid, media_items, caption=card_text, parse_mode="HTML",
+        )
+        await bot.send_message(
+            recipient_uid, "💞 Действия с анкетой:", parse_mode="HTML",
+            reply_markup=markup,
+            reply_to_message_id=media_ids[0] if media_ids else None,
+            allow_sending_without_reply=True,
+        )
+    return True
+
+
+@dp.message(Command("анкеты", "profiles", "знакомства"))
+async def cmd_browse_anketas(msg: Message):
+    """Открывает интерактивную ленту опубликованных анкет."""
+    if msg.chat.type != "private":
+        return await msg.reply(
+            "💌 Ленту анкет можно открыть только в личке с ботом: /анкеты",
+        )
+    if not is_verified(msg.from_user.id):
+        return await msg.reply("🔒 Сначала пройди верификацию, затем открой /анкеты.")
+    _ank.set_feed_cursor(msg.from_user.id, 0)
+    await _send_anketa_feed_card(msg.from_user.id)
+
+
+@dp.callback_query(F.data.startswith("ank_feed:"))
+async def cb_ank_feed(cb: CallbackQuery):
+    """Листание, лайки, подробности и жалобы в личной ленте."""
+    if cb.message.chat.type != "private":
+        return await cb.answer("Лента доступна только в личных сообщениях", show_alert=True)
+    if cb.data == "ank_feed:open":
+        _ank.set_feed_cursor(cb.from_user.id, 0)
+        await _send_anketa_feed_card(cb.from_user.id)
+        return await cb.answer()
+    parts = cb.data.split(":")
+    if len(parts) != 4:
+        return await cb.answer("Некорректная кнопка", show_alert=True)
+    action = parts[1]
+    try:
+        owner_uid, index = int(parts[2]), int(parts[3])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная карточка", show_alert=True)
+    viewer_uid = cb.from_user.id
+    if owner_uid not in _ank.feed_uids(viewer_uid):
+        return await cb.answer("Анкета больше недоступна", show_alert=True)
+
+    if action == "position":
+        return await cb.answer("Листай анкеты кнопкой «Следующая»", show_alert=False)
+
+    if action == "next":
+        uids = _ank.feed_uids(viewer_uid)
+        next_index = (uids.index(owner_uid) + 1) % len(uids)
+        _ank.set_feed_cursor(viewer_uid, next_index)
+        await _send_anketa_feed_card(viewer_uid, index=next_index)
+        return await cb.answer()
+
+    if action == "like":
+        reactor = cb.from_user
+        is_heart, is_new = _ank.record_reaction(
+            owner_uid, viewer_uid, reactor.full_name, reactor.username or "", "h",
+        )
+        position = _ank.feed_position(viewer_uid, owner_uid)
+        if position:
+            try:
+                await cb.message.edit_reply_markup(
+                    reply_markup=_ank.feed_kb(owner_uid, position[0], position[1]),
+                )
+            except Exception:
+                pass
+        if is_new:
+            try:
+                await bot.send_message(
+                    owner_uid,
+                    "❤️ Твою анкету лайкнули! Нажми кнопку ниже, чтобы посмотреть реакцию.",
+                    reply_markup=_ank.make_mutual_kb(viewer_uid, owner_uid),
+                )
+            except Exception:
+                pass
+            return await cb.answer("❤️ Лайк поставлен!")
+        return await cb.answer("Лайк убран" if not is_heart else "❤️")
+
+    if action == "detail":
+        await _send_anketa_private_preview(
+            viewer_uid,
+            owner_uid,
+            intro_html="👤 <b>Подробная информация об анкете:</b>",
+            reply_markup=_ank.feed_kb(owner_uid, index, len(_ank.feed_uids(viewer_uid))),
+        )
+        return await cb.answer("Подробности открыты")
+
+    if action == "report":
+        report_chat = _ank.get_pub_chat() or 0
+        reports_db.setdefault(report_chat, []).append({
+            "report_id": uuid.uuid4().hex[:12],
+            "from_uid": viewer_uid,
+            "target_uid": owner_uid,
+            "reason": "Жалоба на анкету из интерактивной ленты",
+            "ts": now_kyiv().strftime("%Y-%m-%d %H:%M"),
+            "status": "open",
+        })
+        reports_db[report_chat] = reports_db[report_chat][-100:]
+        schedule_state_save("жалоба на анкету из ленты")
+        return await cb.answer("🚩 Жалоба передана администрации", show_alert=True)
+
+    return await cb.answer("Неизвестное действие", show_alert=True)
+
+
 @dp.callback_query(F.data.startswith("ank_r:"))
 async def cb_ank_react(cb: CallbackQuery):
     """Обробляє натискання ❤️ або 👎 під анкетою в паблік-чаті."""
@@ -13273,7 +13434,8 @@ _START_TEXT = (
     "◾ Экономика чата — монеты LMN, работа, казино\n"
     "◾ Полная модерация чата\n\n"
     "══════════════════════════\n\n"
-    "📋 Анкета знакомств — команда <code>/анкета</code>"
+    "📋 Анкета знакомств — <code>/анкета</code>\n"
+    "💌 Смотреть анкеты — <code>/анкеты</code>"
 )
 
 def build_main_kb() -> InlineKeyboardMarkup:
@@ -13291,6 +13453,7 @@ def build_main_kb() -> InlineKeyboardMarkup:
     rows = []
     if row1:
         rows.append(row1)
+    rows.append([InlineKeyboardButton(text="💌 Смотреть анкеты", callback_data="ank_feed:open")])
     rows.append([InlineKeyboardButton(text=help_label, callback_data="help:menu")])
     # Ссылка на сайт
     if LUMENA_SITE_URL:
@@ -13495,6 +13658,8 @@ async def cmd_anketa(msg: Message):
 TEXT_COMMANDS.update({
     "анкета": cmd_anketa,
     "anketa": cmd_anketa,
+    "анкеты": cmd_browse_anketas,
+    "знакомства": cmd_browse_anketas,
 })
 
 
