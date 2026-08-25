@@ -11813,7 +11813,7 @@ TEXT_COMMANDS.update({
     "форсрестор": cmd_force_restore, "восстановитьданные": cmd_force_restore,
     "інфо": cmd_info, "инфо": cmd_info, "info": cmd_info,
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
-    "правила": cmd_rules, "сетправила": cmd_setrules,
+    "сетправила": cmd_setrules,
     "объявление": cmd_announce, "анонс": cmd_announce,
     "опрос": cmd_founder_poll, "опросы": cmd_founder_poll,
     "poll": cmd_founder_poll, "polls": cmd_founder_poll,
@@ -11911,7 +11911,7 @@ for slash_name, func in [
     ("статчата", cmd_chatstats),
     ("указатьместо", cmd_set_location), ("моягеография", cmd_set_location),
     ("інфо", cmd_info), ("инфо", cmd_info), ("info", cmd_info),
-    ("правила", cmd_rules), ("команды", cmd_help),
+     ("команды", cmd_help),
     ("помощь", cmd_support), ("поддержка", cmd_support), ("support", cmd_support),
 ]:
     dp.message.register(func, Command(slash_name))
