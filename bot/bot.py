@@ -13650,6 +13650,9 @@ async def cmd_anketa(msg: Message):
             "🔒 Сначала пройди верификацию — нажми кнопку ниже.",
             reply_markup=kb,
         )
+    # Новый сценарий анкеты должен закрыть незавершённое обращение
+    # в поддержку, иначе свободный ответ может уйти администратору.
+    support_sessions.discard(msg.from_user.id)
     await _ank.start_anketa(bot, msg, force=True)
 
 
@@ -17030,7 +17033,15 @@ async def universal_handler(msg: Message):
         return
 
     # ── Поддержка: пользователь отправляет обращение администрации
-    if msg.chat.type == "private" and uid in support_sessions and not text.startswith("/"):
+    # Активное заполнение анкеты имеет приоритет над поддержкой.
+    # Иначе оставшаяся сессия /helplum перехватывает ответы на вопросы
+    # и отправляет их администратору вместо следующего шага анкеты.
+    if (
+        msg.chat.type == "private"
+        and uid in support_sessions
+        and uid not in _ank._sessions
+        and not text.startswith("/")
+    ):
         mod_chat = _ank.get_mod_chat()
         if mod_chat:
             user = msg.from_user
