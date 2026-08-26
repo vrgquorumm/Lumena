@@ -13,6 +13,7 @@ import os
 import random
 import re
 import string
+import unicodedata
 import uuid
 from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
@@ -12191,6 +12192,10 @@ class PropagandaMiddleware(BaseMiddleware):
                         _asp[_uid_mw] = {"hash": _txt_hash, "count": 1, "ts": _now_ts}
 
         if isinstance(event, Message):
+            # Oxyl-модерация видит и обычный текст, и подписи к медиа
+            # до специализированных обработчиков.
+            if await _check_oxyl_words(event):
+                return
             # Антилинк — до пропаганды, чтобы оба не мешали друг другу
             if await _check_link_guard(event):
                 return   # ссылка удалена — дальше не обрабатываем
@@ -16608,6 +16613,16 @@ _ADMIN_TARGETS = {
     "боты","бот","lumena","лумена","лумена",
 }
 AUTO_INSULT_MODERATION_ENABLED = False
+AUTO_OXYL_WORD_MODERATION_ENABLED = True
+_OXYL_TRIGGER_WORDS = ("худра", "пудра")
+_OXYL_LATIN_TO_CYRILLIC = str.maketrans({
+    "a": "а", "b": "б", "c": "с", "d": "д", "e": "е",
+    "f": "ф", "g": "г", "h": "х", "i": "и", "j": "й",
+    "k": "к", "l": "л", "m": "м", "n": "н", "o": "о",
+    "p": "п", "q": "к", "r": "р", "s": "с", "t": "т",
+    "u": "у", "v": "в", "w": "в", "x": "х", "y": "у",
+    "z": "з",
+})
 
 async def _delete_later(message: Message, delay: float) -> None:
     """Удаляет сообщение через `delay` секунд, игнорируя ошибки."""
@@ -16694,6 +16709,100 @@ async def _check_admin_insult(msg: Message) -> bool:
         return True
     except Exception:
         return False
+
+
+def _oxyl_token_matches(token: str, target: str) -> bool:
+    """Распознаёт точное слово, повтор букв и одну небольшую опечатку."""
+    token = re.sub(r"(.)\1+", r"\1", token)
+    target = re.sub(r"(.)\1+", r"\1", target)
+    if token == target:
+        return True
+    if abs(len(token) - len(target)) > 1:
+        return False
+    if len(token) == len(target):
+        return sum(left != right for left, right in zip(token, target)) <= 1
+    longer, shorter = (
+        (token, target) if len(token) > len(target) else (target, token)
+    )
+    return any(
+        longer[:index] + longer[index + 1:] == shorter
+        for index in range(len(longer))
+    )
+
+
+def _oxyl_trigger_word(text: str) -> str | None:
+    """Возвращает найденное слово Oxyl с учётом регистра и опечаток."""
+    normalized = unicodedata.normalize("NFKC", text).casefold().replace("ё", "е")
+    normalized = normalized.translate(_OXYL_LATIN_TO_CYRILLIC)
+    tokens = re.findall(r"[^\W\d_]+", normalized, flags=re.UNICODE)
+    for token in tokens:
+        if len(token) >= 4 and any(
+            _oxyl_token_matches(token, target) for target in _OXYL_TRIGGER_WORDS
+        ):
+            return token
+    return None
+
+
+async def _check_oxyl_words(msg: Message) -> bool:
+    """Удаляет сообщение и выдаёт 10-минутный мут за слова Oxyl."""
+    if not AUTO_OXYL_WORD_MODERATION_ENABLED:
+        return False
+    if not msg.from_user or msg.from_user.is_bot or msg.chat.type == "private":
+        return False
+    content = msg.text or msg.caption
+    if not content or not _oxyl_trigger_word(content):
+        return False
+
+    uid = msg.from_user.id
+    if uid in {OWNER_ID, *FOUNDER_DEPUTY_IDS, *PROTECTED_DEVELOPER_IDS}:
+        return False
+
+    try:
+        member = await bot.get_chat_member(msg.chat.id, uid)
+        if member.status == "creator":
+            return False
+    except Exception:
+        logging.warning(
+            "Не удалось проверить участника для автомодерации Oxyl: uid=%s",
+            uid,
+        )
+        return False
+
+    try:
+        await msg.delete()
+    except Exception:
+        logging.warning(
+            "Не удалось удалить сообщение Oxyl: chat=%s message=%s",
+            msg.chat.id,
+            msg.message_id,
+        )
+
+    until = now_kyiv() + timedelta(minutes=10)
+    muted, soft, error = await _mute_or_soft_mute(msg.chat.id, uid, until)
+    if muted:
+        _log_mod(msg.chat.id, "oxyl_soft_mute" if soft else "oxyl_mute", uid, 0)
+    else:
+        logging.warning(
+            "Oxyl не смог выдать мут uid=%s chat=%s: %s",
+            uid,
+            msg.chat.id,
+            error,
+        )
+
+    try:
+        name = html.escape(msg.from_user.full_name)
+        mute_text = "soft-mute" if soft else "мут на <b>10 минут</b>"
+        notice = await bot.send_message(
+            msg.chat.id,
+            f"🔔 <b>Oxyl</b>\n"
+            f"🚫 {name} — сообщение удалено.\n"
+            f"🔇 Выдан {mute_text}.",
+            parse_mode="HTML",
+        )
+        asyncio.create_task(_delete_later(notice, 15))
+    except Exception:
+        pass
+    return True
 
 
 # ═══════════════════════════════════════════════════════
