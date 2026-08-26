@@ -16613,7 +16613,8 @@ _ADMIN_TARGETS = {
     "боты","бот","lumena","лумена","лумена",
 }
 AUTO_INSULT_MODERATION_ENABLED = False
-AUTO_OXYL_WORD_MODERATION_ENABLED = True
+# Автомуты за слова «худра» и «пудра» отключены по запросу фаундера.
+AUTO_OXYL_WORD_MODERATION_ENABLED = False
 _OXYL_TRIGGER_WORDS = ("худра", "пудра")
 _OXYL_LATIN_TO_CYRILLIC = str.maketrans({
     "a": "а", "b": "б", "c": "с", "d": "д", "e": "е",
