@@ -423,10 +423,14 @@ ru_army_warns = {}
 marriages = {}
 marriage_proposals = {}
 marriage_dates: dict[str, str] = {}  # "min_uid_max_uid" → ISO date свадьбы
-# Одноразовая миграция пользовательской даты брака фаундера и заместителя.
-FOUNDER_DEPUTY_MARRIAGE_PAIR = "382184963_6195355999"
+# Одноразовая миграция брака фаундера и постоянного заместителя.
+_FOUNDER_DEPUTY_ID = next(iter(FOUNDER_DEPUTY_IDS))
+FOUNDER_DEPUTY_MARRIAGE_PAIR = (
+    f"{min(OWNER_ID, _FOUNDER_DEPUTY_ID)}_{max(OWNER_ID, _FOUNDER_DEPUTY_ID)}"
+)
 FOUNDER_DEPUTY_MARRIAGE_DATE = "2026-08-07"
-MARRIAGE_DATE_MIGRATION_VERSION = 3
+FOUNDER_DEPUTY_MARRIAGE_CHAT_IDS = {-1004292802981, -1004401287309}
+MARRIAGE_DATE_MIGRATION_VERSION = 4
 marriage_date_migration_version = 0
 streaks = {}
 lmn_balances = {}
@@ -2335,11 +2339,16 @@ def _marriage_duration(start: date, end: date | None = None) -> str:
     return " ".join(parts)
 
 def apply_marriage_date_migrations() -> bool:
-    """Однократно закрепляет согласованную дату брака founder-пары."""
+    """Однократно восстанавливает брак founder-пары и его согласованную дату."""
     global marriage_date_migration_version
     if marriage_date_migration_version >= MARRIAGE_DATE_MIGRATION_VERSION:
         return False
     marriage_dates[FOUNDER_DEPUTY_MARRIAGE_PAIR] = FOUNDER_DEPUTY_MARRIAGE_DATE
+    for chat_id in FOUNDER_DEPUTY_MARRIAGE_CHAT_IDS:
+        cid = econ_cid(chat_id)
+        marriages.setdefault(cid, {})
+        marriages[cid][OWNER_ID] = _FOUNDER_DEPUTY_ID
+        marriages[cid][_FOUNDER_DEPUTY_ID] = OWNER_ID
     marriage_date_migration_version = MARRIAGE_DATE_MIGRATION_VERSION
     return True
 
