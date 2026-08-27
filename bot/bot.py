@@ -6592,12 +6592,20 @@ async def cmd_confess_love(msg: Message):
         "💌 Ответь на сообщение человека, которому хочешь признаться в любви.",
     )
 
+async def cmd_adult_action(msg: Message):
+    await _playful_action(
+        msg,
+        "adult_action",
+        "🔞 Ответь на сообщение совершеннолетнего участника — только взаимная взрослая игровая сценка.",
+    )
+
 _RU_PLAYFUL_ACTIONS = {
     "убить": cmd_kill,
     "застрелить": cmd_shoot,
     "зарезать": cmd_stab,
     "поцеловать в засос": cmd_deep_kiss,
     "признаться в любви": cmd_confess_love,
+    "трахнуть": cmd_adult_action,
 }
 
 def _normalize_ru_playful_action(value: object) -> str:
@@ -10991,6 +10999,7 @@ _HELP_SECTIONS = {
         "<code>погладить</code> · <code>ударить</code> · <code>подарить</code>\n"
         "<code>убить</code> · <code>застрелить</code> · <code>зарезать</code>\n"
         "<code>поцеловать в засос</code> · <code>признаться в любви</code>\n"
+        "<code>трахнуть</code> — взрослая игровая сценка (ответом)\n"
         "<code>потыкать</code> · <code>помахать</code> · <code>станцевать</code>\n"
         "<code>фейспалм</code> · <code>серенада</code> · <code>пятёрку</code>\n\n"
         f"{brand.div()}"
@@ -11782,6 +11791,7 @@ TEXT_COMMANDS.update({
     "поцеловать_в_засос": cmd_deep_kiss, "deepkiss": cmd_deep_kiss,
     "признаться в любви": cmd_confess_love,
     "признаться_в_любви": cmd_confess_love, "confesslove": cmd_confess_love,
+    "трахнуть": cmd_adult_action,
     "укусить": cmd_bite, "погладить": cmd_pat,
     "ударить": cmd_slap, "подарить": cmd_gift,
     "станцевать": cmd_dance, "танцевать": cmd_dance,
