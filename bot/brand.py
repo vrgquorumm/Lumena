@@ -10,8 +10,6 @@ import re
 _pack_ids: list[str] = []
 _pack_name: str = ""
 _pack_enabled: bool = True
-_emoji_map: dict[str, str] = {}
-_pack_cursor: int = 0
 
 # ── Кастомный стиль ───────────────────────────────────────
 _custom_style: dict[str, str] = {}
@@ -285,7 +283,7 @@ def e(role: str, fallback: str | None = None) -> str:
     Если выбран custom emoji-пак, Telegram получает настоящий тег tg-emoji.
     При недоступном Premium автоматически остаётся обычный Unicode fallback."""
     fallback = fallback if fallback is not None else _FALLBACK.get(role, "•")
-    custom_id = _next_pack_id()
+    custom_id = get_role_id(role)
     if custom_id and _pack_enabled:
         return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
     return fallback
@@ -293,7 +291,7 @@ def e(role: str, fallback: str | None = None) -> str:
 
 def ei(idx: int, fallback: str = "•") -> str:
     """Custom emoji из пака по индексу с безопасным Unicode fallback."""
-    custom_id = _next_pack_id()
+    custom_id = get_id(idx)
     if custom_id and _pack_enabled:
         return f'<tg-emoji emoji-id="{custom_id}">{fallback}</tg-emoji>'
     return fallback
@@ -377,56 +375,12 @@ def code_block(text: str, lang: str = "") -> str:
     return f"<pre{lang_attr}>{text}</pre>"
 
 
-def set_pack(
-    ids: list[str],
-    name: str = "",
-    emoji_map: dict[str, str] | None = None,
-) -> None:
-    """Устанавливает emoji-пак и, если доступна, карту Unicode → custom ID."""
-    global _pack_ids, _pack_name, _pack_enabled, _emoji_map, _pack_cursor
-    previous_map = dict(_emoji_map)
-    _pack_ids = [str(value) for value in ids if str(value).strip()][:400]
-    _pack_cursor = 0
+def set_pack(ids: list[str], name: str = "") -> None:
+    """Устанавливает emoji пак по списку ID."""
+    global _pack_ids, _pack_name, _pack_enabled
+    _pack_ids = [str(value) for value in ids if str(value).strip()][:100]
     _pack_name = str(name or "")[:128]
     _pack_enabled = bool(_pack_ids)
-    if emoji_map is not None:
-        allowed = set(_pack_ids)
-        _emoji_map = {
-            str(emoji): str(custom_id)
-            for emoji, custom_id in emoji_map.items()
-            if str(emoji) and str(custom_id) in allowed
-        }
-    else:
-        # Сохраняем уже известную карту при ручной смене header ID.
-        allowed = set(_pack_ids)
-        _emoji_map = {
-            emoji: custom_id
-            for emoji, custom_id in previous_map.items()
-            if custom_id in allowed
-        }
-
-
-def merge_pack(
-    ids: list[str],
-    name: str = "",
-    emoji_map: dict[str, str] | None = None,
-) -> None:
-    """Добавляет второй pack к текущему, сохраняя порядок и уникальные ID."""
-    existing = list(_pack_ids)
-    known_ids = set(existing)
-    merged_ids = existing + [
-        str(value) for value in ids
-        if str(value).strip() and str(value) not in known_ids
-    ]
-    merged_map = dict(_emoji_map)
-    for emoji, custom_id in (emoji_map or {}).items():
-        # Основной пак остаётся источником истины при одинаковом fallback.
-        if str(emoji) and str(emoji) not in merged_map:
-            merged_map[str(emoji)] = str(custom_id)
-    names = [part.strip() for part in _pack_name.split("+") if part.strip()]
-    if name and name not in names:
-        names.append(str(name).strip())
-    set_pack(merged_ids, " + ".join(names), merged_map)
 
 
 def disable_pack_runtime() -> None:
@@ -464,15 +418,6 @@ def get_pack_name() -> str:
     return _pack_name
 
 
-def get_pack_emoji_map() -> dict[str, str]:
-    """Возвращает карту fallback-символов пака для сохранения в snapshot."""
-    return dict(_emoji_map)
-
-
-def has_emoji_map() -> bool:
-    return bool(_emoji_map)
-
-
 def has_pack() -> bool:
     return bool(_pack_ids) and _pack_enabled
 
@@ -484,191 +429,6 @@ def preview(n: int = 12) -> str:
         eid = _pack_ids[i]
         parts.append(f'<tg-emoji emoji-id="{eid}">[{i}]</tg-emoji>')
     return "".join(parts) if parts else "(пак не загружен)"
-
-
-_TG_EMOJI_TAG_RE = re.compile(
-    r"<tg-emoji\b[^>]*>.*?</tg-emoji>", flags=re.IGNORECASE | re.DOTALL
-)
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_EMOJI_BASE = (
-    r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001FAFF"
-    r"\u2300-\u23FF\u2600-\u27BF]"
-)
-_REGIONAL_BASE = r"[\U0001F1E6-\U0001F1FF]"
-_EMOJI_SEQUENCE_RE = re.compile(
-    rf"(?:"
-    # Два regional-indicator символа — один флаг, а не два отдельных emoji.
-    rf"{_REGIONAL_BASE}{_REGIONAL_BASE}"
-    rf"|{_EMOJI_BASE}(?:[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF])?"
-    rf"|[#*0-9]\ufe0f?\u20e3"
-    rf")"
-    rf"(?:\u200d{_EMOJI_BASE}(?:[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF])?)*"
-)
-
-
-def _custom_emoji_tag(emoji: str, custom_id: str) -> str:
-    return f'<tg-emoji emoji-id="{custom_id}">{emoji}</tg-emoji>'
-
-
-def _next_pack_id() -> str | None:
-    """Возвращает следующий ID по кругу из всех объединённых паков."""
-    global _pack_cursor
-    if not _pack_ids or not _pack_enabled:
-        return None
-    custom_id = _pack_ids[_pack_cursor % len(_pack_ids)]
-    _pack_cursor += 1
-    return custom_id
-
-
-def replace_emojis_html(text: str | None) -> str | None:
-    """Заменяет каждую emoji-последовательность на custom emoji пака.
-
-    Для emoji, у которого нет одноимённого fallback в sticker-set, используется
-    первый custom emoji пака. Это гарантирует оформление и для новых/редких
-    Unicode-символов, которых не было в метаданных пака.
-    """
-    if not text or not has_pack():
-        return text
-
-    placeholders: list[str] = []
-
-    def protect(match) -> str:
-        token = f"__LUMENA_HTML_TAG_{len(placeholders)}__"
-        placeholders.append(match.group(0))
-        return token
-
-    # Сначала защищаем готовые tg-emoji целиком, чтобы не получить вложенные
-    # теги при повторной обработке сообщения.
-    safe = _TG_EMOJI_TAG_RE.sub(protect, text)
-    safe = _HTML_TAG_RE.sub(protect, safe)
-
-    def replace_match(match) -> str:
-        emoji = match.group(0)
-        # Карта fallback сохраняется для совместимости и восстановления, но
-        # отображение намеренно распределяется по всему объединённому списку:
-        # так в сообщениях участвуют все паки, а не только первые совпадения.
-        custom_id = _next_pack_id()
-        return _custom_emoji_tag(emoji, custom_id) if custom_id else emoji
-
-    safe = _EMOJI_SEQUENCE_RE.sub(replace_match, safe)
-    for index, original in enumerate(placeholders):
-        safe = safe.replace(f"__LUMENA_HTML_TAG_{index}__", original)
-    return safe
-
-
-def replace_emojis_markdown(text: str | None, parse_mode: str) -> str | None:
-    """Заменяет emoji в Markdown-потоке без потери его форматирования."""
-    if not text or not has_pack():
-        return text
-    markdown_v2 = parse_mode == "MarkdownV2"
-    def replace_match(match) -> str:
-        emoji = match.group(0)
-        custom_id = _next_pack_id()
-        if not custom_id:
-            return emoji
-        if markdown_v2:
-            # Официальное представление custom emoji в MarkdownV2.
-            return f"![](tg://emoji?id={custom_id})"
-        # Legacy Markdown поддерживает обычные ссылки; Telegram распознаёт
-        # tg://emoji и отображает ссылку как custom emoji.
-        return f"[{emoji}](tg://emoji?id={custom_id})"
-
-    return _EMOJI_SEQUENCE_RE.sub(replace_match, text)
-
-
-def first_emoji_id(text: str | None) -> str | None:
-    """Находит custom ID первого emoji в подписи кнопки."""
-    if not text or not has_pack():
-        return None
-    matches = []
-    for emoji, custom_id in _emoji_map.items():
-        position = text.find(emoji)
-        if position >= 0:
-            matches.append((position, -len(emoji), custom_id))
-    if matches:
-        return min(matches)[2]
-    return _pack_ids[0] if _pack_ids else None
-
-
-def strip_mapped_emojis(text: str | None) -> str | None:
-    """Убирает Unicode emoji из текста кнопки, если их заменит icon-поле."""
-    if not text or not has_pack():
-        return text
-    result = _EMOJI_SEQUENCE_RE.sub("", text)
-    return result.strip() or text
-
-
-def decorate_message_html(text: str | None) -> str | None:
-    """Заменяет все emoji в HTML-сообщении и добавляет accent при необходимости."""
-    if not text or not has_pack():
-        return text
-    themed = replace_emojis_html(text)
-    if "<tg-emoji" in (themed or "")[:500]:
-        return themed
-    return f'{e("header", _FALLBACK["header"])} {themed}'
-
-
-def prepare_rich_html(text: str | None) -> str | None:
-    """Делает fallback внутри tg-emoji безопасным для Rich Message.
-
-    Rich Message требует один простой fallback-символ; ZWJ, флаги,
-    keycap-emoji и variation-последовательности могут вызвать
-    RICH_MESSAGE_EMOJI_INVALID. Сам custom emoji ID при этом сохраняется.
-    """
-    if not text:
-        return text
-
-    def replace_tag(match) -> str:
-        opening, closing = match.group(1), match.group(2)
-        return f"{opening}🔹{closing}"
-
-    return re.sub(
-        r"(<tg-emoji\b[^>]*>).*?(</tg-emoji>)",
-        replace_tag,
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-
-def downgrade_rich_html(text: str | None, strip_custom_emoji: bool = False) -> str | None:
-    """Преобразует Rich HTML в обычный Bot API HTML.
-
-    Обычный Telegram HTML поддерживает tg-emoji, но не Rich-теги h1/hr.
-    strip_custom_emoji используется только как последний аварийный fallback,
-    если Telegram отверг конкретный custom emoji ID.
-    """
-    if not text:
-        return text
-    result = text
-    if strip_custom_emoji:
-        result = _TG_EMOJI_TAG_RE.sub(
-            lambda match: re.sub(r"<[^>]+>", "", match.group(0)),
-            result,
-        )
-    result = re.sub(r"<h[1-3]\b[^>]*>", "<b>", result, flags=re.IGNORECASE)
-    result = re.sub(r"</h[1-3]\s*>", "</b>", result, flags=re.IGNORECASE)
-    result = re.sub(
-        r"<hr\s*/?>", "\n────────────\n", result, flags=re.IGNORECASE
-    )
-    result = re.sub(r"<br\s*/?>", "\n", result, flags=re.IGNORECASE)
-    result = re.sub(
-        r"</?(?:details|summary|table|thead|tbody|tr|td|th)[^>]*>",
-        "",
-        result,
-        flags=re.IGNORECASE,
-    )
-    if strip_custom_emoji:
-        # Старые/ограниченные клиенты могут отвергать blockquote с
-        # expandable-атрибутом. В аварийном fallback оставляем только текст.
-        result = re.sub(
-            r"</?blockquote[^>]*>",
-            "",
-            result,
-            flags=re.IGNORECASE,
-        )
-    result = re.sub(r"<li\s*>", "• ", result, flags=re.IGNORECASE)
-    result = re.sub(r"</li\s*>", "\n", result, flags=re.IGNORECASE)
-    return result
 
 
 # ── Стили Telegram-кнопок ─────────────────────────────────────
@@ -705,7 +465,13 @@ def button_icon_id(text: str = "", callback_data: str | None = None,
     """Возвращает custom emoji для иконки кнопки из выбранного пака."""
     if not has_pack():
         return None
-    return _next_pack_id()
+    style = button_style(text, callback_data, url)
+    role = {
+        "danger": "cross",
+        "success": "ok",
+        "primary": "accent",
+    }[style]
+    return get_role_id(role) or (_pack_ids[0] if _pack_ids else None)
 
 
 def decorate_reply_markup(markup):
@@ -735,9 +501,6 @@ def decorate_reply_markup(markup):
             callback_data = getattr(button, "callback_data", None)
             url = getattr(button, "url", None)
             updates = {}
-            cleaned_text = strip_mapped_emojis(text)
-            if cleaned_text and cleaned_text != text:
-                updates["text"] = cleaned_text
             if getattr(button, "style", None) is None:
                 updates["style"] = button_style(text, callback_data, url)
             icon_id = button_icon_id(text, callback_data, url)
@@ -855,6 +618,7 @@ DEFAULT_TEXTS: dict[str, str] = {
     "playful_stab":        "🔪 <b>{from_name}</b> понарошку «зарезал(а)» <b>{to_name}</b> бутафорским ножом! 🎭",
     "deep_kiss":           "💋 <b>{from_name}</b> поцеловал(а) <b>{to_name}</b> взасос! Только понарошку 😘",
     "confess_love":        "💌 <b>{from_name}</b> признался(ась) в любви к <b>{to_name}</b>! 💖",
+    "adult_action":        "🔞 <b>{from_name}</b> и <b>{to_name}</b> устроили взрослую игровую сценку — только по взаимному согласию 😉",
     "gift":                "🎁 <b>{from_name}</b> подарил(а) <b>{to_name}</b> подарок! 🎀",
     "slap":                "💢 <b>{from_name}</b> дал(а) пощёчину <b>{to_name}</b>!",
     "pat":                 "✋ <b>{from_name}</b> погладил(а) <b>{to_name}</b>! 🥰",
@@ -1066,6 +830,7 @@ TEXT_LABELS: dict[str, str] = {
     "playful_stab":        "🔪 {from_name} понарошку «зарезал(а)» {to_name} бутафорским ножом! 🎭",
     "deep_kiss":           "💋 {from_name} поцеловал(а) {to_name} взасос! Только понарошку 😘",
     "confess_love":        "💌 {from_name} признался(ась) в любви к {to_name}! 💖",
+    "adult_action":        "🔞 {from_name} и {to_name} устроили взрослую игровую сценку — только по взаимному согласию 😉",
     "gift":                "🎁 {from_name} подарил(а) {item} для {to_name}!",
     "slap":                "👋 {from_name} дал(а) пощёчину {to_name}!",
     "pat":                 "🤚 {from_name} погладил(а) {to_name}!",
