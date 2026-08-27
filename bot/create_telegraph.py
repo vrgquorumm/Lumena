@@ -3,7 +3,6 @@
 Запуск: python create_telegraph.py
 """
 import json, os, urllib.request
-from pathlib import Path
 
 
 def post(url, data):
@@ -156,7 +155,8 @@ PAGE1 = [
     p(b("Действия (ответом):")),
     p(c("обнять"), " · ", c("поцеловать"), " · ", c("укусить"), " · ", c("погладить"),
       " · ", c("ударить"), " · ", c("подарить"), " · ", c("потыкать"), " · ", c("помахать"),
-      " · ", c("станцевать"), " · ", c("фейспалм"), " · ", c("серенада"), " · ", c("пятёрку")),
+      " · ", c("станцевать"), " · ", c("фейспалм"), " · ", c("серенада"), " · ", c("пятёрку"),
+      " · ", c("трахнуть"), " — взрослая игровая сценка по взаимному согласию"),
     br(),
 
     h4("🎮 Игры"),
@@ -348,13 +348,9 @@ PAGE2 = [
 
 
 def get_token():
-    # Prefer Railway/Replit secret; never commit Telegraph credentials.
-    env_token = os.getenv("TELEGRAPH_TOKEN", "").strip()
-    if env_token:
-        return env_token
-    token_file = Path(__file__).with_name("telegraph_token.txt")
-    if token_file.exists():
-        t = token_file.read_text().strip()
+    f = "telegraph_token.txt"
+    if os.path.exists(f):
+        t = open(f).read().strip()
         if t:
             return t
     acc = post("https://api.telegra.ph/createAccount", {
@@ -362,7 +358,7 @@ def get_token():
         "author_url": "https://t.me/lmnfff",
     })
     t = acc["result"]["access_token"]
-    token_file.write_text(t)
+    open(f, "w").write(t)
     return t
 
 
@@ -397,7 +393,7 @@ def main():
         "Лумена — ИИ, Советы, FAQ и Контакты (2/2)", PAGE2)
     print(f"  ✅ Часть 2: {url2}")
 
-    with open(Path(__file__).with_name("telegraph_url.txt"), "w") as f:
+    with open("telegraph_url.txt", "w") as f:
         f.write(f"Part 1: {url1}\nPart 2: {url2}\n")
 
     print(f"\n🔗 Часть 1: {url1}")
