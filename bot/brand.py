@@ -9,6 +9,7 @@ import re
 
 _pack_ids: list[str] = []
 _pack_name: str = ""
+_emoji_map: dict[str, str] = {}
 _pack_enabled: bool = True
 
 # ── Кастомный стиль ───────────────────────────────────────
@@ -375,11 +376,52 @@ def code_block(text: str, lang: str = "") -> str:
     return f"<pre{lang_attr}>{text}</pre>"
 
 
-def set_pack(ids: list[str], name: str = "") -> None:
+def set_pack(
+    ids: list[str],
+    name: str = "",
+    emoji_map: dict[str, str] | None = None,
+) -> None:
     """Устанавливает emoji пак по списку ID."""
-    global _pack_ids, _pack_name, _pack_enabled
+    global _pack_ids, _pack_name, _emoji_map, _pack_enabled
     _pack_ids = [str(value) for value in ids if str(value).strip()][:100]
     _pack_name = str(name or "")[:128]
+    if emoji_map is not None:
+        _emoji_map = {
+            str(emoji): str(value)
+            for emoji, value in emoji_map.items()
+            if str(emoji).strip() and str(value).strip()
+        }
+    else:
+        _emoji_map = {
+            emoji: value
+            for emoji, value in _emoji_map.items()
+            if value in _pack_ids
+        }
+    _pack_enabled = bool(_pack_ids)
+
+
+def merge_pack(
+    ids: list[str],
+    name: str = "",
+    emoji_map: dict[str, str] | None = None,
+) -> None:
+    """Добавляет emoji-пак к текущему, не дублируя ID."""
+    global _pack_ids, _pack_name, _emoji_map, _pack_enabled
+    for value in ids:
+        normalized = str(value).strip()
+        if normalized and normalized not in _pack_ids and len(_pack_ids) < 100:
+            _pack_ids.append(normalized)
+    if emoji_map:
+        _emoji_map.update({
+            str(emoji): str(value)
+            for emoji, value in emoji_map.items()
+            if str(emoji).strip() and str(value).strip()
+        })
+    pack_name = str(name or "").strip()[:128]
+    names = [part for part in _pack_name.split("+") if part]
+    if pack_name and pack_name not in names:
+        names.append(pack_name)
+    _pack_name = "+".join(names)[:128]
     _pack_enabled = bool(_pack_ids)
 
 
@@ -416,6 +458,14 @@ def get_pack() -> list[str]:
 
 def get_pack_name() -> str:
     return _pack_name
+
+
+def get_pack_emoji_map() -> dict[str, str]:
+    return dict(_emoji_map)
+
+
+def has_emoji_map() -> bool:
+    return bool(_emoji_map)
 
 
 def has_pack() -> bool:
