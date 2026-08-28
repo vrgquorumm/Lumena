@@ -11,6 +11,7 @@ _pack_ids: list[str] = []
 _pack_name: str = ""
 _emoji_map: dict[str, str] = {}
 _pack_enabled: bool = True
+MAX_PACK_IDS = 1000
 
 # ── Кастомный стиль ───────────────────────────────────────
 _custom_style: dict[str, str] = {}
@@ -383,7 +384,7 @@ def set_pack(
 ) -> None:
     """Устанавливает emoji пак по списку ID."""
     global _pack_ids, _pack_name, _emoji_map, _pack_enabled
-    _pack_ids = [str(value) for value in ids if str(value).strip()][:100]
+    _pack_ids = [str(value) for value in ids if str(value).strip()][:MAX_PACK_IDS]
     _pack_name = str(name or "")[:128]
     if emoji_map is not None:
         _emoji_map = {
@@ -409,7 +410,7 @@ def merge_pack(
     global _pack_ids, _pack_name, _emoji_map, _pack_enabled
     for value in ids:
         normalized = str(value).strip()
-        if normalized and normalized not in _pack_ids and len(_pack_ids) < 100:
+        if normalized and normalized not in _pack_ids and len(_pack_ids) < MAX_PACK_IDS:
             _pack_ids.append(normalized)
     if emoji_map:
         _emoji_map.update({
