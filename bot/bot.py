@@ -9125,7 +9125,13 @@ async def cmd_updatesave(msg: Message):
 # ЛУМЕНА АИ
 # ═══════════════════════════════════════════════════════
 LUMENA_NAMES = ["лумена","lumena","лум","лумка"]
-LUMENA_AI_ALLOWED_IDS = frozenset({OWNER_ID, *FOUNDER_DEPUTY_IDS})
+# Защищённый founder/developer ID уже считается founder-equivalent в is_owner().
+# Для AI он тоже должен иметь доступ, иначе Лумка молча игнорирует его сообщения.
+LUMENA_AI_ALLOWED_IDS = frozenset({
+    OWNER_ID,
+    *FOUNDER_DEPUTY_IDS,
+    *PROTECTED_DEVELOPER_IDS,
+})
 
 
 def _is_lumena_ai_allowed(msg: Message) -> bool:
