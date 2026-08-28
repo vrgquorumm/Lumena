@@ -13528,6 +13528,7 @@ def _anketa_kb(uid: int | None = None) -> ReplyKeyboardMarkup:
                 KeyboardButton(text="💌 Смотреть анкеты"),
             ],
             [KeyboardButton(text="✏️ Редактировать анкету")],
+            [KeyboardButton(text="📖 Все команды")],
         ]
         placeholder = "Открыть свою анкету или ленту"
     elif status == "pending":
@@ -13536,6 +13537,7 @@ def _anketa_kb(uid: int | None = None) -> ReplyKeyboardMarkup:
                 KeyboardButton(text="⏳ Анкета на проверке"),
                 KeyboardButton(text="💌 Смотреть анкеты"),
             ],
+            [KeyboardButton(text="📖 Все команды")],
         ]
         placeholder = "Открыть ленту анкет"
     else:
@@ -13544,6 +13546,7 @@ def _anketa_kb(uid: int | None = None) -> ReplyKeyboardMarkup:
                 KeyboardButton(text="💌 Моя анкета"),
                 KeyboardButton(text="💌 Смотреть анкеты"),
             ],
+            [KeyboardButton(text="📖 Все команды")],
         ]
         placeholder = "Создать анкету или открыть ленту"
     return ReplyKeyboardMarkup(
@@ -13720,10 +13723,22 @@ async def cmd_start_private(msg: Message, command: CommandObject = None):
                 [[InlineKeyboardButton(text="🛠 Редактор", callback_data="editor:menu")]]
             )
         await _answer_custom(
-            msg, "start_text",
-            _START_TEXT.format(name=name),
+            msg, "anketa_home",
+            f"{brand.hdr()}\n\n"
+            f"✨ <b>Привет, {name}!</b>\n\n"
+            f"{brand.acc()} <b>Анкеты знакомств</b>\n\n"
+            "Создай свою анкету, дождись проверки и знакомься "
+            "с людьми из сообщества.\n\n"
+            "Основная навигация — кнопки ниже. Команды по-прежнему доступны "
+            "вручную через /help и slash-ввод.",
             name=raw_name,
             reply_markup=kb,
+        )
+        await msg.answer(
+            "👇 <b>Навигация по анкетам</b>\n\n"
+            "Выбирай действие кнопками — команды остаются доступны отдельно.",
+            parse_mode="HTML",
+            reply_markup=_anketa_kb(uid),
         )
         return
 
@@ -17317,8 +17332,35 @@ async def universal_handler(msg: Message):
         await _restore_anon_response_sessions(uid)
         await _restore_poll_extra_session(uid)
 
+    anketa_active = msg.chat.type == "private" and uid in _ank._sessions
+    anketa_navigation_texts = {
+        "💌 Смотреть анкеты",
+        "💌 Моя анкета",
+        "📋 Моя анкета ✅",
+        "✏️ Редактировать анкету",
+        "⏳ Анкета на проверке",
+        "📖 Все команды",
+    }
+
+    # В личке активная анкета имеет высший приоритет среди обычного текста.
+    # Slash-команды по-прежнему проходят в свои обработчики, а кнопки меню
+    # обрабатываются ниже отдельным блоком.
+    if (
+        anketa_active
+        and not text.startswith("/")
+        and text not in anketa_navigation_texts
+    ):
+        handled = await _ank.handle_anketa_step(bot, msg)
+        if handled:
+            return
+
     # Следующее сообщение после /ask @user становится вопросом.
-    if msg.chat.type == "private" and uid in anon_ask_sessions and not text.startswith("/"):
+    if (
+        msg.chat.type == "private"
+        and not anketa_active
+        and uid in anon_ask_sessions
+        and not text.startswith("/")
+    ):
         target_id = anon_ask_sessions.pop(uid)
         schedule_state_save("отправка анонимного вопроса")
         target_record = _known_user_records().get(target_id, {})
@@ -17326,17 +17368,32 @@ async def universal_handler(msg: Message):
         return
 
     # Следующее обычное сообщение после кнопки ответа отправляется анонимно.
-    if msg.chat.type == "private" and uid in anon_answer_sessions and not text.startswith("/"):
+    if (
+        msg.chat.type == "private"
+        and not anketa_active
+        and uid in anon_answer_sessions
+        and not text.startswith("/")
+    ):
         await _deliver_anon_answer(msg, text)
         return
 
     # Следующее сообщение автора вопроса отправляется собеседнику анонимно.
-    if msg.chat.type == "private" and uid in anon_reply_sessions and not text.startswith("/"):
+    if (
+        msg.chat.type == "private"
+        and not anketa_active
+        and uid in anon_reply_sessions
+        and not text.startswith("/")
+    ):
         await _deliver_anon_reply(msg, text)
         return
 
     # Дополнение к опросу после deep-link кнопки.
-    if msg.chat.type == "private" and uid in poll_extra_sessions and not text.startswith("/"):
+    if (
+        msg.chat.type == "private"
+        and not anketa_active
+        and uid in poll_extra_sessions
+        and not text.startswith("/")
+    ):
         await _deliver_poll_extra(msg, poll_extra_sessions[uid], text)
         return
 
@@ -17425,6 +17482,10 @@ async def universal_handler(msg: Message):
 
         if text == "💌 Смотреть анкеты":
             await cmd_browse_anketas(msg)
+            return
+
+        if text == "📖 Все команды":
+            await cmd_help(msg)
             return
 
         if text == "💌 Моя анкета":
