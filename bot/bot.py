@@ -13969,6 +13969,18 @@ async def cmd_give_premium(msg: Message, command: CommandObject):
 async def cmd_cancel_ank(msg: Message):
     if msg.chat.type == "private":
         uid = msg.from_user.id
+        # Сбрасываем все временные личные диалоги, чтобы зависшая сессия
+        # анонимного вопроса или опроса не перехватывала AI-сообщения.
+        had_ephemeral_session = False
+        for sessions in (
+            anon_ask_sessions,
+            anon_answer_sessions,
+            anon_reply_sessions,
+            poll_extra_sessions,
+        ):
+            if uid in sessions:
+                sessions.pop(uid, None)
+                had_ephemeral_session = True
         # Если редактор в сессии — сбрасываем
         if uid in _edit_sessions:
             _edit_sessions.pop(uid)
@@ -13980,6 +13992,9 @@ async def cmd_cancel_ank(msg: Message):
             del support_sessions[uid]
             await msg.reply("❌ Обращение отменено.")
             return
+        if had_ephemeral_session:
+            schedule_state_save("отмена временного диалога")
+            return await msg.reply("❌ Временный диалог отменён.")
         await _ank.cancel_anketa(msg)
 
 
