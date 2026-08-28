@@ -9125,6 +9125,17 @@ async def cmd_updatesave(msg: Message):
 # ЛУМЕНА АИ
 # ═══════════════════════════════════════════════════════
 LUMENA_NAMES = ["лумена","lumena","лум","лумка"]
+LUMENA_AI_ALLOWED_IDS = frozenset({OWNER_ID, *FOUNDER_DEPUTY_IDS})
+
+
+def _is_lumena_ai_allowed(msg: Message) -> bool:
+    """Ограничивает AI-диалог только founder и его заместителем."""
+    user = getattr(msg, "from_user", None)
+    return bool(
+        user
+        and user.id in LUMENA_AI_ALLOWED_IDS
+        and user.id not in REVOKED_FOUNDER_ACCESS_IDS
+    )
 
 def is_lumena_addressed(msg: Message) -> bool:
     """Лумена реагирует только если:
@@ -17018,7 +17029,9 @@ async def _check_oxyl_words(msg: Message) -> bool:
 # ═══════════════════════════════════════════════════════
 
 async def _lumena_ai_private(msg: Message):
-    """Лумена AI в личке — отвечает на любой свободный текст."""
+    """Лумена AI в личке — отвечает только founder и deputy."""
+    if not _is_lumena_ai_allowed(msg):
+        return
     name = msg.from_user.first_name or msg.from_user.username or "Участник"
     try:
         await bot.send_chat_action(msg.chat.id, "typing")
@@ -17030,7 +17043,9 @@ async def _lumena_ai_private(msg: Message):
 
 
 async def _lumena_ai_group(msg: Message):
-    """Лумена AI в группе — реагирует только на прямые обращения."""
+    """Лумена AI в группе — прямые обращения только от founder/deputy."""
+    if not _is_lumena_ai_allowed(msg):
+        return
     tl = (msg.text or "").lower().strip()
     is_addressed = False
 
@@ -17733,7 +17748,14 @@ async def universal_handler(msg: Message):
             except TypeError: await handler(msg)
             return
 
-        # AI-ассистент отключён: свободные сообщения не обрабатываются.
+        # Свободный AI-диалог разрешён только founder и deputy.
+        if _is_lumena_ai_allowed(msg):
+            if msg.chat.type == "private":
+                await _lumena_ai_private(msg)
+                return
+            if is_lumena_addressed(msg):
+                await _lumena_ai_group(msg)
+                return
         return
 
 # ═══════════════════════════════════════════════════════
