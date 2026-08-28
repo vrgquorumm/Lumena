@@ -34,6 +34,7 @@ _pending:       dict[str, dict] = {}    # app_id → заявка, що очік
 _reactions:     dict[int, dict] = {}    # uid → реакції під опублікованою анкетою
 _mod_commenting: dict[int, str] = {}    # mod_uid → app_id (чекає коментар-правку)
 _feed_cursors:  dict[int, int] = {}    # viewer uid → index in the private feed
+_feed_seen:     dict[int, set[int]] = {}  # viewer uid → уже обработанные анкеты
 DEFAULT_PUBLIC_CHAT_ID = -1004401287309
 
 
@@ -144,6 +145,30 @@ QUESTIONS_RU: list[tuple[str, str]] = [
      "📝 *О себе*\n_(пару предложений: характер, интересы, кто ты)_"),
 ]
 
+QUESTION_OPTIONS: dict[str, list[tuple[str, str]]] = {
+    "goal": [
+        ("💬 Общение", "Общение"),
+        ("🤝 Дружба", "Дружба"),
+        ("❤️ Отношения", "Отношения"),
+        ("✨ Не важно", "Не важно"),
+    ],
+    "looking_for": [
+        ("👩 Девушку", "Девушку"),
+        ("👨 Парня", "Парня"),
+        ("💞 Не важно", "Не важно"),
+    ],
+    "smoking": [
+        ("🚭 Не курю", "Не курю"),
+        ("🚬 Курю", "Курю"),
+        ("🌫 Иногда", "Иногда"),
+    ],
+    "kids": [
+        ("👶 Есть", "Есть"),
+        ("🌱 Нет", "Нет"),
+        ("🔮 Хочу в будущем", "Хочу в будущем"),
+    ],
+}
+
 PHOTO_STEP_TEXT_RU = (
     "📸 *Фото и видео*\n\n"
     "Отправь от *1 до 10* фото или видео любой длины.\n"
@@ -158,6 +183,26 @@ def _lang_questions(lang: str) -> list[tuple[str, str]]:
 
 def _lang_photo_text(lang: str) -> str:
     return PHOTO_STEP_TEXT_RU
+
+
+def question_kb(uid: int, key: str) -> InlineKeyboardMarkup | None:
+    """Кнопки для вопросов с ограниченным набором вариантов."""
+    options = QUESTION_OPTIONS.get(key)
+    if not options:
+        return None
+    rows = []
+    row = []
+    for index, (label, _value) in enumerate(options):
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"ank_q:{uid}:{key}:{index}",
+            )
+        )
+        if len(row) == 2 or index == len(options) - 1:
+            rows.append(row)
+            row = []
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _media_done_kb(uid: int) -> InlineKeyboardMarkup:
@@ -217,6 +262,13 @@ async def load_anketa_from_db() -> None:
                     for reactor_uid, info in reaction_data.get("dislikes", {}).items()
                 },
             }
+        for viewer_key, seen_uids in users.get("feed_seen", {}).items():
+            try:
+                _feed_seen[int(viewer_key)] = {
+                    int(seen_uid) for seen_uid in (seen_uids or [])
+                }
+            except (TypeError, ValueError):
+                continue
         print("✅ anketa_users завантажено з PostgreSQL")
 async def restore_anketa() -> None:
     """При старті відновлює anketa_users і anketa_settings: PostgreSQL → GitHub → локальний файл."""
@@ -296,6 +348,13 @@ def load_anketa_settings():
                         for reactor_uid, info in reaction_data.get("dislikes", {}).items()
                     },
                 }
+            for viewer_key, seen_uids in d.get("feed_seen", {}).items():
+                try:
+                    _feed_seen[int(viewer_key)] = {
+                        int(seen_uid) for seen_uid in (seen_uids or [])
+                    }
+                except (TypeError, ValueError):
+                    continue
         except Exception:
             pass
 
@@ -324,6 +383,11 @@ def _build_anketa_payloads() -> tuple[dict, dict]:
                 },
             }
             for owner_uid, reaction_data in _reactions.items()
+        },
+        "feed_seen": {
+            str(viewer_uid): sorted(seen_uids)
+            for viewer_uid, seen_uids in _feed_seen.items()
+            if seen_uids
         },
         # Заявки зберігаємо також: після перезапуску користувач повинен
         # мати змогу скасувати pending-анкету, а не отримувати "вічне" очікування.
@@ -433,6 +497,18 @@ def set_pending(uid: int):
     save_anketa_settings()
     _schedule_anketa_save()
 
+
+def save_pending_application(application: dict) -> str:
+    """Сохраняет заявку и переводит владельца в статус pending."""
+    uid = int(application["user_id"])
+    app_id = _app_id(uid)
+    _pending[app_id] = application
+    _user_status[uid] = "pending"
+    save_anketa_settings()
+    _schedule_anketa_save()
+    return app_id
+
+
 def set_approved(uid: int, answers: dict, username: str, full_name: str,
                  pub_msg_id: int | None = None, pub_chat_id: int | None = None,
                  anketa_num: int | None = None,
@@ -465,6 +541,8 @@ def revoke_anketa(uid: int) -> dict | None:
     data = _approved_data.pop(uid, None)
     _user_status.pop(uid, None)
     _reactions.pop(uid, None)
+    for seen_uids in _feed_seen.values():
+        seen_uids.discard(uid)
     save_anketa_settings()
     _schedule_anketa_save()
     return data
@@ -493,6 +571,8 @@ def delete_user_anketa(uid: int) -> dict | None:
     data = approved or pending or ({"user_id": uid} if old_status == "pending" else None)
     _sessions.pop(uid, None)
     _reactions.pop(uid, None)
+    for seen_uids in _feed_seen.values():
+        seen_uids.discard(uid)
     save_anketa_settings()
     _schedule_anketa_save()
     return data
@@ -503,10 +583,13 @@ def get_approved_data(uid: int) -> dict | None:
 
 def feed_uids(viewer_uid: int) -> list[int]:
     """Возвращает опубликованные анкеты для личной ленты без своей анкеты."""
+    seen = _feed_seen.get(viewer_uid, set())
     candidates = [
         (uid, data)
         for uid, data in _approved_data.items()
-        if uid != viewer_uid and _user_status.get(uid) == "approved"
+        if uid != viewer_uid
+        and uid not in seen
+        and _user_status.get(uid) == "approved"
     ]
     candidates.sort(
         key=lambda item: (
@@ -536,6 +619,24 @@ def set_feed_cursor(viewer_uid: int, index: int) -> None:
         _feed_cursors[viewer_uid] = index % len(uids)
 
 
+def mark_feed_seen(viewer_uid: int, owner_uid: int) -> None:
+    """Помечает профиль обработанным, чтобы он не повторялся в ленте."""
+    if viewer_uid == owner_uid:
+        return
+    _feed_seen.setdefault(viewer_uid, set()).add(owner_uid)
+    _feed_cursors.pop(viewer_uid, None)
+    save_anketa_settings()
+    _schedule_anketa_save()
+
+
+def reset_feed_seen(viewer_uid: int) -> None:
+    """Начинает ленту заново после просмотра всех доступных анкет."""
+    _feed_seen.pop(viewer_uid, None)
+    _feed_cursors.pop(viewer_uid, None)
+    save_anketa_settings()
+    _schedule_anketa_save()
+
+
 def feed_owner(viewer_uid: int, index: int | None = None) -> int | None:
     """Возвращает владельца карточки по позиции ленты."""
     uids = feed_uids(viewer_uid)
@@ -559,8 +660,8 @@ def feed_kb(owner_uid: int, index: int, total: int) -> InlineKeyboardMarkup:
                 callback_data=f"ank_feed:like:{owner_uid}:{index}",
             ),
             InlineKeyboardButton(
-                text="➡️ Следующая",
-                callback_data=f"ank_feed:next:{owner_uid}:{index}",
+                text="👎 Пропустить",
+                callback_data=f"ank_feed:pass:{owner_uid}:{index}",
             ),
         ],
         [
@@ -582,12 +683,30 @@ def feed_kb(owner_uid: int, index: int, total: int) -> InlineKeyboardMarkup:
     ])
 
 
+def feed_empty_kb() -> InlineKeyboardMarkup:
+    """Кнопки пустой ленты: начать просмотр заново или создать анкету."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔄 Смотреть сначала",
+                callback_data="ank_feed:reset",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📝 Создать анкету",
+                callback_data="ank_feed:create",
+            ),
+        ],
+    ])
+
+
 def feed_empty_text() -> str:
     return (
         f"{brand.hdr()}\n\n"
         "💌 <b>Анкеты пока закончились</b>\n\n"
-        "Новых опубликованных анкет сейчас нет. "
-        "Загляни позже или создай свою через <code>/анкета</code>."
+        "Ты уже просмотрел(а) все доступные анкеты. "
+        "Можно начать сначала или создать свою."
     )
 
 
@@ -925,11 +1044,13 @@ async def handle_lang_select(bot_obj, cb) -> None:
         await cb.message.edit_text(
             header + _md_to_html(qs[0][1]),
             parse_mode="HTML",
+            reply_markup=question_kb(uid, qs[0][0]),
         )
     except Exception:
         await cb.message.answer(
             header + _md_to_html(qs[0][1]),
             parse_mode="HTML",
+            reply_markup=question_kb(uid, qs[0][0]),
         )
     await cb.answer()
 
@@ -970,96 +1091,148 @@ async def _send_media_group_to_chat(
     return [m.message_id for m in (sent or [])]
 
 
-async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
-    """Завершает анкету и сразу публикует её в основном чате."""
-    answers     = session["answers"]
-    media_items = session.get("media_items", [])
-    answers["media"] = media_items        # список {"type","file_id"}
-    answers.pop("photo_id", None)         # прибираємо старі поля
-    answers.pop("video_id", None)
-    username  = session["username"]
-    full_name = session["full_name"]
-
-    # Основной чат уже закреплён в рабочей конфигурации проекта. Настройка
-    # остаётся переопределяемой через /setpubchat, но пустое старое значение
-    # не должно снова блокировать публикацию после удаления мод-чата.
-    pub_chat = get_pub_chat() or DEFAULT_PUBLIC_CHAT_ID
-    if not pub_chat:
+async def _delete_sent_anketa_messages(
+    bot_obj,
+    chat_id: int | None,
+    *message_ids,
+) -> None:
+    """Удаляет частично отправленную заявку после ошибки Telegram API."""
+    if not chat_id:
+        return
+    seen: set[int] = set()
+    for raw_id in message_ids:
         try:
-            await bot_obj.send_message(
-                uid,
-                "✅ Анкета заполнена!\n\n"
-                "⚠️ Главный чат для публикации анкет ещё не настроен — "
-                "обратитесь к администратору."
-            )
+            message_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if not message_id or message_id in seen:
+            continue
+        seen.add(message_id)
+        try:
+            await bot_obj.delete_message(chat_id, message_id)
         except Exception:
             pass
+
+
+async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
+    """Завершает заполнение и отправляет анкету на модерацию."""
+    answers = dict(session["answers"])
+    media_items = list(session.get("media_items", []))
+    answers["media"] = media_items
+    answers.pop("photo_id", None)
+    answers.pop("video_id", None)
+    username = session["username"]
+    full_name = session["full_name"]
+    mod_chat = get_mod_chat()
+
+    if not mod_chat:
+        await bot_obj.send_message(
+            uid,
+            "⚠️ <b>Модерация анкет пока не настроена.</b>\n\n"
+            "Обратись к администратору и попробуй отправить анкету позже.",
+            parse_mode="HTML",
+        )
         return
 
     anketa_num = next_anketa_number()
-    card = fmt_pub_card(answers, username, full_name)
+    app_id = _app_id(uid)
+    mod_msg_id = None
+    mod_media_msg_ids: list[int] = []
 
     try:
-        n = len(media_items)
-        media_msg_ids: list[int] = []
-        control_msg_id = None
-        reaction_markup = reaction_kb(uid)
-        if n == 0:
+        card = fmt_mod_card(
+            answers,
+            uid,
+            username,
+            full_name,
+            anketa_num=anketa_num,
+        )
+        moderation_markup = _make_mod_kb(app_id)
+        count = len(media_items)
+
+        if count == 0:
             sent = await bot_obj.send_message(
-                pub_chat, card,
+                mod_chat,
+                card,
                 parse_mode="HTML",
-                reply_markup=reaction_markup,
+                reply_markup=moderation_markup,
             )
-        elif n == 1:
+            mod_msg_id = sent.message_id
+        elif count == 1:
             item = media_items[0]
             if item["type"] == "photo":
                 sent = await bot_obj.send_photo(
-                    pub_chat, photo=item["file_id"],
-                    caption=card, parse_mode="HTML",
-                    reply_markup=reaction_markup,
+                    mod_chat,
+                    photo=item["file_id"],
+                    caption=card,
+                    parse_mode="HTML",
+                    reply_markup=moderation_markup,
                 )
             else:
                 sent = await bot_obj.send_video(
-                    pub_chat, video=item["file_id"],
-                    caption=card, parse_mode="HTML",
-                    reply_markup=reaction_markup,
+                    mod_chat,
+                    video=item["file_id"],
+                    caption=card,
+                    parse_mode="HTML",
+                    reply_markup=moderation_markup,
                 )
+            mod_msg_id = sent.message_id
         else:
-            media_msg_ids = await _send_media_group_to_chat(
+            mod_media_msg_ids = await _send_media_group_to_chat(
                 bot_obj,
-                pub_chat,
+                mod_chat,
                 media_items,
                 caption=card,
                 parse_mode="HTML",
             )
-            sent = await bot_obj.send_message(
-                pub_chat,
-                "💞 Действия с анкетой:",
+            control = await bot_obj.send_message(
+                mod_chat,
+                f"🛡 <b>Модерация анкеты №{anketa_num}</b>",
                 parse_mode="HTML",
-                reply_markup=reaction_markup,
-                reply_to_message_id=media_msg_ids[0] if media_msg_ids else None,
+                reply_markup=moderation_markup,
+                reply_to_message_id=(
+                    mod_media_msg_ids[0] if mod_media_msg_ids else None
+                ),
                 allow_sending_without_reply=True,
             )
-            control_msg_id = sent.message_id
+            mod_msg_id = control.message_id
 
-        set_approved(
-            uid, answers, username, full_name,
-            pub_msg_id=media_msg_ids[0] if media_msg_ids else sent.message_id,
-            pub_chat_id=pub_chat,
-            anketa_num=anketa_num,
-            media_msg_ids=media_msg_ids,
-            pub_control_msg_id=control_msg_id,
-        )
+        application = {
+            "user_id": uid,
+            "answers": answers,
+            "username": username,
+            "full_name": full_name,
+            "anketa_num": anketa_num,
+            "mod_chat_id": mod_chat,
+            "mod_msg_id": mod_msg_id,
+            "media_msg_ids": mod_media_msg_ids,
+            "media_count": len(media_items),
+        }
+        save_pending_application(application)
+
         await _send_custom(
-            bot_obj, uid, "anketa_confirm",
+            bot_obj,
+            uid,
+            "anketa_pending",
             f"{brand.hdr()}\n\n"
-            f"{brand.acc()} <b>Анкета №{anketa_num} опубликована!</b>\n\n"
-            "Теперь её можно листать и оценивать через бота.\n\n"
+            f"{brand.acc()} <b>Анкета №{anketa_num} отправлена на модерацию</b>\n\n"
+            "Мы проверим её и уведомим тебя о решении. "
+            "Пока заявка на проверке, её можно отменить кнопкой ниже.\n\n"
             f"{brand.div()}",
-            reply_markup=make_my_anketa_kb(uid),
+            reply_markup=make_pending_anketa_kb(uid),
         )
-    except Exception as e:
-        await bot_obj.send_message(uid, f"❌ Ошибка отправки: {e}")
+    except Exception as error:
+        await _delete_sent_anketa_messages(
+            bot_obj,
+            mod_chat,
+            mod_msg_id,
+            *mod_media_msg_ids,
+        )
+        await bot_obj.send_message(
+            uid,
+            "❌ Не удалось отправить анкету на модерацию. "
+            "Попробуй ещё раз через /анкета.",
+        )
 
 
 async def handle_media_step(bot_obj, msg) -> bool:
@@ -1201,7 +1374,69 @@ async def handle_anketa_step(bot_obj, msg) -> bool:
             f"{brand.div()}\n"
             f"<i>Шаг {next_step} из {total}</i>\n\n"
             f"{_md_to_html(question_text)}",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=question_kb(uid, qs[next_step][0]),
+        )
+    return True
+
+
+async def handle_question_choice(bot_obj, cb) -> bool:
+    """Сохраняет ответ на вопрос-кнопку и показывает следующий шаг."""
+    try:
+        parts = cb.data.split(":")
+        if len(parts) != 4:
+            raise ValueError
+        uid = int(parts[1])
+        key = parts[2]
+        option_index = int(parts[3])
+    except (TypeError, ValueError):
+        await cb.answer("Некорректная кнопка", show_alert=True)
+        return True
+
+    if cb.from_user.id != uid:
+        await cb.answer("Это не твоя анкета", show_alert=True)
+        return True
+    session = _sessions.get(uid)
+    if not session or session.get("step") < 0:
+        await cb.answer("Анкета уже завершена или устарела", show_alert=True)
+        return True
+    qs = _lang_questions(session.get("lang", "ru"))
+    step = int(session.get("step", 0))
+    if step >= len(qs) or qs[step][0] != key:
+        await cb.answer("Этот вопрос уже закрыт", show_alert=True)
+        return True
+    options = QUESTION_OPTIONS.get(key, [])
+    if option_index < 0 or option_index >= len(options):
+        await cb.answer("Вариант недоступен", show_alert=True)
+        return True
+
+    session["answers"][key] = options[option_index][1]
+    session["step"] = step + 1
+    await cb.answer("✅ Сохранено")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    if session["step"] >= len(qs):
+        total = len(qs) + 1
+        await cb.message.answer(
+            f"{brand.chk()} <b>Принято!</b>\n\n"
+            f"{brand.div()}\n"
+            f"<i>Шаг {session['step']} из {total} — последний!</i>\n\n"
+            f"{_md_to_html(_lang_photo_text(session.get('lang', 'ru')))}",
+            parse_mode="HTML",
+        )
+    else:
+        next_key, next_text = qs[session["step"]]
+        total = len(qs) + 1
+        await cb.message.answer(
+            f"{brand.chk()} <b>Принято!</b>\n\n"
+            f"{brand.div()}\n"
+            f"<i>Шаг {session['step']} из {total}</i>\n\n"
+            f"{_md_to_html(next_text)}",
+            parse_mode="HTML",
+            reply_markup=question_kb(uid, next_key),
         )
     return True
 
