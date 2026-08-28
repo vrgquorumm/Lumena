@@ -5,7 +5,9 @@ ai_agent.py — Lumena AI Engine v4
 варьирует стиль, использует сленг, не повторяется, иногда пишет коротко.
 ══════════════════════════════════════════════════════════════════════════════
 """
+import ast
 import asyncio
+import math
 import os
 import random
 import re
@@ -258,6 +260,182 @@ def _keyword_reply(text: str, mem: _Mem) -> Optional[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ТОЧНЫЕ ЛОКАЛЬНЫЕ ОТВЕТЫ
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _MathExpressionError(ValueError):
+    pass
+
+
+def _eval_math_node(node: ast.AST) -> float | int:
+    if isinstance(node, ast.Expression):
+        return _eval_math_node(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        if isinstance(node.value, bool) or not math.isfinite(float(node.value)):
+            raise _MathExpressionError("invalid number")
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        value = _eval_math_node(node.operand)
+        return value if isinstance(node.op, ast.UAdd) else -value
+    if isinstance(node, ast.BinOp):
+        left = _eval_math_node(node.left)
+        right = _eval_math_node(node.right)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            if right == 0:
+                raise ZeroDivisionError
+            return left / right
+        if isinstance(node.op, ast.Mod):
+            if right == 0:
+                raise ZeroDivisionError
+            return left % right
+        if isinstance(node.op, ast.Pow):
+            if abs(float(right)) > 1000:
+                raise _MathExpressionError("exponent too large")
+            value = left ** right
+            if not math.isfinite(float(value)):
+                raise _MathExpressionError("result too large")
+            return value
+    raise _MathExpressionError("unsupported expression")
+
+
+def _eval_linear_node(node: ast.AST) -> tuple[float | int, float | int]:
+    """Возвращает коэффициенты (a, b) для линейного выражения a*x + b."""
+    if isinstance(node, ast.Expression):
+        return _eval_linear_node(node.body)
+    if isinstance(node, ast.Name) and node.id.lower() == "x":
+        return 1, 0
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        if isinstance(node.value, bool) or not math.isfinite(float(node.value)):
+            raise _MathExpressionError("invalid number")
+        return 0, node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        a, b = _eval_linear_node(node.operand)
+        return (a, b) if isinstance(node.op, ast.UAdd) else (-a, -b)
+    if isinstance(node, ast.BinOp):
+        left_a, left_b = _eval_linear_node(node.left)
+        right_a, right_b = _eval_linear_node(node.right)
+        if isinstance(node.op, ast.Add):
+            return left_a + right_a, left_b + right_b
+        if isinstance(node.op, ast.Sub):
+            return left_a - right_a, left_b - right_b
+        if isinstance(node.op, ast.Mult):
+            if left_a and right_a:
+                raise _MathExpressionError("nonlinear expression")
+            if left_a:
+                return left_a * right_b, left_b * right_b
+            if right_a:
+                return right_a * left_b, right_b * left_b
+            return 0, left_b * right_b
+        if isinstance(node.op, ast.Div):
+            if right_a or right_b == 0:
+                raise _MathExpressionError("invalid divisor")
+            return left_a / right_b, left_b / right_b
+    raise _MathExpressionError("unsupported linear expression")
+
+
+def _format_math_value(value: float | int) -> str:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise _MathExpressionError("non-finite result")
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.12g}"
+    return str(value)
+
+
+def _math_reply(text: str) -> Optional[str]:
+    """Решает простые числовые выражения без LLM и без небезопасного eval."""
+    raw = text.strip().replace("×", "*").replace("÷", "/").replace("^", "**")
+    raw = raw.rstrip(" ?")
+    lower = raw.lower()
+
+    if re.fullmatch(r"корень\s+из\s+[0-9]+(?:[,.][0-9]+)?", lower):
+        number = float(re.search(r"[0-9]+(?:[,.][0-9]+)?", lower).group().replace(",", "."))
+        if number < 0:
+            return "🧮 У отрицательного числа нет действительного квадратного корня."
+        return f"🧮 Ответ: {_format_math_value(math.sqrt(number))}"
+
+    raw = re.sub(
+        r"^(?:реши|решить|посчитай|посчитать|вычисли|вычислить|"
+        r"сколько\s+будет|чему\s+равно)\s*[:—-]?\s*",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    ).strip()
+    # Умножение через латинскую x допускаем только между числами/скобками.
+    raw = raw.replace("х", "x").replace("Х", "x")
+    raw = re.sub(r"(?<=\d)\s*x\b", "*x", raw, flags=re.IGNORECASE)
+    raw = raw.replace(",", ".")
+
+    if "=" in raw and re.search(r"\bx\b", raw, flags=re.IGNORECASE):
+        left, right = (part.strip() for part in raw.split("=", 1))
+        if not re.fullmatch(r"[0-9x\s+\-*/%().]+", left, flags=re.IGNORECASE):
+            return None
+        if not re.fullmatch(r"[0-9x\s+\-*/%().]+", right, flags=re.IGNORECASE):
+            return None
+        try:
+            left_coeff = _eval_linear_node(ast.parse(left, mode="eval"))
+            right_coeff = _eval_linear_node(ast.parse(right, mode="eval"))
+            coefficient = left_coeff[0] - right_coeff[0]
+            constant = right_coeff[1] - left_coeff[1]
+            if coefficient == 0:
+                return "🧮 Уравнение не имеет единственного решения."
+            return f"🧮 Решение: x = {_format_math_value(constant / coefficient)}"
+        except (SyntaxError, ValueError, TypeError, _MathExpressionError, ZeroDivisionError):
+            return None
+
+    if not re.search(r"\d", raw) or not re.search(r"[+\-*/%]", raw):
+        return None
+    if not re.fullmatch(r"[0-9\s+\-*/%().]+", raw):
+        return None
+    try:
+        tree = ast.parse(raw, mode="eval")
+        value = _eval_math_node(tree)
+        return f"🧮 Ответ: {_format_math_value(value)}"
+    except ZeroDivisionError:
+        return "🧮 На ноль делить нельзя."
+    except (SyntaxError, ValueError, TypeError, _MathExpressionError, OverflowError):
+        return None
+
+
+def _command_reply(text: str, command_catalog: str) -> Optional[str]:
+    """Даёт фактическую подсказку по каталогу команд, переданному ботом."""
+    lower = text.lower().strip()
+    asks_about_commands = bool(re.search(
+        r"\b(команд\w*|help|уме\w*|возможност\w*|список\w*)\b|"
+        r"(^|\s)/[a-zа-яё_]+",
+        lower,
+    ))
+    if not asks_about_commands:
+        return None
+
+    if not command_catalog:
+        return "📚 Для полного списка команд используй /help или кнопку «📖 Все команды»."
+
+    requested = re.search(r"(^|\s)/([a-zа-яё_]+)", lower)
+    if requested:
+        command = f"/{requested.group(2)}"
+        if command in command_catalog.lower():
+            return (
+                f"📚 Команда {command} есть в каталоге бота. "
+                "Если скажешь, что именно хочешь сделать, подскажу нужный формат."
+            )
+        return f"📚 Команды {command} нет в текущем каталоге. Используй /help для доступных вариантов."
+
+    return (
+        "📚 Доступные команды бота:\n\n"
+        f"{command_catalog}\n\n"
+        "Для подробностей используй /help или напиши, какую задачу хочешь выполнить."
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ДЕТЕКТОРЫ
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -506,12 +684,27 @@ GENERIC = [
 # ГЛАВНАЯ ЛОГИКА
 # ═══════════════════════════════════════════════════════════════════════════
 
-async def lumena_reply(chat_id: int, user_name: str, text: str) -> str:
+async def lumena_reply(
+    chat_id: int,
+    user_name: str,
+    text: str,
+    command_catalog: str = "",
+) -> str:
     mem  = _m(chat_id)
     mem.push_user(text)
     mem.name = user_name
 
     t    = text.strip()
+    math_reply = _math_reply(t)
+    if math_reply:
+        mem.push_bot(math_reply)
+        return math_reply
+
+    command_reply = _command_reply(t, command_catalog)
+    if command_reply:
+        mem.push_bot(command_reply)
+        return command_reply
+
     terra_reply = await _terra_reply(mem, user_name, t)
     if terra_reply:
         mem.push_bot(terra_reply)
