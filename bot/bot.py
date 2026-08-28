@@ -9143,6 +9143,25 @@ def _is_lumena_ai_allowed(msg: Message) -> bool:
         return True
     return user.id in FOUNDER_DEPUTY_IDS and user.id not in REVOKED_FOUNDER_ACCESS_IDS
 
+
+def _lumena_command_catalog() -> str:
+    """Передаёт AI только фактические команды из текущего маршрутизатора."""
+    # Часть slash-команд зарегистрирована напрямую декораторами aiogram и
+    # поэтому не попадает в TEXT_COMMANDS.
+    direct_commands = {
+        "/start", "/help", "/profile", "/анкета", "/анкеты", "/helplum",
+        "/helpcancel", "/premium", "/premiumstock", "/shop", "/inventory",
+        "/exchange", "/withdraw", "/ask", "/answer", "/poll", "/polls",
+        "/info", "/level", "/top", "/report", "/settings",
+    }
+    commands = sorted(direct_commands | {
+        f"/{name.lstrip('/')}"
+        for name in TEXT_COMMANDS
+        if isinstance(name, str) and name.strip()
+    })
+    return " · ".join(commands)[:3000]
+
+
 def is_lumena_addressed(msg: Message) -> bool:
     """Лумена реагирует только если:
     - личный чат
@@ -17058,7 +17077,12 @@ async def _lumena_ai_private(msg: Message):
         await bot.send_chat_action(msg.chat.id, "typing")
     except Exception:
         pass
-    reply = await ai_agent.lumena_reply(msg.from_user.id, name, msg.text)
+    reply = await ai_agent.lumena_reply(
+        msg.from_user.id,
+        name,
+        msg.text,
+        command_catalog=_lumena_command_catalog(),
+    )
     if reply:
         await msg.reply(reply)
 
@@ -17103,7 +17127,12 @@ async def _lumena_ai_group(msg: Message):
         await bot.send_chat_action(msg.chat.id, "typing")
     except Exception:
         pass
-    reply = await ai_agent.lumena_reply(msg.chat.id, name, msg.text)
+    reply = await ai_agent.lumena_reply(
+        msg.chat.id,
+        name,
+        msg.text,
+        command_catalog=_lumena_command_catalog(),
+    )
     if reply:
         await msg.reply(reply)
 
