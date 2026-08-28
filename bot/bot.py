@@ -11301,7 +11301,12 @@ def _is_help_routed_message(msg: Message) -> bool:
     if msg.from_user.id == SUPPORT_AGENT_ID:
         reply = msg.reply_to_message
         return bool(reply and reply.message_id in help_forward_map)
-    return msg.from_user.id in help_sessions
+    # Активная анкета имеет приоритет над старой сессией /helplum:
+    # ответы на вопросы нельзя пересылать сотруднику поддержки.
+    return (
+        msg.from_user.id in help_sessions
+        and msg.from_user.id not in _ank._sessions
+    )
 
 
 @dp.message(F.func(_is_help_routed_message))
@@ -13552,6 +13557,8 @@ def _anketa_kb(uid: int | None = None) -> ReplyKeyboardMarkup:
 async def _start_anketa_for_user(user) -> None:
     """Запускает анкету из inline-кнопки, где cb.message принадлежит боту."""
     uid = user.id
+    help_sessions.discard(uid)
+    support_sessions.pop(uid, None)
     if uid in _ank._sessions:
         await bot.send_message(
             uid,
@@ -13847,7 +13854,8 @@ async def cmd_anketa(msg: Message):
         )
     # Новый сценарий анкеты должен закрыть незавершённое обращение
     # в поддержку, иначе свободный ответ может уйти администратору.
-    support_sessions.discard(msg.from_user.id)
+    help_sessions.discard(msg.from_user.id)
+    support_sessions.pop(msg.from_user.id, None)
     await _ank.start_anketa(bot, msg, force=True)
 
 
@@ -17421,6 +17429,8 @@ async def universal_handler(msg: Message):
 
         if text == "💌 Моя анкета":
             # Немає анкети — починаємо
+            help_sessions.discard(uid)
+            support_sessions.pop(uid, None)
             await _ank.start_anketa(bot, msg)
             return
 
@@ -17474,6 +17484,8 @@ async def universal_handler(msg: Message):
 
         if text == "✏️ Редактировать анкету":
             # Відхилено — починаємо заново
+            help_sessions.discard(uid)
+            support_sessions.pop(uid, None)
             await _ank.start_anketa(bot, msg, force=True)
             return
 
