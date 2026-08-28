@@ -481,6 +481,167 @@ def preview(n: int = 12) -> str:
     return "".join(parts) if parts else "(пак не загружен)"
 
 
+_TG_EMOJI_TAG_RE = re.compile(
+    r"<tg-emoji\b[^>]*>.*?</tg-emoji>", flags=re.IGNORECASE | re.DOTALL
+)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_EMOJI_BASE = (
+    r"[\U0001F1E6-\U0001F1FF\U0001F300-\U0001FAFF"
+    r"\u2300-\u23FF\u2600-\u27BF]"
+)
+_REGIONAL_BASE = r"[\U0001F1E6-\U0001F1FF]"
+_EMOJI_SEQUENCE_RE = re.compile(
+    rf"(?:"
+    rf"{_REGIONAL_BASE}{_REGIONAL_BASE}"
+    rf"|{_EMOJI_BASE}(?:[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF])?"
+    rf"|[#*0-9]\ufe0f?\u20e3"
+    rf")"
+    rf"(?:\u200d{_EMOJI_BASE}(?:[\ufe0e\ufe0f\U0001F3FB-\U0001F3FF])?)*"
+)
+
+
+def _custom_emoji_tag(emoji: str, custom_id: str) -> str:
+    return f'<tg-emoji emoji-id="{custom_id}">{emoji}</tg-emoji>'
+
+
+def replace_emojis_html(text: str | None) -> str | None:
+    """Заменяет Unicode emoji в HTML на custom emoji выбранного пака."""
+    if not text or not has_pack():
+        return text
+
+    placeholders: list[str] = []
+
+    def protect(match) -> str:
+        token = f"__LUMENA_HTML_TAG_{len(placeholders)}__"
+        placeholders.append(match.group(0))
+        return token
+
+    safe = _TG_EMOJI_TAG_RE.sub(protect, text)
+    safe = _HTML_TAG_RE.sub(protect, safe)
+    fallback_id = _pack_ids[0] if _pack_ids else None
+
+    def replace_match(match) -> str:
+        emoji = match.group(0)
+        custom_id = _emoji_map.get(emoji)
+        if custom_id is None:
+            custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
+        custom_id = custom_id or fallback_id
+        return _custom_emoji_tag(emoji, custom_id) if custom_id else emoji
+
+    safe = _EMOJI_SEQUENCE_RE.sub(replace_match, safe)
+    for index, original in enumerate(placeholders):
+        safe = safe.replace(f"__LUMENA_HTML_TAG_{index}__", original)
+    return safe
+
+
+def replace_emojis_markdown(text: str | None, parse_mode: str) -> str | None:
+    """Заменяет emoji в Markdown, сохраняя остальное форматирование."""
+    if not text or not has_pack():
+        return text
+    markdown_v2 = parse_mode == "MarkdownV2"
+    fallback_id = _pack_ids[0] if _pack_ids else None
+
+    def replace_match(match) -> str:
+        emoji = match.group(0)
+        custom_id = _emoji_map.get(emoji)
+        if custom_id is None:
+            custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
+        custom_id = custom_id or fallback_id
+        if not custom_id:
+            return emoji
+        if markdown_v2:
+            return f"![](tg://emoji?id={custom_id})"
+        return f"[{emoji}](tg://emoji?id={custom_id})"
+
+    return _EMOJI_SEQUENCE_RE.sub(replace_match, text)
+
+
+def first_emoji_id(text: str | None) -> str | None:
+    """Находит custom ID первого emoji в подписи кнопки."""
+    if not text or not has_pack():
+        return None
+    matches = []
+    for emoji, custom_id in _emoji_map.items():
+        position = text.find(emoji)
+        if position >= 0:
+            matches.append((position, -len(emoji), custom_id))
+    if matches:
+        return min(matches)[2]
+    return _pack_ids[0] if _pack_ids else None
+
+
+def strip_mapped_emojis(text: str | None) -> str | None:
+    """Убирает Unicode emoji из текста кнопки, если они вынесены в icon."""
+    if not text or not has_pack():
+        return text
+    result = _EMOJI_SEQUENCE_RE.sub("", text)
+    return result.strip() or text
+
+
+def decorate_message_html(text: str | None) -> str | None:
+    """Заменяет emoji в HTML-сообщении на custom emoji."""
+    if not text or not has_pack():
+        return text
+    themed = replace_emojis_html(text)
+    if "<tg-emoji" in (themed or "")[:500]:
+        return themed
+    return f'{e("header", _FALLBACK["header"])} {themed}'
+
+
+def prepare_rich_html(text: str | None) -> str | None:
+    """Делает fallback внутри tg-emoji безопасным для Rich Message."""
+    if not text:
+        return text
+
+    def replace_tag(match) -> str:
+        opening, closing = match.group(1), match.group(2)
+        return f"{opening}🔹{closing}"
+
+    return re.sub(
+        r"(<tg-emoji\b[^>]*>).*?(</tg-emoji>)",
+        replace_tag,
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+
+def downgrade_rich_html(
+    text: str | None,
+    strip_custom_emoji: bool = False,
+) -> str | None:
+    """Преобразует Rich HTML в обычный Bot API HTML fallback."""
+    if not text:
+        return text
+    result = text
+    if strip_custom_emoji:
+        result = _TG_EMOJI_TAG_RE.sub(
+            lambda match: re.sub(r"<[^>]+>", "", match.group(0)),
+            result,
+        )
+    result = re.sub(r"<h[1-3]\b[^>]*>", "<b>", result, flags=re.IGNORECASE)
+    result = re.sub(r"</h[1-3]\s*>", "</b>", result, flags=re.IGNORECASE)
+    result = re.sub(
+        r"<hr\s*/?>", "\n────────────\n", result, flags=re.IGNORECASE
+    )
+    result = re.sub(r"<br\s*/?>", "\n", result, flags=re.IGNORECASE)
+    result = re.sub(
+        r"</?(?:details|summary|table|thead|tbody|tr|td|th)[^>]*>",
+        "",
+        result,
+        flags=re.IGNORECASE,
+    )
+    if strip_custom_emoji:
+        result = re.sub(
+            r"</?blockquote[^>]*>",
+            "",
+            result,
+            flags=re.IGNORECASE,
+        )
+    result = re.sub(r"<li\s*>", "• ", result, flags=re.IGNORECASE)
+    result = re.sub(r"</li\s*>", "\n", result, flags=re.IGNORECASE)
+    return result
+
+
 # ── Стили Telegram-кнопок ─────────────────────────────────────
 # Bot API поддерживает три официальных цвета: primary (синий),
 # success (зелёный) и danger (красный). Произвольные HEX-цвета
