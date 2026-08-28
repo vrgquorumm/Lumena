@@ -1035,7 +1035,7 @@ async def handle_lang_select(bot_obj, cb) -> None:
     header = (
         f"{brand.hdr()}\n\n"
         f"{brand.acc()} <b>Анкета знакомств</b>\n\n"
-        "Отвечай на вопросы по очереди — после заполнения анкета будет опубликована.\n"
+        "Отвечай на вопросы по очереди — после заполнения анкета будет опубликована автоматически.\n"
         "Напиши /отмена чтобы отменить.\n\n"
         f"{brand.div()}\n\n"
     )
@@ -1115,7 +1115,7 @@ async def _delete_sent_anketa_messages(
 
 
 async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
-    """Завершает заполнение и отправляет анкету на модерацию."""
+    """Завершает заполнение и автоматически публикует анкету."""
     answers = dict(session["answers"])
     media_items = list(session.get("media_items", []))
     answers["media"] = media_items
@@ -1123,114 +1123,100 @@ async def _finish_anketa(bot_obj, uid: int, session: dict) -> None:
     answers.pop("video_id", None)
     username = session["username"]
     full_name = session["full_name"]
-    mod_chat = get_mod_chat()
-
-    if not mod_chat:
-        await bot_obj.send_message(
-            uid,
-            "⚠️ <b>Модерация анкет пока не настроена.</b>\n\n"
-            "Обратись к администратору и попробуй отправить анкету позже.",
-            parse_mode="HTML",
-        )
-        return
-
+    pub_chat = get_pub_chat() or DEFAULT_PUBLIC_CHAT_ID
     anketa_num = next_anketa_number()
-    app_id = _app_id(uid)
-    mod_msg_id = None
-    mod_media_msg_ids: list[int] = []
+    pub_msg_id = None
+    pub_control_msg_id = None
+    pub_media_msg_ids: list[int] = []
 
     try:
-        card = fmt_mod_card(
-            answers,
-            uid,
-            username,
-            full_name,
-            anketa_num=anketa_num,
-        )
-        moderation_markup = _make_mod_kb(app_id)
+        card = fmt_pub_card(answers, username, full_name)
+        reaction_markup = reaction_kb(uid)
         count = len(media_items)
 
         if count == 0:
             sent = await bot_obj.send_message(
-                mod_chat,
+                pub_chat,
                 card,
                 parse_mode="HTML",
-                reply_markup=moderation_markup,
+                reply_markup=reaction_markup,
             )
-            mod_msg_id = sent.message_id
+            pub_msg_id = sent.message_id
         elif count == 1:
             item = media_items[0]
             if item["type"] == "photo":
                 sent = await bot_obj.send_photo(
-                    mod_chat,
+                    pub_chat,
                     photo=item["file_id"],
                     caption=card,
                     parse_mode="HTML",
-                    reply_markup=moderation_markup,
+                    reply_markup=reaction_markup,
                 )
             else:
                 sent = await bot_obj.send_video(
-                    mod_chat,
+                    pub_chat,
                     video=item["file_id"],
                     caption=card,
                     parse_mode="HTML",
-                    reply_markup=moderation_markup,
+                    reply_markup=reaction_markup,
                 )
-            mod_msg_id = sent.message_id
+            pub_msg_id = sent.message_id
         else:
-            mod_media_msg_ids = await _send_media_group_to_chat(
+            pub_media_msg_ids = await _send_media_group_to_chat(
                 bot_obj,
-                mod_chat,
+                pub_chat,
                 media_items,
                 caption=card,
                 parse_mode="HTML",
             )
             control = await bot_obj.send_message(
-                mod_chat,
-                f"🛡 <b>Модерация анкеты №{anketa_num}</b>",
+                pub_chat,
+                "💞 <b>Реакции на анкету:</b>",
                 parse_mode="HTML",
-                reply_markup=moderation_markup,
+                reply_markup=reaction_markup,
                 reply_to_message_id=(
-                    mod_media_msg_ids[0] if mod_media_msg_ids else None
+                    pub_media_msg_ids[0] if pub_media_msg_ids else None
                 ),
                 allow_sending_without_reply=True,
             )
-            mod_msg_id = control.message_id
+            pub_control_msg_id = control.message_id
+            pub_msg_id = pub_media_msg_ids[0] if pub_media_msg_ids else control.message_id
 
-        application = {
-            "user_id": uid,
-            "answers": answers,
-            "username": username,
-            "full_name": full_name,
-            "anketa_num": anketa_num,
-            "mod_chat_id": mod_chat,
-            "mod_msg_id": mod_msg_id,
-            "media_msg_ids": mod_media_msg_ids,
-            "media_count": len(media_items),
-        }
-        save_pending_application(application)
+        set_approved(
+            uid,
+            answers,
+            username,
+            full_name,
+            pub_msg_id=pub_msg_id,
+            pub_chat_id=pub_chat,
+            anketa_num=anketa_num,
+            media_msg_ids=pub_media_msg_ids,
+            pub_control_msg_id=pub_control_msg_id,
+        )
 
         await _send_custom(
             bot_obj,
             uid,
-            "anketa_pending",
+            "anketa_auto_confirm",
             f"{brand.hdr()}\n\n"
-            f"{brand.acc()} <b>Анкета №{anketa_num} отправлена на модерацию</b>\n\n"
-            "Мы проверим её и уведомим тебя о решении. "
-            "Пока заявка на проверке, её можно отменить кнопкой ниже.\n\n"
+            f"{brand.chk()} <b>Анкета №{anketa_num} опубликована!</b>\n\n"
+            "Она уже доступна в ленте знакомств. "
+            "Ты можешь посмотреть, изменить или удалить её кнопками ниже.\n\n"
             f"{brand.div()}",
-            reply_markup=make_pending_anketa_kb(uid),
+            reply_markup=make_my_anketa_kb(uid),
         )
     except Exception as error:
         await _delete_sent_anketa_messages(
             bot_obj,
-            mod_chat,
-            mod_msg_id,
-            *mod_media_msg_ids,
+            pub_chat,
+            pub_msg_id,
+            pub_control_msg_id,
+            *pub_media_msg_ids,
         )
+        print(f"⚠️ Ошибка автопубликации анкеты {uid}: {error}")
         await bot_obj.send_message(
             uid,
-            "❌ Не удалось отправить анкету на модерацию. "
+            "❌ Не удалось автоматически опубликовать анкету. "
             "Попробуй ещё раз через /анкета.",
         )
 
