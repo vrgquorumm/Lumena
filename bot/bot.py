@@ -12554,6 +12554,14 @@ async def cb_ank_lang(cb: CallbackQuery):
     await _ank.handle_lang_select(bot, cb)
 
 
+@dp.callback_query(F.data.startswith("ank_q:"))
+async def cb_ank_question_choice(cb: CallbackQuery):
+    """Обрабатывает вариант ответа, выбранный кнопкой анкеты."""
+    if not cb.message or cb.message.chat.type != "private":
+        return await cb.answer()
+    await _ank.handle_question_choice(bot, cb)
+
+
 @dp.callback_query(F.data.startswith("ank_media_done:"))
 async def cb_ank_media_done(cb: CallbackQuery):
     """Юзер натиснув «Готово» — завершуємо збір медіа і відправляємо анкету."""
@@ -12889,6 +12897,7 @@ async def _send_anketa_feed_card(
             recipient_uid,
             _ank.feed_empty_text(),
             parse_mode="HTML",
+            reply_markup=_ank.feed_empty_kb(),
         )
         return False
 
@@ -12896,7 +12905,12 @@ async def _send_anketa_feed_card(
     owner_uid = _ank.feed_owner(recipient_uid, card_index)
     data = _ank.get_approved_data(owner_uid) if owner_uid else None
     if not data:
-        await bot.send_message(recipient_uid, _ank.feed_empty_text(), parse_mode="HTML")
+        await bot.send_message(
+            recipient_uid,
+            _ank.feed_empty_text(),
+            parse_mode="HTML",
+            reply_markup=_ank.feed_empty_kb(),
+        )
         return False
 
     answers = data.get("answers") or {}
@@ -12961,9 +12975,26 @@ async def cb_ank_feed(cb: CallbackQuery):
     """Листание, лайки, подробности и жалобы в личной ленте."""
     if cb.message.chat.type != "private":
         return await cb.answer("Лента доступна только в личных сообщениях", show_alert=True)
+    if not is_verified(cb.from_user.id):
+        return await cb.answer("🔒 Сначала пройди верификацию", show_alert=True)
     if cb.data == "ank_feed:open":
         _ank.set_feed_cursor(cb.from_user.id, 0)
         await _send_anketa_feed_card(cb.from_user.id)
+        return await cb.answer()
+    if cb.data == "ank_feed:reset":
+        _ank.reset_feed_seen(cb.from_user.id)
+        await _send_anketa_feed_card(cb.from_user.id)
+        return await cb.answer("Лента начата сначала")
+    if cb.data == "ank_feed:create":
+        status = _ank.get_user_status(cb.from_user.id)
+        if status == "approved":
+            return await cb.answer(
+                "У тебя уже есть анкета — открой «Моя анкета»",
+                show_alert=True,
+            )
+        if status == "pending":
+            return await cb.answer("⏳ Твоя анкета уже на проверке", show_alert=True)
+        await _start_anketa_for_user(cb.from_user)
         return await cb.answer()
     parts = cb.data.split(":")
     if len(parts) != 4:
@@ -12978,39 +13009,53 @@ async def cb_ank_feed(cb: CallbackQuery):
         return await cb.answer("Анкета больше недоступна", show_alert=True)
 
     if action == "position":
-        return await cb.answer("Листай анкеты кнопкой «Следующая»", show_alert=False)
+        return await cb.answer("Выбери «Лайк» или «Пропустить»", show_alert=False)
 
-    if action == "next":
+    if action in {"like", "pass", "next"}:
         uids = _ank.feed_uids(viewer_uid)
-        next_index = (uids.index(owner_uid) + 1) % len(uids)
-        _ank.set_feed_cursor(viewer_uid, next_index)
-        await _send_anketa_feed_card(viewer_uid, index=next_index)
-        return await cb.answer()
+        try:
+            current_index = uids.index(owner_uid)
+        except ValueError:
+            return await cb.answer("Анкета уже обработана", show_alert=True)
 
-    if action == "like":
-        reactor = cb.from_user
-        is_heart, is_new = _ank.record_reaction(
-            owner_uid, viewer_uid, reactor.full_name, reactor.username or "", "h",
-        )
-        position = _ank.feed_position(viewer_uid, owner_uid)
-        if position:
-            try:
-                await cb.message.edit_reply_markup(
-                    reply_markup=_ank.feed_kb(owner_uid, position[0], position[1]),
-                )
-            except Exception:
-                pass
-        if is_new:
-            try:
-                await bot.send_message(
-                    owner_uid,
-                    "❤️ Твою анкету лайкнули! Нажми кнопку ниже, чтобы посмотреть реакцию.",
-                    reply_markup=_ank.make_mutual_kb(viewer_uid, owner_uid),
-                )
-            except Exception:
-                pass
-            return await cb.answer("❤️ Лайк поставлен!")
-        return await cb.answer("Лайк убран" if not is_heart else "❤️")
+        if action == "like":
+            reactor = cb.from_user
+            is_heart, is_new = _ank.record_reaction(
+                owner_uid,
+                viewer_uid,
+                reactor.full_name,
+                reactor.username or "",
+                "h",
+            )
+            if is_new:
+                try:
+                    await bot.send_message(
+                        owner_uid,
+                        "❤️ Твою анкету лайкнули! Нажми кнопку ниже, чтобы посмотреть реакцию.",
+                        reply_markup=_ank.make_mutual_kb(viewer_uid, owner_uid),
+                    )
+                except Exception:
+                    pass
+        _ank.mark_feed_seen(viewer_uid, owner_uid)
+        remaining = _ank.feed_uids(viewer_uid)
+        if remaining:
+            next_owner = next(
+                (
+                    candidate
+                    for candidate in uids[current_index + 1:] + uids[:current_index]
+                    if candidate in remaining
+                ),
+                remaining[0],
+            )
+            _ank.set_feed_cursor(viewer_uid, remaining.index(next_owner))
+            await _send_anketa_feed_card(viewer_uid, owner_uid=next_owner)
+        else:
+            await _send_anketa_feed_card(viewer_uid)
+        if action == "like":
+            return await cb.answer("❤️ Лайк поставлен!" if is_new else "❤️")
+        if action == "pass":
+            return await cb.answer("👎 Пропущено")
+        return await cb.answer()
 
     if action == "detail":
         await _send_anketa_private_preview(
@@ -13254,21 +13299,16 @@ async def cb_ank_start_private(cb: CallbackQuery):
         return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
     if cb.from_user.id != uid:
         return await cb.answer("Это не для тебя", show_alert=True)
-    status = _ank.get_user_status(uid)
-    if status == "pending":
+    if not is_verified(uid):
+        return await cb.answer("🔒 Сначала пройди верификацию", show_alert=True)
+    if _ank.get_user_status(uid) == "pending":
         return await cb.answer("⏳ Анкета уже на проверке", show_alert=True)
-    _ank._sessions[uid] = {
-        "step": -1, "answers": {},
-        "username": cb.from_user.username or "",
-        "full_name": cb.from_user.full_name,
-        "lang": None,
-    }
-    await bot.send_message(
-        uid,
-        "💌 *Анкета знакомств*\n\nВыберите язык:",
-        parse_mode="Markdown",
-        reply_markup=_ank._lang_kb()
-    )
+    if _ank.get_user_status(uid) == "approved":
+        return await cb.answer(
+            "У тебя уже есть анкета — открой «Моя анкета» для редактирования",
+            show_alert=True,
+        )
+    await _start_anketa_for_user(cb.from_user)
     await cb.answer()
 
 
@@ -13433,9 +13473,68 @@ async def cb_ank_user_edit(cb: CallbackQuery):
 # АНКЕТИ — КОМАНДИ
 # ═══════════════════════════════════════════════════════
 
-def _anketa_kb(uid: int | None = None) -> ReplyKeyboardRemove:
-    """Кнопка 'Моя анкета' скрыта — возвращаем пустую клавиатуру."""
-    return ReplyKeyboardRemove()
+def _anketa_kb(uid: int | None = None) -> ReplyKeyboardMarkup:
+    """Постоянная навигация по анкетам в личном чате."""
+    status = _ank.get_user_status(uid) if uid else None
+    if status == "approved":
+        rows = [
+            [
+                KeyboardButton(text="📋 Моя анкета ✅"),
+                KeyboardButton(text="💌 Смотреть анкеты"),
+            ],
+            [KeyboardButton(text="✏️ Редактировать анкету")],
+        ]
+        placeholder = "Открыть свою анкету или ленту"
+    elif status == "pending":
+        rows = [
+            [
+                KeyboardButton(text="⏳ Анкета на проверке"),
+                KeyboardButton(text="💌 Смотреть анкеты"),
+            ],
+        ]
+        placeholder = "Открыть ленту анкет"
+    else:
+        rows = [
+            [
+                KeyboardButton(text="💌 Моя анкета"),
+                KeyboardButton(text="💌 Смотреть анкеты"),
+            ],
+        ]
+        placeholder = "Создать анкету или открыть ленту"
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder=placeholder,
+    )
+
+
+async def _start_anketa_for_user(user) -> None:
+    """Запускает анкету из inline-кнопки, где cb.message принадлежит боту."""
+    uid = user.id
+    if uid in _ank._sessions:
+        await bot.send_message(
+            uid,
+            "📋 Ты уже заполняешь анкету. Продолжай с текущего вопроса.",
+            reply_markup=_ank._lang_kb(),
+        )
+        return
+    _ank._sessions[uid] = {
+        "step": -1,
+        "answers": {},
+        "username": user.username or "",
+        "full_name": user.full_name,
+        "lang": None,
+        "media_items": [],
+    }
+    await bot.send_message(
+        uid,
+        f"{brand.hdr()}\n\n"
+        f"{brand.acc()} <b>Анкета знакомств</b>\n\n"
+        "Выберите язык:",
+        parse_mode="HTML",
+        reply_markup=_ank._lang_kb(),
+    )
 
 
 _START_TEXT = (
@@ -13462,7 +13561,7 @@ _START_TEXT = (
     "💌 Смотреть анкеты — <code>/анкеты</code>"
 )
 
-def build_main_kb() -> InlineKeyboardMarkup:
+def build_main_kb(uid: int | None = None) -> InlineKeyboardMarkup:
     """Главная клавиатура /start — читает кастомные label/url из brand."""
     chat_label = brand.btn_label("main_chat")
     chat_url   = brand.btn_url("main_chat")
@@ -13477,7 +13576,39 @@ def build_main_kb() -> InlineKeyboardMarkup:
     rows = []
     if row1:
         rows.append(row1)
-    rows.append([InlineKeyboardButton(text="💌 Смотреть анкеты", callback_data="ank_feed:open")])
+    if uid and _ank.get_user_status(uid) == "approved":
+        rows.append([
+            InlineKeyboardButton(
+                text="📋 Моя анкета",
+                callback_data=f"ank_mycard:{uid}",
+            ),
+            InlineKeyboardButton(
+                text="💌 Смотреть анкеты",
+                callback_data="ank_feed:open",
+            ),
+        ])
+    elif uid and _ank.get_user_status(uid) == "pending":
+        rows.append([
+            InlineKeyboardButton(
+                text="⏳ Анкета на проверке",
+                callback_data=f"ank_mycard:{uid}",
+            ),
+            InlineKeyboardButton(
+                text="💌 Смотреть анкеты",
+                callback_data="ank_feed:open",
+            ),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(
+                text="📝 Создать анкету",
+                callback_data=f"ank_start:{uid}" if uid else "ank_feed:create",
+            ),
+            InlineKeyboardButton(
+                text="💌 Смотреть анкеты",
+                callback_data="ank_feed:open",
+            ),
+        ])
     rows.append([InlineKeyboardButton(text=help_label, callback_data="help:menu")])
     # Ссылка на сайт
     if LUMENA_SITE_URL:
@@ -13534,7 +13665,7 @@ async def cmd_start_private(msg: Message, command: CommandObject = None):
         return await cmd_anketa(msg)
 
     if is_verified(uid):
-        kb = build_main_kb()
+        kb = build_main_kb(uid)
         # Фаундеру добавляем кнопку редактора
         if is_owner(msg):
             kb = InlineKeyboardMarkup(inline_keyboard=
@@ -13649,7 +13780,7 @@ async def cb_captcha_ans(cb: CallbackQuery):
         cb.message, "start_text",
         _START_TEXT.format(name=name),
         name=raw_name,
-        reply_markup=build_main_kb(),
+        reply_markup=build_main_kb(uid),
     )
     await cb.answer("✅ Правильно!", show_alert=False)
 
@@ -17243,6 +17374,10 @@ async def universal_handler(msg: Message):
     # ── Анкета: обробка кнопок клавіатури в особистих
     if msg.chat.type == "private":
         status = _ank.get_user_status(uid)
+
+        if text == "💌 Смотреть анкеты":
+            await cmd_browse_anketas(msg)
+            return
 
         if text == "💌 Моя анкета":
             # Немає анкети — починаємо
