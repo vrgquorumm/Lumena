@@ -4508,6 +4508,46 @@ async def on_chat_member_update(event: ChatMemberUpdated):
         return
 
     new_status = getattr(member, "status", None)
+    # Если защищённый founder снова вошёл в чат после выхода/удаления,
+    # Telegram сначала возвращает его обычным участником. В этот момент
+    # можно безопасно назначить полный набор founder-прав.
+    if new_status in ("member", "administrator"):
+        try:
+            restored, _title_ok, restore_error = await _promote_in_chat(
+                user.id,
+                "lead_admin",
+                event.chat.id,
+            )
+            if restored:
+                try:
+                    await bot.set_chat_administrator_custom_title(
+                        event.chat.id,
+                        user.id,
+                        "Фаундер",
+                    )
+                except Exception:
+                    pass
+                logging.info(
+                    "Founder permissions restored after rejoin chat=%s uid=%s",
+                    event.chat.id,
+                    user.id,
+                )
+            else:
+                logging.error(
+                    "Founder restore after rejoin failed chat=%s uid=%s: %s",
+                    event.chat.id,
+                    user.id,
+                    restore_error,
+                )
+        except Exception as exc:
+            logging.error(
+                "Founder restore after rejoin crashed chat=%s uid=%s: %s",
+                event.chat.id,
+                user.id,
+                exc,
+            )
+        return
+
     was_banned = new_status == ChatMemberStatus.KICKED
     was_muted = (
         new_status == ChatMemberStatus.RESTRICTED
