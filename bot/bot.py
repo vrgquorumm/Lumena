@@ -98,10 +98,13 @@ LMN_GLOBAL_ZERO_VERSION = 2  # ручное обнуление кошелько�
 OWNER_AUTO_CREDIT_ENABLED = False  # после общего сброса фаундеру не начисляются монеты автоматически
 FOUNDER_GRANT_VERSION = 1
 FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
-# Дополнительные тематические паки, которые смешиваются с основным при старте.
+# Основной набор и дополнительные тематические паки, которые смешиваются
+# в единую тему при старте.
+PRIMARY_EMOJI_PACK = "blackred1_by_TgEmojiBot"
 EXTRA_EMOJI_PACKS = (
-    "metallic_by_emsetbot",
-    "BlackRandom_by_emsetbot",
+    "v2s7X8_by_EmojiRuBot",
+    "PeachCatEmoji",
+    "Pink_72dbe_by_TgEmodziBot",
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -17990,33 +17993,47 @@ async def main():
     brand.load_custom_buttons()
     brand.load_custom_style()
 
-    # ── Загружаем emoji пак при старте ───────────────────
-    # В snapshot имя может быть составным: берём первый пак как основной,
-    # а дополнительные ниже подмешиваются отдельно.
-    _startup_pack = (
-        (brand.get_pack_name().split("+", 1)[0].strip())
-        or "adaptiveqp_by_emsetbot"
+    # ── Загружаем постоянную объединённую emoji-тему ─────
+    _desired_emoji_packs = [PRIMARY_EMOJI_PACK, *EXTRA_EMOJI_PACKS]
+    _current_emoji_packs = [
+        part.strip()
+        for part in brand.get_pack_name().split("+")
+        if part.strip()
+    ]
+    _theme_needs_refresh = (
+        not brand.has_pack()
+        or not brand.has_emoji_map()
+        or _current_emoji_packs != _desired_emoji_packs
     )
-    if not brand.has_pack() or not brand.has_emoji_map():
+    _theme_changed = False
+    if _theme_needs_refresh:
         try:
-            _ids, _emoji_map = await _fetch_emoji_pack(_startup_pack)
+            _ids, _emoji_map = await _fetch_emoji_pack(PRIMARY_EMOJI_PACK)
             if _ids:
-                brand.set_pack(_ids, _startup_pack, _emoji_map)
-                print(f"✅ Emoji пак загружен: {_startup_pack} ({len(_ids)} emoji)")
+                brand.set_pack(_ids, PRIMARY_EMOJI_PACK, _emoji_map)
+                _theme_changed = True
+                print(
+                    f"✅ Основной emoji пак загружен: "
+                    f"{PRIMARY_EMOJI_PACK} ({len(_ids)} emoji)"
+                )
         except Exception as _ex:
-            print(f"⚠️ Не удалось загрузить emoji пак '{_startup_pack}': {_ex}")
+            print(
+                f"⚠️ Не удалось загрузить основной emoji пак "
+                f"'{PRIMARY_EMOJI_PACK}': {_ex}"
+            )
 
     # ── Подмешиваем дополнительные тематические паки ─────
     _extra_pack_changed = False
     for _extra_pack in EXTRA_EMOJI_PACKS:
+        if not _theme_changed and _extra_pack in _current_emoji_packs:
+            continue
         try:
             _extra_ids, _extra_map = await _fetch_emoji_pack(_extra_pack)
             _before_ids = len(brand.get_pack())
-            _before_name = brand.get_pack_name()
             brand.merge_pack(_extra_ids, _extra_pack, _extra_map)
             if (
                 len(brand.get_pack()) != _before_ids
-                or _extra_pack not in _before_name.split("+")
+                or _extra_pack not in brand.get_pack_name().split("+")
             ):
                 _extra_pack_changed = True
             print(
@@ -18025,7 +18042,7 @@ async def main():
             )
         except Exception as _ex:
             print(f"⚠️ Не удалось подмешать emoji пак '{_extra_pack}': {_ex}")
-    if _extra_pack_changed:
+    if _theme_changed or _extra_pack_changed:
         await save_state_now("автоматическое смешивание дополнительных emoji-паков")
 
     asyncio.create_task(auto_save_loop())
