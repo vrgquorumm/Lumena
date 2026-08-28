@@ -12,6 +12,7 @@ _pack_name: str = ""
 _emoji_map: dict[str, str] = {}
 _pack_enabled: bool = True
 MAX_PACK_IDS = 1000
+_emoji_cursor: int = 0
 
 # ── Кастомный стиль ───────────────────────────────────────
 _custom_style: dict[str, str] = {}
@@ -304,10 +305,31 @@ def get_id(idx: int) -> str | None:
     return _pack_ids[idx] if idx < len(_pack_ids) else None
 
 
+def _next_pack_id(preferred_idx: int | None = None) -> str | None:
+    """Возвращает следующий ID из всей объединённой темы."""
+    global _emoji_cursor
+    if not _pack_ids or not _pack_enabled:
+        return None
+    base = preferred_idx or 0
+    index = (base + _emoji_cursor) % len(_pack_ids)
+    _emoji_cursor = (_emoji_cursor + 1) % len(_pack_ids)
+    return _pack_ids[index]
+
+
+def _variant_pack_id(mapped_id: str | None = None) -> str | None:
+    """Возвращает вариант из темы, сохраняя точку старта знакомого emoji."""
+    if mapped_id:
+        try:
+            return _next_pack_id(_pack_ids.index(mapped_id))
+        except ValueError:
+            pass
+    return _next_pack_id()
+
+
 def get_role_id(role: str) -> str | None:
     """ID кастомного emoji из пака по роли (для entity-подхода, не для HTML)."""
     idx = _ROLE_IDX.get(role)
-    return _pack_ids[idx] if idx is not None and idx < len(_pack_ids) else None
+    return _next_pack_id(idx)
 
 
 def hdr() -> str:
@@ -383,9 +405,10 @@ def set_pack(
     emoji_map: dict[str, str] | None = None,
 ) -> None:
     """Устанавливает emoji пак по списку ID."""
-    global _pack_ids, _pack_name, _emoji_map, _pack_enabled
+    global _pack_ids, _pack_name, _emoji_map, _pack_enabled, _emoji_cursor
     _pack_ids = [str(value) for value in ids if str(value).strip()][:MAX_PACK_IDS]
     _pack_name = str(name or "")[:128]
+    _emoji_cursor = 0
     if emoji_map is not None:
         _emoji_map = {
             str(emoji): str(value)
@@ -519,14 +542,12 @@ def replace_emojis_html(text: str | None) -> str | None:
 
     safe = _TG_EMOJI_TAG_RE.sub(protect, text)
     safe = _HTML_TAG_RE.sub(protect, safe)
-    fallback_id = _pack_ids[0] if _pack_ids else None
-
     def replace_match(match) -> str:
         emoji = match.group(0)
         custom_id = _emoji_map.get(emoji)
         if custom_id is None:
             custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
-        custom_id = custom_id or fallback_id
+        custom_id = _variant_pack_id(custom_id)
         return _custom_emoji_tag(emoji, custom_id) if custom_id else emoji
 
     safe = _EMOJI_SEQUENCE_RE.sub(replace_match, safe)
@@ -540,14 +561,12 @@ def replace_emojis_markdown(text: str | None, parse_mode: str) -> str | None:
     if not text or not has_pack():
         return text
     markdown_v2 = parse_mode == "MarkdownV2"
-    fallback_id = _pack_ids[0] if _pack_ids else None
-
     def replace_match(match) -> str:
         emoji = match.group(0)
         custom_id = _emoji_map.get(emoji)
         if custom_id is None:
             custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
-        custom_id = custom_id or fallback_id
+        custom_id = _variant_pack_id(custom_id)
         if not custom_id:
             return emoji
         if markdown_v2:
@@ -568,7 +587,7 @@ def first_emoji_id(text: str | None) -> str | None:
             matches.append((position, -len(emoji), custom_id))
     if matches:
         return min(matches)[2]
-    return _pack_ids[0] if _pack_ids else None
+    return _next_pack_id()
 
 
 def strip_mapped_emojis(text: str | None) -> str | None:
