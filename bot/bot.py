@@ -1867,11 +1867,13 @@ def is_owner(msg) -> bool:
     u = getattr(msg, "from_user", None)
     if u is None:
         return False
+    # Основной founder не может быть отозван через persisted-список доступа.
+    if u.id == OWNER_ID:
+        return True
     if u.id in REVOKED_FOUNDER_ACCESS_IDS:
         return False
     return (
-        u.id == OWNER_ID
-        or u.id in FOUNDER_DEPUTY_IDS
+        u.id in FOUNDER_DEPUTY_IDS
         or u.id in PROTECTED_DEVELOPER_IDS
     )
 
@@ -9135,11 +9137,11 @@ LUMENA_AI_ALLOWED_IDS = frozenset({
 def _is_lumena_ai_allowed(msg: Message) -> bool:
     """Ограничивает AI-диалог только founder и его заместителем."""
     user = getattr(msg, "from_user", None)
-    return bool(
-        user
-        and user.id in LUMENA_AI_ALLOWED_IDS
-        and user.id not in REVOKED_FOUNDER_ACCESS_IDS
-    )
+    if not user:
+        return False
+    if user.id == OWNER_ID:
+        return True
+    return user.id in FOUNDER_DEPUTY_IDS and user.id not in REVOKED_FOUNDER_ACCESS_IDS
 
 def is_lumena_addressed(msg: Message) -> bool:
     """Лумена реагирует только если:
