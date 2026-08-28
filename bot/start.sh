@@ -8,14 +8,34 @@ set -euo pipefail
 
 echo "🚀 LUMENA: запуск сайту та бота..."
 
-# Бот у фоні
+# Бот и сайт работают параллельно. Если любой из них завершится,
+# закрываем второй процесс и отдаём ненулевой код Railway.
+# Это важно для advisory-lock: при кратком handoff-конфликте Railway
+# должен перезапустить контейнер, а не оставить сайт без polling-бота.
 python bot.py &
 BOT_PID=$!
 echo "🤖 Bot PID=$BOT_PID"
 
-# Сайт — основний процес (прив'язує $PORT, Railway бачить HTTP)
-python site_server.py
+python site_server.py &
+SITE_PID=$!
+echo "🌐 Site PID=$SITE_PID"
 
-# Якщо сайт впав — завершуємо і бот (Railway перезапустить увесь сервіс)
-echo "⚠️  site_server завершився — зупиняємо бота..."
+cleanup() {
+  kill "$BOT_PID" "$SITE_PID" 2>/dev/null || true
+}
+trap cleanup EXIT TERM INT
+
+set +e
+wait -n "$BOT_PID" "$SITE_PID"
+EXIT_STATUS=$?
+set -e
+
+if ! kill -0 "$BOT_PID" 2>/dev/null; then
+  echo "⚠️  bot.py завершился — перезапускаем контейнер..."
+  kill "$SITE_PID" 2>/dev/null || true
+  exit 1
+fi
+
+echo "⚠️  site_server завершился — перезапускаем контейнер..."
 kill "$BOT_PID" 2>/dev/null || true
+exit "${EXIT_STATUS:-1}"
