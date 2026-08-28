@@ -17088,7 +17088,7 @@ async def _lumena_ai_group(msg: Message):
     # на випадкові частини інших слів.
     if not is_addressed:
         is_addressed = bool(re.match(
-            r"^(?:лумена|лумену|лумко|лумка|лум|lumena)\b[\s,!.:;—-]",
+            r"^(?:лумена|лумену|лумко|лумка|лум|lumena)\b(?:$|[\s,!.:;—-])",
             tl,
             flags=re.IGNORECASE,
         ))
@@ -17772,9 +17772,10 @@ async def universal_handler(msg: Message):
             if msg.chat.type == "private":
                 await _lumena_ai_private(msg)
                 return
-            if is_lumena_addressed(msg):
-                await _lumena_ai_group(msg)
-                return
+            # Групповой хелпер сам проверяет reply/@mention/обращение по имени.
+            # Не дублируем здесь адресатор, чтобы условия не расходились.
+            await _lumena_ai_group(msg)
+            return
         return
 
 # ═══════════════════════════════════════════════════════
