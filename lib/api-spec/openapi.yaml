@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: game
+    description: Lumka Catostroy game operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,102 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /game/state:
+    post:
+      operationId: getGameState
+      tags: [game]
+      summary: Load the authenticated player's game state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameSessionInput"
+      responses:
+        "200":
+          description: Current game state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "401":
+          description: Invalid Telegram Mini App session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /game/quests/{questId}/start:
+    post:
+      operationId: startGameQuest
+      tags: [game]
+      summary: Start an available quest
+      parameters:
+        - name: questId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameActionInput"
+      responses:
+        "200":
+          description: Updated game state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Quest cannot be started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid Telegram Mini App session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /game/quests/{questId}/claim:
+    post:
+      operationId: claimGameQuest
+      tags: [game]
+      summary: Claim a completed quest reward
+      parameters:
+        - name: questId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameActionInput"
+      responses:
+        "200":
+          description: Updated game state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Quest cannot be claimed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid Telegram Mini App session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +131,102 @@ components:
           type: string
       required:
         - status
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    GameSessionInput:
+      type: object
+      properties:
+        initData:
+          type: string
+          minLength: 1
+      required:
+        - initData
+    GameActionInput:
+      type: object
+      properties:
+        initData:
+          type: string
+          minLength: 1
+      required:
+        - initData
+    GameLocation:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        state:
+          type: string
+          enum: [available, locked, discovered]
+        accent:
+          type: string
+      required: [id, title, description, state, accent]
+    GameQuest:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        locationId:
+          type: string
+        rewardLmn:
+          type: number
+          minimum: 0
+        progress:
+          type: number
+          minimum: 0
+        goal:
+          type: number
+          minimum: 1
+        status:
+          type: string
+          enum: [locked, available, in_progress, completed, claimed]
+      required:
+        [id, title, description, locationId, rewardLmn, progress, goal, status]
+    GameState:
+      type: object
+      properties:
+        player:
+          type: object
+          properties:
+            displayName:
+              type: string
+            level:
+              type: number
+              minimum: 1
+            xp:
+              type: number
+              minimum: 0
+            xpToNext:
+              type: number
+              minimum: 1
+            gameLmn:
+              type: number
+              minimum: 0
+          required: [displayName, level, xp, xpToNext, gameLmn]
+        locations:
+          type: array
+          items:
+            $ref: "#/components/schemas/GameLocation"
+        quests:
+          type: array
+          items:
+            $ref: "#/components/schemas/GameQuest"
+        featuredQuestId:
+          type: ["string", "null"]
+        streak:
+          type: number
+          minimum: 0
+      required: [player, locations, quests, featuredQuestId, streak]
 
