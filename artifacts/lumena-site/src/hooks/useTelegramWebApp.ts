@@ -13,6 +13,7 @@ declare global {
       WebApp: {
         ready(): void;
         expand(): void;
+        initData: string;
         colorScheme: 'light' | 'dark';
         themeParams: Record<string, string>;
         initDataUnsafe: {
