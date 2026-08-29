@@ -6,7 +6,7 @@ RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY artifacts/lumena-site/package.json artifacts/lumena-site/tsconfig.json artifacts/lumena-site/vite.config.ts artifacts/lumena-site/index.html ./artifacts/lumena-site/
-COPY lib/api-client-react/package.json ./lib/api-client-react/
+COPY lib/api-client-react/package.json lib/api-client-react/tsconfig.json ./lib/api-client-react/
 
 RUN pnpm install --frozen-lockfile --ignore-scripts
 
