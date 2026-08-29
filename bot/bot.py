@@ -17,6 +17,7 @@ import unicodedata
 import uuid
 from datetime import datetime, timedelta, date, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 UTC = timezone.utc   # используется в restrict_chat_member until_date
@@ -43,6 +44,7 @@ from aiogram.types import (
     BotCommandScopeDefault,
     InputMediaPhoto, InputMediaVideo,
     LabeledPrice, MessageEntity,
+    WebAppInfo,
 )
 from aiogram.enums import ChatMemberStatus
 
@@ -87,6 +89,17 @@ DATA_FILE = "data/bot_data.json"
 ADMIN_RULES_FILE = Path(__file__).with_name("admin_rules.txt")
 
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
+_configured_game_url = os.environ.get("GAME_WEBAPP_URL", "").strip()
+if not _configured_game_url and LUMENA_SITE_URL:
+    _configured_game_url = f"{LUMENA_SITE_URL.rstrip('/')}/game"
+_game_url_parts = urlparse(_configured_game_url)
+GAME_WEBAPP_URL: str = (
+    _configured_game_url
+    if _game_url_parts.scheme == "https" and bool(_game_url_parts.netloc)
+    else ""
+)
+if _configured_game_url and not GAME_WEBAPP_URL:
+    logging.warning("GAME_WEBAPP_URL должен быть полноценным HTTPS URL; кнопка игры отключена")
 CASINO_BOT_URL = "https://t.me/LumenarAi_Bot"
 LMN_BALANCE_RESET_TARGET = 7_000_000_000
 LMN_BALANCE_RESET_VERSION = 3  # v3: компенсация 7 млрд всем пользователям
@@ -13698,11 +13711,38 @@ def build_main_kb(uid: int | None = None) -> InlineKeyboardMarkup:
                 callback_data="ank_feed:open",
             ),
         ])
+    if GAME_WEBAPP_URL:
+        rows.append([
+            InlineKeyboardButton(
+                text="🏗 Открыть Котострой",
+                web_app=WebAppInfo(url=GAME_WEBAPP_URL),
+            ),
+        ])
     rows.append([InlineKeyboardButton(text=help_label, callback_data="help:menu")])
     # Ссылка на сайт
     if LUMENA_SITE_URL:
         rows.append([InlineKeyboardButton(text="🌐 Сайт Лумены", url=LUMENA_SITE_URL)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def cmd_game(msg: Message):
+    """Открывает Telegram Mini App с городом Лумки."""
+    if not GAME_WEBAPP_URL:
+        await msg.answer(
+            "🏗 Игра пока не подключена: администратору нужно задать GAME_WEBAPP_URL."
+        )
+        return
+    await msg.answer(
+        "🏗 <b>Лумка: Котострой</b>\n\n"
+        "Открой город, выполни первое дело и забери свои игровые LMN.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="Открыть игру",
+                web_app=WebAppInfo(url=GAME_WEBAPP_URL),
+            ),
+        ]]),
+    )
 
 
 @dp.message(Command("start"), F.chat.type == "private")
@@ -16829,6 +16869,7 @@ TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_COMMAND] = cmd_founder_bind_observer_chat
 TEXT_COMMANDS[FOUNDER_BIND_CHAT_LEGACY] = cmd_founder_bind_main_chat
 TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_LEGACY] = cmd_founder_bind_observer_chat
 TEXT_COMMANDS["флюди"] = cmd_founder_users
+TEXT_COMMANDS["game"] = cmd_game
 
 
 @dp.message(F.photo, F.chat.type == "private")
@@ -18225,6 +18266,7 @@ async def main():
                 BotCommand(command="addtheme", description="➕ Смешать emoji-пак"),
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="shop", description="💎 Магазин"),
+                BotCommand(command="game", description="🏗 Открыть Котострой"),
                 BotCommand(command="anketa", description="📝 Создать анкету"),
                 BotCommand(command="helplum", description="📩 Жалобы и вопросы"),
             ],
