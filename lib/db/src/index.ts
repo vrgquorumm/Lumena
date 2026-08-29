@@ -13,6 +13,15 @@ if (!process.env.DATABASE_URL) {
 const databaseUrl = process.env.DATABASE_URL;
 const parsedDatabaseUrl = new URL(databaseUrl);
 const sslMode = parsedDatabaseUrl.searchParams.get("sslmode");
+const poolConnectionUrl = new URL(databaseUrl);
+
+// pg's connection-string parser turns `sslmode=require` into strict
+// certificate verification, which overrides the explicit ssl object below.
+// Remove only that hint and configure the intended encrypted connection in
+// the Pool options instead.
+if (sslMode === "require") {
+  poolConnectionUrl.searchParams.delete("sslmode");
+}
 
 // Railway's public TCP proxy uses a certificate issued for the proxy
 // infrastructure rather than the database hostname. Keep TLS encryption
@@ -25,7 +34,7 @@ const ssl =
       : undefined;
 
 export const pool = new Pool({
-  connectionString: databaseUrl,
+  connectionString: poolConnectionUrl.toString(),
   ...(ssl === undefined ? {} : { ssl }),
 });
 export const db = drizzle(pool, { schema });
