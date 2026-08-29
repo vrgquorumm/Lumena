@@ -16,6 +16,7 @@ export const HealthCheckResponse = zod.object({
   "status": zod.string()
 })
 
+
 /**
  * @summary Load the authenticated player's game state
  */
@@ -38,6 +39,61 @@ export const getGameStateResponseQuestsItemProgressMin = 0;
 
 
 export const getGameStateResponseStreakMin = 0;
+
+
+export const getGameStateResponseKingdomPowerMin = 0;
+
+export const getGameStateResponseKingdomResourcesFoodMin = 0;
+
+export const getGameStateResponseKingdomResourcesWoodMin = 0;
+
+export const getGameStateResponseKingdomResourcesStoneMin = 0;
+
+export const getGameStateResponseKingdomResourcesIronMin = 0;
+
+export const getGameStateResponseKingdomProductionPerHourFoodMin = 0;
+
+export const getGameStateResponseKingdomProductionPerHourWoodMin = 0;
+
+export const getGameStateResponseKingdomProductionPerHourStoneMin = 0;
+
+export const getGameStateResponseKingdomProductionPerHourIronMin = 0;
+
+
+export const getGameStateResponseKingdomBuildingsItemUpgradeCostFoodMin = 0;
+
+export const getGameStateResponseKingdomBuildingsItemUpgradeCostWoodMin = 0;
+
+export const getGameStateResponseKingdomBuildingsItemUpgradeCostStoneMin = 0;
+
+export const getGameStateResponseKingdomBuildingsItemUpgradeCostIronMin = 0;
+
+export const getGameStateResponseKingdomResearchItemLevelMin = 0;
+
+export const getGameStateResponseKingdomResearchItemResearchCostFoodMin = 0;
+
+export const getGameStateResponseKingdomResearchItemResearchCostWoodMin = 0;
+
+export const getGameStateResponseKingdomResearchItemResearchCostStoneMin = 0;
+
+export const getGameStateResponseKingdomResearchItemResearchCostIronMin = 0;
+
+export const getGameStateResponseKingdomArmyScoutMin = 0;
+
+export const getGameStateResponseKingdomArmyInfantryMin = 0;
+
+export const getGameStateResponseKingdomArmyCavalryMin = 0;
+
+export const getGameStateResponseKingdomArmyArcherMin = 0;
+
+export const getGameStateResponseKingdomArmyTotalPowerMin = 0;
+
+export const getGameStateResponseMapTilesItemPowerMin = 0;
+
+
+export const getGameStateResponseEventsItemProgressMin = 0;
+
+
 
 
 
@@ -67,7 +123,101 @@ export const GetGameStateResponse = zod.object({
   "status": zod.enum(['locked', 'available', 'in_progress', 'completed', 'claimed'])
 })),
   "featuredQuestId": zod.string().nullable(),
-  "streak": zod.number().min(getGameStateResponseStreakMin)
+  "streak": zod.number().min(getGameStateResponseStreakMin),
+  "kingdom": zod.object({
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "power": zod.number().min(getGameStateResponseKingdomPowerMin),
+  "resources": zod.object({
+  "food": zod.number().min(getGameStateResponseKingdomResourcesFoodMin),
+  "wood": zod.number().min(getGameStateResponseKingdomResourcesWoodMin),
+  "stone": zod.number().min(getGameStateResponseKingdomResourcesStoneMin),
+  "iron": zod.number().min(getGameStateResponseKingdomResourcesIronMin)
+}),
+  "productionPerHour": zod.object({
+  "food": zod.number().min(getGameStateResponseKingdomProductionPerHourFoodMin),
+  "wood": zod.number().min(getGameStateResponseKingdomProductionPerHourWoodMin),
+  "stone": zod.number().min(getGameStateResponseKingdomProductionPerHourStoneMin),
+  "iron": zod.number().min(getGameStateResponseKingdomProductionPerHourIronMin)
+}),
+  "buildings": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "description": zod.string(),
+  "upgradeCost": zod.object({
+  "food": zod.number().min(getGameStateResponseKingdomBuildingsItemUpgradeCostFoodMin),
+  "wood": zod.number().min(getGameStateResponseKingdomBuildingsItemUpgradeCostWoodMin),
+  "stone": zod.number().min(getGameStateResponseKingdomBuildingsItemUpgradeCostStoneMin),
+  "iron": zod.number().min(getGameStateResponseKingdomBuildingsItemUpgradeCostIronMin)
+})
+})),
+  "research": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(getGameStateResponseKingdomResearchItemLevelMin),
+  "description": zod.string(),
+  "researchCost": zod.object({
+  "food": zod.number().min(getGameStateResponseKingdomResearchItemResearchCostFoodMin),
+  "wood": zod.number().min(getGameStateResponseKingdomResearchItemResearchCostWoodMin),
+  "stone": zod.number().min(getGameStateResponseKingdomResearchItemResearchCostStoneMin),
+  "iron": zod.number().min(getGameStateResponseKingdomResearchItemResearchCostIronMin)
+})
+})),
+  "army": zod.object({
+  "scout": zod.number().min(getGameStateResponseKingdomArmyScoutMin),
+  "infantry": zod.number().min(getGameStateResponseKingdomArmyInfantryMin),
+  "cavalry": zod.number().min(getGameStateResponseKingdomArmyCavalryMin),
+  "archer": zod.number().min(getGameStateResponseKingdomArmyArcherMin),
+  "totalPower": zod.number().min(getGameStateResponseKingdomArmyTotalPowerMin)
+})
+}),
+  "map": zod.object({
+  "centerX": zod.number(),
+  "centerY": zod.number(),
+  "tiles": zod.array(zod.object({
+  "id": zod.string(),
+  "x": zod.number(),
+  "y": zod.number(),
+  "label": zod.string(),
+  "terrain": zod.string(),
+  "kind": zod.enum(['capital', 'resource', 'npc', 'ruins', 'event', 'player']),
+  "ownerName": zod.string().nullable(),
+  "ownerId": zod.number().nullish(),
+  "power": zod.number().min(getGameStateResponseMapTilesItemPowerMin),
+  "reward": zod.string().nullable(),
+  "discovered": zod.boolean()
+}))
+}),
+  "alliance": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "tag": zod.string(),
+  "role": zod.enum(['leader', 'officer', 'member']),
+  "memberCount": zod.number().min(1),
+  "description": zod.string()
+}).nullable(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "progress": zod.number().min(getGameStateResponseEventsItemProgressMin),
+  "goal": zod.number().min(1),
+  "endsAt": zod.coerce.date(),
+  "reward": zod.string(),
+  "status": zod.enum(['live', 'upcoming', 'complete'])
+})),
+  "reports": zod.array(zod.object({
+  "id": zod.string(),
+  "battleType": zod.enum(['scout', 'npc', 'pvp']),
+  "opponent": zod.string(),
+  "result": zod.enum(['victory', 'defeat', 'discovered']),
+  "powerDelta": zod.number(),
+  "reward": zod.string(),
+  "createdAt": zod.coerce.date()
+})),
+  "onlinePlayers": zod.number().min(1),
+  "serverTime": zod.coerce.date()
 })
 
 
@@ -99,6 +249,61 @@ export const startGameQuestResponseQuestsItemProgressMin = 0;
 export const startGameQuestResponseStreakMin = 0;
 
 
+export const startGameQuestResponseKingdomPowerMin = 0;
+
+export const startGameQuestResponseKingdomResourcesFoodMin = 0;
+
+export const startGameQuestResponseKingdomResourcesWoodMin = 0;
+
+export const startGameQuestResponseKingdomResourcesStoneMin = 0;
+
+export const startGameQuestResponseKingdomResourcesIronMin = 0;
+
+export const startGameQuestResponseKingdomProductionPerHourFoodMin = 0;
+
+export const startGameQuestResponseKingdomProductionPerHourWoodMin = 0;
+
+export const startGameQuestResponseKingdomProductionPerHourStoneMin = 0;
+
+export const startGameQuestResponseKingdomProductionPerHourIronMin = 0;
+
+
+export const startGameQuestResponseKingdomBuildingsItemUpgradeCostFoodMin = 0;
+
+export const startGameQuestResponseKingdomBuildingsItemUpgradeCostWoodMin = 0;
+
+export const startGameQuestResponseKingdomBuildingsItemUpgradeCostStoneMin = 0;
+
+export const startGameQuestResponseKingdomBuildingsItemUpgradeCostIronMin = 0;
+
+export const startGameQuestResponseKingdomResearchItemLevelMin = 0;
+
+export const startGameQuestResponseKingdomResearchItemResearchCostFoodMin = 0;
+
+export const startGameQuestResponseKingdomResearchItemResearchCostWoodMin = 0;
+
+export const startGameQuestResponseKingdomResearchItemResearchCostStoneMin = 0;
+
+export const startGameQuestResponseKingdomResearchItemResearchCostIronMin = 0;
+
+export const startGameQuestResponseKingdomArmyScoutMin = 0;
+
+export const startGameQuestResponseKingdomArmyInfantryMin = 0;
+
+export const startGameQuestResponseKingdomArmyCavalryMin = 0;
+
+export const startGameQuestResponseKingdomArmyArcherMin = 0;
+
+export const startGameQuestResponseKingdomArmyTotalPowerMin = 0;
+
+export const startGameQuestResponseMapTilesItemPowerMin = 0;
+
+
+export const startGameQuestResponseEventsItemProgressMin = 0;
+
+
+
+
 
 export const StartGameQuestResponse = zod.object({
   "player": zod.object({
@@ -126,7 +331,101 @@ export const StartGameQuestResponse = zod.object({
   "status": zod.enum(['locked', 'available', 'in_progress', 'completed', 'claimed'])
 })),
   "featuredQuestId": zod.string().nullable(),
-  "streak": zod.number().min(startGameQuestResponseStreakMin)
+  "streak": zod.number().min(startGameQuestResponseStreakMin),
+  "kingdom": zod.object({
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "power": zod.number().min(startGameQuestResponseKingdomPowerMin),
+  "resources": zod.object({
+  "food": zod.number().min(startGameQuestResponseKingdomResourcesFoodMin),
+  "wood": zod.number().min(startGameQuestResponseKingdomResourcesWoodMin),
+  "stone": zod.number().min(startGameQuestResponseKingdomResourcesStoneMin),
+  "iron": zod.number().min(startGameQuestResponseKingdomResourcesIronMin)
+}),
+  "productionPerHour": zod.object({
+  "food": zod.number().min(startGameQuestResponseKingdomProductionPerHourFoodMin),
+  "wood": zod.number().min(startGameQuestResponseKingdomProductionPerHourWoodMin),
+  "stone": zod.number().min(startGameQuestResponseKingdomProductionPerHourStoneMin),
+  "iron": zod.number().min(startGameQuestResponseKingdomProductionPerHourIronMin)
+}),
+  "buildings": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "description": zod.string(),
+  "upgradeCost": zod.object({
+  "food": zod.number().min(startGameQuestResponseKingdomBuildingsItemUpgradeCostFoodMin),
+  "wood": zod.number().min(startGameQuestResponseKingdomBuildingsItemUpgradeCostWoodMin),
+  "stone": zod.number().min(startGameQuestResponseKingdomBuildingsItemUpgradeCostStoneMin),
+  "iron": zod.number().min(startGameQuestResponseKingdomBuildingsItemUpgradeCostIronMin)
+})
+})),
+  "research": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(startGameQuestResponseKingdomResearchItemLevelMin),
+  "description": zod.string(),
+  "researchCost": zod.object({
+  "food": zod.number().min(startGameQuestResponseKingdomResearchItemResearchCostFoodMin),
+  "wood": zod.number().min(startGameQuestResponseKingdomResearchItemResearchCostWoodMin),
+  "stone": zod.number().min(startGameQuestResponseKingdomResearchItemResearchCostStoneMin),
+  "iron": zod.number().min(startGameQuestResponseKingdomResearchItemResearchCostIronMin)
+})
+})),
+  "army": zod.object({
+  "scout": zod.number().min(startGameQuestResponseKingdomArmyScoutMin),
+  "infantry": zod.number().min(startGameQuestResponseKingdomArmyInfantryMin),
+  "cavalry": zod.number().min(startGameQuestResponseKingdomArmyCavalryMin),
+  "archer": zod.number().min(startGameQuestResponseKingdomArmyArcherMin),
+  "totalPower": zod.number().min(startGameQuestResponseKingdomArmyTotalPowerMin)
+})
+}),
+  "map": zod.object({
+  "centerX": zod.number(),
+  "centerY": zod.number(),
+  "tiles": zod.array(zod.object({
+  "id": zod.string(),
+  "x": zod.number(),
+  "y": zod.number(),
+  "label": zod.string(),
+  "terrain": zod.string(),
+  "kind": zod.enum(['capital', 'resource', 'npc', 'ruins', 'event', 'player']),
+  "ownerName": zod.string().nullable(),
+  "ownerId": zod.number().nullish(),
+  "power": zod.number().min(startGameQuestResponseMapTilesItemPowerMin),
+  "reward": zod.string().nullable(),
+  "discovered": zod.boolean()
+}))
+}),
+  "alliance": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "tag": zod.string(),
+  "role": zod.enum(['leader', 'officer', 'member']),
+  "memberCount": zod.number().min(1),
+  "description": zod.string()
+}).nullable(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "progress": zod.number().min(startGameQuestResponseEventsItemProgressMin),
+  "goal": zod.number().min(1),
+  "endsAt": zod.coerce.date(),
+  "reward": zod.string(),
+  "status": zod.enum(['live', 'upcoming', 'complete'])
+})),
+  "reports": zod.array(zod.object({
+  "id": zod.string(),
+  "battleType": zod.enum(['scout', 'npc', 'pvp']),
+  "opponent": zod.string(),
+  "result": zod.enum(['victory', 'defeat', 'discovered']),
+  "powerDelta": zod.number(),
+  "reward": zod.string(),
+  "createdAt": zod.coerce.date()
+})),
+  "onlinePlayers": zod.number().min(1),
+  "serverTime": zod.coerce.date()
 })
 
 
@@ -158,6 +457,61 @@ export const claimGameQuestResponseQuestsItemProgressMin = 0;
 export const claimGameQuestResponseStreakMin = 0;
 
 
+export const claimGameQuestResponseKingdomPowerMin = 0;
+
+export const claimGameQuestResponseKingdomResourcesFoodMin = 0;
+
+export const claimGameQuestResponseKingdomResourcesWoodMin = 0;
+
+export const claimGameQuestResponseKingdomResourcesStoneMin = 0;
+
+export const claimGameQuestResponseKingdomResourcesIronMin = 0;
+
+export const claimGameQuestResponseKingdomProductionPerHourFoodMin = 0;
+
+export const claimGameQuestResponseKingdomProductionPerHourWoodMin = 0;
+
+export const claimGameQuestResponseKingdomProductionPerHourStoneMin = 0;
+
+export const claimGameQuestResponseKingdomProductionPerHourIronMin = 0;
+
+
+export const claimGameQuestResponseKingdomBuildingsItemUpgradeCostFoodMin = 0;
+
+export const claimGameQuestResponseKingdomBuildingsItemUpgradeCostWoodMin = 0;
+
+export const claimGameQuestResponseKingdomBuildingsItemUpgradeCostStoneMin = 0;
+
+export const claimGameQuestResponseKingdomBuildingsItemUpgradeCostIronMin = 0;
+
+export const claimGameQuestResponseKingdomResearchItemLevelMin = 0;
+
+export const claimGameQuestResponseKingdomResearchItemResearchCostFoodMin = 0;
+
+export const claimGameQuestResponseKingdomResearchItemResearchCostWoodMin = 0;
+
+export const claimGameQuestResponseKingdomResearchItemResearchCostStoneMin = 0;
+
+export const claimGameQuestResponseKingdomResearchItemResearchCostIronMin = 0;
+
+export const claimGameQuestResponseKingdomArmyScoutMin = 0;
+
+export const claimGameQuestResponseKingdomArmyInfantryMin = 0;
+
+export const claimGameQuestResponseKingdomArmyCavalryMin = 0;
+
+export const claimGameQuestResponseKingdomArmyArcherMin = 0;
+
+export const claimGameQuestResponseKingdomArmyTotalPowerMin = 0;
+
+export const claimGameQuestResponseMapTilesItemPowerMin = 0;
+
+
+export const claimGameQuestResponseEventsItemProgressMin = 0;
+
+
+
+
 
 export const ClaimGameQuestResponse = zod.object({
   "player": zod.object({
@@ -185,5 +539,331 @@ export const ClaimGameQuestResponse = zod.object({
   "status": zod.enum(['locked', 'available', 'in_progress', 'completed', 'claimed'])
 })),
   "featuredQuestId": zod.string().nullable(),
-  "streak": zod.number().min(claimGameQuestResponseStreakMin)
+  "streak": zod.number().min(claimGameQuestResponseStreakMin),
+  "kingdom": zod.object({
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "power": zod.number().min(claimGameQuestResponseKingdomPowerMin),
+  "resources": zod.object({
+  "food": zod.number().min(claimGameQuestResponseKingdomResourcesFoodMin),
+  "wood": zod.number().min(claimGameQuestResponseKingdomResourcesWoodMin),
+  "stone": zod.number().min(claimGameQuestResponseKingdomResourcesStoneMin),
+  "iron": zod.number().min(claimGameQuestResponseKingdomResourcesIronMin)
+}),
+  "productionPerHour": zod.object({
+  "food": zod.number().min(claimGameQuestResponseKingdomProductionPerHourFoodMin),
+  "wood": zod.number().min(claimGameQuestResponseKingdomProductionPerHourWoodMin),
+  "stone": zod.number().min(claimGameQuestResponseKingdomProductionPerHourStoneMin),
+  "iron": zod.number().min(claimGameQuestResponseKingdomProductionPerHourIronMin)
+}),
+  "buildings": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "description": zod.string(),
+  "upgradeCost": zod.object({
+  "food": zod.number().min(claimGameQuestResponseKingdomBuildingsItemUpgradeCostFoodMin),
+  "wood": zod.number().min(claimGameQuestResponseKingdomBuildingsItemUpgradeCostWoodMin),
+  "stone": zod.number().min(claimGameQuestResponseKingdomBuildingsItemUpgradeCostStoneMin),
+  "iron": zod.number().min(claimGameQuestResponseKingdomBuildingsItemUpgradeCostIronMin)
 })
+})),
+  "research": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(claimGameQuestResponseKingdomResearchItemLevelMin),
+  "description": zod.string(),
+  "researchCost": zod.object({
+  "food": zod.number().min(claimGameQuestResponseKingdomResearchItemResearchCostFoodMin),
+  "wood": zod.number().min(claimGameQuestResponseKingdomResearchItemResearchCostWoodMin),
+  "stone": zod.number().min(claimGameQuestResponseKingdomResearchItemResearchCostStoneMin),
+  "iron": zod.number().min(claimGameQuestResponseKingdomResearchItemResearchCostIronMin)
+})
+})),
+  "army": zod.object({
+  "scout": zod.number().min(claimGameQuestResponseKingdomArmyScoutMin),
+  "infantry": zod.number().min(claimGameQuestResponseKingdomArmyInfantryMin),
+  "cavalry": zod.number().min(claimGameQuestResponseKingdomArmyCavalryMin),
+  "archer": zod.number().min(claimGameQuestResponseKingdomArmyArcherMin),
+  "totalPower": zod.number().min(claimGameQuestResponseKingdomArmyTotalPowerMin)
+})
+}),
+  "map": zod.object({
+  "centerX": zod.number(),
+  "centerY": zod.number(),
+  "tiles": zod.array(zod.object({
+  "id": zod.string(),
+  "x": zod.number(),
+  "y": zod.number(),
+  "label": zod.string(),
+  "terrain": zod.string(),
+  "kind": zod.enum(['capital', 'resource', 'npc', 'ruins', 'event', 'player']),
+  "ownerName": zod.string().nullable(),
+  "ownerId": zod.number().nullish(),
+  "power": zod.number().min(claimGameQuestResponseMapTilesItemPowerMin),
+  "reward": zod.string().nullable(),
+  "discovered": zod.boolean()
+}))
+}),
+  "alliance": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "tag": zod.string(),
+  "role": zod.enum(['leader', 'officer', 'member']),
+  "memberCount": zod.number().min(1),
+  "description": zod.string()
+}).nullable(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "progress": zod.number().min(claimGameQuestResponseEventsItemProgressMin),
+  "goal": zod.number().min(1),
+  "endsAt": zod.coerce.date(),
+  "reward": zod.string(),
+  "status": zod.enum(['live', 'upcoming', 'complete'])
+})),
+  "reports": zod.array(zod.object({
+  "id": zod.string(),
+  "battleType": zod.enum(['scout', 'npc', 'pvp']),
+  "opponent": zod.string(),
+  "result": zod.enum(['victory', 'defeat', 'discovered']),
+  "powerDelta": zod.number(),
+  "reward": zod.string(),
+  "createdAt": zod.coerce.date()
+})),
+  "onlinePlayers": zod.number().min(1),
+  "serverTime": zod.coerce.date()
+})
+
+
+/**
+ * @summary Execute an authenticated strategy command
+ */
+
+
+export const performGameCommandBodyNameMin = 3;
+export const performGameCommandBodyNameMax = 32;
+
+export const performGameCommandBodyTagMin = 2;
+export const performGameCommandBodyTagMax = 6;
+
+
+
+export const PerformGameCommandBody = zod.object({
+  "initData": zod.string().min(1),
+  "action": zod.enum(['collect_resources', 'upgrade_building', 'research', 'train_army', 'scout', 'attack_npc', 'attack_player', 'create_alliance', 'join_alliance', 'leave_alliance', 'contribute_event']),
+  "targetId": zod.string().optional(),
+  "quantity": zod.number().min(1).optional(),
+  "name": zod.string().min(performGameCommandBodyNameMin).max(performGameCommandBodyNameMax).optional(),
+  "tag": zod.string().min(performGameCommandBodyTagMin).max(performGameCommandBodyTagMax).optional()
+})
+
+
+export const performGameCommandResponsePlayerXpMin = 0;
+
+
+export const performGameCommandResponsePlayerGameLmnMin = 0;
+
+export const performGameCommandResponseQuestsItemRewardLmnMin = 0;
+
+export const performGameCommandResponseQuestsItemProgressMin = 0;
+
+
+export const performGameCommandResponseStreakMin = 0;
+
+
+export const performGameCommandResponseKingdomPowerMin = 0;
+
+export const performGameCommandResponseKingdomResourcesFoodMin = 0;
+
+export const performGameCommandResponseKingdomResourcesWoodMin = 0;
+
+export const performGameCommandResponseKingdomResourcesStoneMin = 0;
+
+export const performGameCommandResponseKingdomResourcesIronMin = 0;
+
+export const performGameCommandResponseKingdomProductionPerHourFoodMin = 0;
+
+export const performGameCommandResponseKingdomProductionPerHourWoodMin = 0;
+
+export const performGameCommandResponseKingdomProductionPerHourStoneMin = 0;
+
+export const performGameCommandResponseKingdomProductionPerHourIronMin = 0;
+
+
+export const performGameCommandResponseKingdomBuildingsItemUpgradeCostFoodMin = 0;
+
+export const performGameCommandResponseKingdomBuildingsItemUpgradeCostWoodMin = 0;
+
+export const performGameCommandResponseKingdomBuildingsItemUpgradeCostStoneMin = 0;
+
+export const performGameCommandResponseKingdomBuildingsItemUpgradeCostIronMin = 0;
+
+export const performGameCommandResponseKingdomResearchItemLevelMin = 0;
+
+export const performGameCommandResponseKingdomResearchItemResearchCostFoodMin = 0;
+
+export const performGameCommandResponseKingdomResearchItemResearchCostWoodMin = 0;
+
+export const performGameCommandResponseKingdomResearchItemResearchCostStoneMin = 0;
+
+export const performGameCommandResponseKingdomResearchItemResearchCostIronMin = 0;
+
+export const performGameCommandResponseKingdomArmyScoutMin = 0;
+
+export const performGameCommandResponseKingdomArmyInfantryMin = 0;
+
+export const performGameCommandResponseKingdomArmyCavalryMin = 0;
+
+export const performGameCommandResponseKingdomArmyArcherMin = 0;
+
+export const performGameCommandResponseKingdomArmyTotalPowerMin = 0;
+
+export const performGameCommandResponseMapTilesItemPowerMin = 0;
+
+
+export const performGameCommandResponseEventsItemProgressMin = 0;
+
+
+
+
+
+export const PerformGameCommandResponse = zod.object({
+  "player": zod.object({
+  "displayName": zod.string(),
+  "level": zod.number().min(1),
+  "xp": zod.number().min(performGameCommandResponsePlayerXpMin),
+  "xpToNext": zod.number().min(1),
+  "gameLmn": zod.number().min(performGameCommandResponsePlayerGameLmnMin)
+}),
+  "locations": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "state": zod.enum(['available', 'locked', 'discovered']),
+  "accent": zod.string()
+})),
+  "quests": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "locationId": zod.string(),
+  "rewardLmn": zod.number().min(performGameCommandResponseQuestsItemRewardLmnMin),
+  "progress": zod.number().min(performGameCommandResponseQuestsItemProgressMin),
+  "goal": zod.number().min(1),
+  "status": zod.enum(['locked', 'available', 'in_progress', 'completed', 'claimed'])
+})),
+  "featuredQuestId": zod.string().nullable(),
+  "streak": zod.number().min(performGameCommandResponseStreakMin),
+  "kingdom": zod.object({
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "power": zod.number().min(performGameCommandResponseKingdomPowerMin),
+  "resources": zod.object({
+  "food": zod.number().min(performGameCommandResponseKingdomResourcesFoodMin),
+  "wood": zod.number().min(performGameCommandResponseKingdomResourcesWoodMin),
+  "stone": zod.number().min(performGameCommandResponseKingdomResourcesStoneMin),
+  "iron": zod.number().min(performGameCommandResponseKingdomResourcesIronMin)
+}),
+  "productionPerHour": zod.object({
+  "food": zod.number().min(performGameCommandResponseKingdomProductionPerHourFoodMin),
+  "wood": zod.number().min(performGameCommandResponseKingdomProductionPerHourWoodMin),
+  "stone": zod.number().min(performGameCommandResponseKingdomProductionPerHourStoneMin),
+  "iron": zod.number().min(performGameCommandResponseKingdomProductionPerHourIronMin)
+}),
+  "buildings": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(1),
+  "description": zod.string(),
+  "upgradeCost": zod.object({
+  "food": zod.number().min(performGameCommandResponseKingdomBuildingsItemUpgradeCostFoodMin),
+  "wood": zod.number().min(performGameCommandResponseKingdomBuildingsItemUpgradeCostWoodMin),
+  "stone": zod.number().min(performGameCommandResponseKingdomBuildingsItemUpgradeCostStoneMin),
+  "iron": zod.number().min(performGameCommandResponseKingdomBuildingsItemUpgradeCostIronMin)
+})
+})),
+  "research": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "level": zod.number().min(performGameCommandResponseKingdomResearchItemLevelMin),
+  "description": zod.string(),
+  "researchCost": zod.object({
+  "food": zod.number().min(performGameCommandResponseKingdomResearchItemResearchCostFoodMin),
+  "wood": zod.number().min(performGameCommandResponseKingdomResearchItemResearchCostWoodMin),
+  "stone": zod.number().min(performGameCommandResponseKingdomResearchItemResearchCostStoneMin),
+  "iron": zod.number().min(performGameCommandResponseKingdomResearchItemResearchCostIronMin)
+})
+})),
+  "army": zod.object({
+  "scout": zod.number().min(performGameCommandResponseKingdomArmyScoutMin),
+  "infantry": zod.number().min(performGameCommandResponseKingdomArmyInfantryMin),
+  "cavalry": zod.number().min(performGameCommandResponseKingdomArmyCavalryMin),
+  "archer": zod.number().min(performGameCommandResponseKingdomArmyArcherMin),
+  "totalPower": zod.number().min(performGameCommandResponseKingdomArmyTotalPowerMin)
+})
+}),
+  "map": zod.object({
+  "centerX": zod.number(),
+  "centerY": zod.number(),
+  "tiles": zod.array(zod.object({
+  "id": zod.string(),
+  "x": zod.number(),
+  "y": zod.number(),
+  "label": zod.string(),
+  "terrain": zod.string(),
+  "kind": zod.enum(['capital', 'resource', 'npc', 'ruins', 'event', 'player']),
+  "ownerName": zod.string().nullable(),
+  "ownerId": zod.number().nullish(),
+  "power": zod.number().min(performGameCommandResponseMapTilesItemPowerMin),
+  "reward": zod.string().nullable(),
+  "discovered": zod.boolean()
+}))
+}),
+  "alliance": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "tag": zod.string(),
+  "role": zod.enum(['leader', 'officer', 'member']),
+  "memberCount": zod.number().min(1),
+  "description": zod.string()
+}).nullable(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "title": zod.string(),
+  "description": zod.string(),
+  "progress": zod.number().min(performGameCommandResponseEventsItemProgressMin),
+  "goal": zod.number().min(1),
+  "endsAt": zod.coerce.date(),
+  "reward": zod.string(),
+  "status": zod.enum(['live', 'upcoming', 'complete'])
+})),
+  "reports": zod.array(zod.object({
+  "id": zod.string(),
+  "battleType": zod.enum(['scout', 'npc', 'pvp']),
+  "opponent": zod.string(),
+  "result": zod.enum(['victory', 'defeat', 'discovered']),
+  "powerDelta": zod.number(),
+  "reward": zod.string(),
+  "createdAt": zod.coerce.date()
+})),
+  "onlinePlayers": zod.number().min(1),
+  "serverTime": zod.coerce.date()
+})
+
+
+/**
+ * Opens an authenticated server-sent event stream. Events contain a change signal; clients reload their own game state.
+ * @summary Subscribe to authenticated game world changes
+ */
+
+
+
+export const StreamGameWorldBody = zod.object({
+  "initData": zod.string().min(1)
+})
+
+export const StreamGameWorldResponse = zod.unknown()
+
+

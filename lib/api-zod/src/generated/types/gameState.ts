@@ -5,9 +5,14 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { GameAlliance } from './gameAlliance';
+import type { GameBattleReport } from './gameBattleReport';
+import type { GameKingdom } from './gameKingdom';
 import type { GameLocation } from './gameLocation';
 import type { GameQuest } from './gameQuest';
 import type { GameStatePlayer } from './gameStatePlayer';
+import type { GameWorldEvent } from './gameWorldEvent';
+import type { GameWorldMap } from './gameWorldMap';
 
 export interface GameState {
   player: GameStatePlayer;
@@ -17,4 +22,13 @@ export interface GameState {
   featuredQuestId: string | null;
   /** @minimum 0 */
   streak: number;
+  kingdom: GameKingdom;
+  map: GameWorldMap;
+  /** @nullable */
+  alliance: GameAlliance | null;
+  events: GameWorldEvent[];
+  reports: GameBattleReport[];
+  /** @minimum 1 */
+  onlinePlayers: number;
+  serverTime: Date;
 }

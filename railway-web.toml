@@ -1,0 +1,10 @@
+[build]
+builder = "RAILPACK"
+buildCommand = "PORT=8080 BASE_PATH=/ pnpm --filter @workspace/lumena-site run build"
+
+[deploy]
+startCommand = "node artifacts/lumena-site/server.mjs"
+healthcheckPath = "/"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10

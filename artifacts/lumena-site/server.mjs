@@ -57,9 +57,13 @@ async function proxyApi(request, response, requestUrl) {
     body,
   });
 
-  response.writeHead(upstream.status, {
+  const responseHeaders = {
     "content-type": upstream.headers.get("content-type") || "application/octet-stream",
-  });
+    "cache-control": upstream.headers.get("cache-control") || "no-cache",
+    connection: upstream.headers.get("connection") || "keep-alive",
+    "x-accel-buffering": upstream.headers.get("x-accel-buffering") || "no",
+  };
+  response.writeHead(upstream.status, responseHeaders);
 
   if (upstream.body) {
     Readable.fromWeb(upstream.body).pipe(response);

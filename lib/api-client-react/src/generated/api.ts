@@ -22,6 +22,7 @@ import type {
 import type {
   ErrorResponse,
   GameActionInput,
+  GameCommandInput,
   GameSessionInput,
   GameState,
   HealthStatus
@@ -86,6 +87,7 @@ export const getHealthCheckQueryKey = () => {
     `/api/healthz`
     ] as const;
     }
+
 
 export const getHealthCheckQueryOptions = <TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
@@ -343,5 +345,149 @@ export const useClaimGameQuest = <TError = ErrorType<ErrorResponse>,
         {questId: string;data: BodyType<GameActionInput>},
         TContext
       > => {
-       return useMutation(getClaimGameQuestMutationOptions(options));
-     }
+      return useMutation(getClaimGameQuestMutationOptions(options));
+    }
+
+export const getPerformGameCommandUrl = () => {
+
+
+
+
+  return `/api/game/command`
+}
+
+/**
+ * @summary Execute an authenticated strategy command
+ */
+export const performGameCommand = async (gameCommandInput: GameCommandInput, options?: Parameters<typeof customFetch>[1]): Promise<GameState> => {
+
+  return customFetch<GameState>(getPerformGameCommandUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(gameCommandInput)
+  }
+);}
+
+
+
+
+
+export const getPerformGameCommandMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performGameCommand>>, TError,{data: BodyType<GameCommandInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof performGameCommand>>, TError,{data: BodyType<GameCommandInput>}, TContext> => {
+
+const mutationKey = ['performGameCommand'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof performGameCommand>>, {data: BodyType<GameCommandInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  performGameCommand(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type PerformGameCommandMutationResult = NonNullable<Awaited<ReturnType<typeof performGameCommand>>>
+    export type PerformGameCommandMutationBody = BodyType<GameCommandInput>
+    export type PerformGameCommandMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Execute an authenticated strategy command
+ */
+export const usePerformGameCommand = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performGameCommand>>, TError,{data: BodyType<GameCommandInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof performGameCommand>>,
+        TError,
+        {data: BodyType<GameCommandInput>},
+        TContext
+      > => {
+      return useMutation(getPerformGameCommandMutationOptions(options));
+    }
+
+export const getStreamGameWorldUrl = () => {
+
+
+
+
+  return `/api/game/stream`
+}
+
+/**
+ * Opens an authenticated server-sent event stream. Events contain a change signal; clients reload their own game state.
+ * @summary Subscribe to authenticated game world changes
+ */
+export const streamGameWorld = async (gameSessionInput: GameSessionInput, options?: Parameters<typeof customFetch>[1]): Promise<string> => {
+
+  return customFetch<string>(getStreamGameWorldUrl(),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(gameSessionInput)
+  }
+);}
+
+
+
+
+
+export const getStreamGameWorldMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamGameWorld>>, TError,{data: BodyType<GameSessionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof streamGameWorld>>, TError,{data: BodyType<GameSessionInput>}, TContext> => {
+
+const mutationKey = ['streamGameWorld'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof streamGameWorld>>, {data: BodyType<GameSessionInput>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  streamGameWorld(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type StreamGameWorldMutationResult = NonNullable<Awaited<ReturnType<typeof streamGameWorld>>>
+    export type StreamGameWorldMutationBody = BodyType<GameSessionInput>
+    export type StreamGameWorldMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Subscribe to authenticated game world changes
+ */
+export const useStreamGameWorld = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof streamGameWorld>>, TError,{data: BodyType<GameSessionInput>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof streamGameWorld>>,
+        TError,
+        {data: BodyType<GameSessionInput>},
+        TContext
+      > => {
+      return useMutation(getStreamGameWorldMutationOptions(options));
+    }
+

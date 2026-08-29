@@ -7,6 +7,7 @@ import {
   gameRewardClaimsTable,
 } from "@workspace/db";
 import type { TelegramGameUser } from "./game-auth";
+import { getStrategyState } from "./strategy-service";
 
 export type GameRuleErrorCode = 400;
 
@@ -148,7 +149,7 @@ export async function loadGameState(user: TelegramGameUser) {
     visibleQuests.find((quest) => ["available", "in_progress", "completed"].includes(quest.status)) ??
     null;
 
-  return {
+  const legacyState = {
     player: {
       displayName: player?.displayName ?? user.displayName,
       level: player?.level ?? 1,
@@ -161,6 +162,7 @@ export async function loadGameState(user: TelegramGameUser) {
     featuredQuestId: featuredQuest?.id ?? null,
     streak: player?.streak ?? 0,
   };
+  return { ...legacyState, ...(await getStrategyState(user)) };
 }
 
 async function getQuest(questId: string) {

@@ -122,6 +122,67 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /game/command:
+    post:
+      operationId: performGameCommand
+      tags: [game]
+      summary: Execute an authenticated strategy command
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameCommandInput"
+      responses:
+        "200":
+          description: Updated strategy state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GameState"
+        "400":
+          description: Command rejected by game rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid Telegram Mini App session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /game/stream:
+    post:
+      operationId: streamGameWorld
+      tags: [game]
+      summary: Subscribe to authenticated game world changes
+      description: Opens an authenticated server-sent event stream. Events contain a change signal; clients reload their own game state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GameSessionInput"
+      responses:
+        "200":
+          description: Server-sent game world change events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid stream request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid Telegram Mini App session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -154,6 +215,32 @@ components:
           minLength: 1
       required:
         - initData
+    GameCommandInput:
+      type: object
+      properties:
+        initData:
+          type: string
+          minLength: 1
+        action:
+          type: string
+          enum:
+            [collect_resources, upgrade_building, research, train_army, scout,
+             attack_npc, attack_player, create_alliance, join_alliance, leave_alliance,
+             contribute_event]
+        targetId:
+          type: string
+        quantity:
+          type: number
+          minimum: 1
+        name:
+          type: string
+          minLength: 3
+          maxLength: 32
+        tag:
+          type: string
+          minLength: 2
+          maxLength: 6
+      required: [initData, action]
     GameLocation:
       type: object
       properties:
@@ -228,5 +315,140 @@ components:
         streak:
           type: number
           minimum: 0
-      required: [player, locations, quests, featuredQuestId, streak]
+        kingdom:
+          $ref: "#/components/schemas/GameKingdom"
+        map:
+          $ref: "#/components/schemas/GameWorldMap"
+        alliance:
+          type: ["object", "null"]
+          allOf:
+            - $ref: "#/components/schemas/GameAlliance"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/GameWorldEvent"
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/GameBattleReport"
+        onlinePlayers:
+          type: number
+          minimum: 1
+        serverTime:
+          type: string
+          format: date-time
+      required: [player, locations, quests, featuredQuestId, streak, kingdom, map, alliance, events, reports, onlinePlayers, serverTime]
+    GameResource:
+      type: object
+      properties:
+        food: { type: number, minimum: 0 }
+        wood: { type: number, minimum: 0 }
+        stone: { type: number, minimum: 0 }
+        iron: { type: number, minimum: 0 }
+      required: [food, wood, stone, iron]
+    GameBuilding:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        level: { type: number, minimum: 1 }
+        description: { type: string }
+        upgradeCost: { $ref: "#/components/schemas/GameResource" }
+      required: [id, name, level, description, upgradeCost]
+    GameResearch:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        level: { type: number, minimum: 0 }
+        description: { type: string }
+        researchCost: { $ref: "#/components/schemas/GameResource" }
+      required: [id, name, level, description, researchCost]
+    GameArmy:
+      type: object
+      properties:
+        scout: { type: number, minimum: 0 }
+        infantry: { type: number, minimum: 0 }
+        cavalry: { type: number, minimum: 0 }
+        archer: { type: number, minimum: 0 }
+        totalPower: { type: number, minimum: 0 }
+      required: [scout, infantry, cavalry, archer, totalPower]
+    GameKingdom:
+      type: object
+      properties:
+        name: { type: string }
+        level: { type: number, minimum: 1 }
+        power: { type: number, minimum: 0 }
+        resources: { $ref: "#/components/schemas/GameResource" }
+        productionPerHour: { $ref: "#/components/schemas/GameResource" }
+        buildings:
+          type: array
+          items: { $ref: "#/components/schemas/GameBuilding" }
+        research:
+          type: array
+          items: { $ref: "#/components/schemas/GameResearch" }
+        army: { $ref: "#/components/schemas/GameArmy" }
+      required: [name, level, power, resources, productionPerHour, buildings, research, army]
+    GameMapTile:
+      type: object
+      properties:
+        id: { type: string }
+        x: { type: number }
+        y: { type: number }
+        label: { type: string }
+        terrain: { type: string }
+        kind:
+          type: string
+          enum: [capital, resource, npc, ruins, event, player]
+        ownerName:
+          type: ["string", "null"]
+        ownerId:
+          type: ["number", "null"]
+        power: { type: number, minimum: 0 }
+        reward:
+          type: ["string", "null"]
+        discovered: { type: boolean }
+      required: [id, x, y, label, terrain, kind, ownerName, power, reward, discovered]
+    GameWorldMap:
+      type: object
+      properties:
+        centerX: { type: number }
+        centerY: { type: number }
+        tiles:
+          type: array
+          items: { $ref: "#/components/schemas/GameMapTile" }
+      required: [centerX, centerY, tiles]
+    GameAlliance:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        tag: { type: string }
+        role: { type: string, enum: [leader, officer, member] }
+        memberCount: { type: number, minimum: 1 }
+        description: { type: string }
+      required: [id, name, tag, role, memberCount, description]
+    GameWorldEvent:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        description: { type: string }
+        progress: { type: number, minimum: 0 }
+        goal: { type: number, minimum: 1 }
+        endsAt: { type: string, format: date-time }
+        reward: { type: string }
+        status: { type: string, enum: [live, upcoming, complete] }
+      required: [id, title, description, progress, goal, endsAt, reward, status]
+    GameBattleReport:
+      type: object
+      properties:
+        id: { type: string }
+        battleType: { type: string, enum: [scout, npc, pvp] }
+        opponent: { type: string }
+        result: { type: string, enum: [victory, defeat, discovered] }
+        powerDelta: { type: number }
+        reward: { type: string }
+        createdAt: { type: string, format: date-time }
+      required: [id, battleType, opponent, result, powerDelta, reward, createdAt]
 

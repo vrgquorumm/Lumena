@@ -8,6 +8,7 @@
 export interface HealthStatus {
   status: string;
 }
+
 export interface ErrorResponse {
   error: string;
 }
@@ -20,6 +21,42 @@ export interface GameSessionInput {
 export interface GameActionInput {
   /** @minLength 1 */
   initData: string;
+}
+
+export type GameCommandInputAction = typeof GameCommandInputAction[keyof typeof GameCommandInputAction];
+
+
+export const GameCommandInputAction = {
+  collect_resources: 'collect_resources',
+  upgrade_building: 'upgrade_building',
+  research: 'research',
+  train_army: 'train_army',
+  scout: 'scout',
+  attack_npc: 'attack_npc',
+  attack_player: 'attack_player',
+  create_alliance: 'create_alliance',
+  join_alliance: 'join_alliance',
+  leave_alliance: 'leave_alliance',
+  contribute_event: 'contribute_event',
+} as const;
+
+export interface GameCommandInput {
+  /** @minLength 1 */
+  initData: string;
+  action: GameCommandInputAction;
+  targetId?: string;
+  /** @minimum 1 */
+  quantity?: number;
+  /**
+     * @minLength 3
+     * @maxLength 32
+     */
+  name?: string;
+  /**
+     * @minLength 2
+     * @maxLength 6
+     */
+  tag?: string;
 }
 
 export type GameLocationState = typeof GameLocationState[keyof typeof GameLocationState];
@@ -76,6 +113,166 @@ export type GameStatePlayer = {
   gameLmn: number;
 };
 
+export interface GameResource {
+  /** @minimum 0 */
+  food: number;
+  /** @minimum 0 */
+  wood: number;
+  /** @minimum 0 */
+  stone: number;
+  /** @minimum 0 */
+  iron: number;
+}
+
+export interface GameBuilding {
+  id: string;
+  name: string;
+  /** @minimum 1 */
+  level: number;
+  description: string;
+  upgradeCost: GameResource;
+}
+
+export interface GameResearch {
+  id: string;
+  name: string;
+  /** @minimum 0 */
+  level: number;
+  description: string;
+  researchCost: GameResource;
+}
+
+export interface GameArmy {
+  /** @minimum 0 */
+  scout: number;
+  /** @minimum 0 */
+  infantry: number;
+  /** @minimum 0 */
+  cavalry: number;
+  /** @minimum 0 */
+  archer: number;
+  /** @minimum 0 */
+  totalPower: number;
+}
+
+export interface GameKingdom {
+  name: string;
+  /** @minimum 1 */
+  level: number;
+  /** @minimum 0 */
+  power: number;
+  resources: GameResource;
+  productionPerHour: GameResource;
+  buildings: GameBuilding[];
+  research: GameResearch[];
+  army: GameArmy;
+}
+
+export type GameMapTileKind = typeof GameMapTileKind[keyof typeof GameMapTileKind];
+
+
+export const GameMapTileKind = {
+  capital: 'capital',
+  resource: 'resource',
+  npc: 'npc',
+  ruins: 'ruins',
+  event: 'event',
+  player: 'player',
+} as const;
+
+export interface GameMapTile {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  terrain: string;
+  kind: GameMapTileKind;
+  /** @nullable */
+  ownerName: string | null;
+  /** @nullable */
+  ownerId?: number | null;
+  /** @minimum 0 */
+  power: number;
+  /** @nullable */
+  reward: string | null;
+  discovered: boolean;
+}
+
+export interface GameWorldMap {
+  centerX: number;
+  centerY: number;
+  tiles: GameMapTile[];
+}
+
+export type GameAllianceRole = typeof GameAllianceRole[keyof typeof GameAllianceRole];
+
+
+export const GameAllianceRole = {
+  leader: 'leader',
+  officer: 'officer',
+  member: 'member',
+} as const;
+
+export interface GameAlliance {
+  id: string;
+  name: string;
+  tag: string;
+  role: GameAllianceRole;
+  /** @minimum 1 */
+  memberCount: number;
+  description: string;
+}
+
+export type GameWorldEventStatus = typeof GameWorldEventStatus[keyof typeof GameWorldEventStatus];
+
+
+export const GameWorldEventStatus = {
+  live: 'live',
+  upcoming: 'upcoming',
+  complete: 'complete',
+} as const;
+
+export interface GameWorldEvent {
+  id: string;
+  title: string;
+  description: string;
+  /** @minimum 0 */
+  progress: number;
+  /** @minimum 1 */
+  goal: number;
+  endsAt: string;
+  reward: string;
+  status: GameWorldEventStatus;
+}
+
+export type GameBattleReportBattleType = typeof GameBattleReportBattleType[keyof typeof GameBattleReportBattleType];
+
+
+export const GameBattleReportBattleType = {
+  scout: 'scout',
+  npc: 'npc',
+  pvp: 'pvp',
+} as const;
+
+export type GameBattleReportResult = typeof GameBattleReportResult[keyof typeof GameBattleReportResult];
+
+
+export const GameBattleReportResult = {
+  victory: 'victory',
+  defeat: 'defeat',
+  discovered: 'discovered',
+} as const;
+
+export interface GameBattleReport {
+  id: string;
+  battleType: GameBattleReportBattleType;
+  opponent: string;
+  result: GameBattleReportResult;
+  powerDelta: number;
+  reward: string;
+  createdAt: string;
+}
+
 export interface GameState {
   player: GameStatePlayer;
   locations: GameLocation[];
@@ -84,4 +281,14 @@ export interface GameState {
   featuredQuestId: string | null;
   /** @minimum 0 */
   streak: number;
+  kingdom: GameKingdom;
+  map: GameWorldMap;
+  /** @nullable */
+  alliance: GameAlliance | null;
+  events: GameWorldEvent[];
+  reports: GameBattleReport[];
+  /** @minimum 1 */
+  onlinePlayers: number;
+  serverTime: string;
 }
+
