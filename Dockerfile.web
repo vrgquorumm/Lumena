@@ -1,0 +1,25 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY artifacts/lumena-site/package.json artifacts/lumena-site/tsconfig.json artifacts/lumena-site/vite.config.ts artifacts/lumena-site/index.html ./artifacts/lumena-site/
+COPY lib/api-client-react/package.json ./lib/api-client-react/
+
+RUN pnpm install --frozen-lockfile --ignore-scripts
+
+COPY artifacts/lumena-site/src ./artifacts/lumena-site/src
+COPY artifacts/lumena-site/public ./artifacts/lumena-site/public
+COPY artifacts/lumena-site/server.mjs ./artifacts/lumena-site/server.mjs
+COPY lib/api-client-react/src ./lib/api-client-react/src
+
+RUN NODE_ENV=production PORT=8080 BASE_PATH=/ pnpm --filter @workspace/lumena-site run build
+
+ENV NODE_ENV=production
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["node", "artifacts/lumena-site/server.mjs"]
