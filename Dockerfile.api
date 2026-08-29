@@ -1,0 +1,23 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY artifacts/api-server/package.json artifacts/api-server/tsconfig.json artifacts/api-server/build.mjs ./artifacts/api-server/
+COPY artifacts/api-server/src ./artifacts/api-server/src
+COPY lib/api-zod/package.json ./lib/api-zod/
+COPY lib/api-zod/src ./lib/api-zod/src
+COPY lib/db/package.json ./lib/db/
+COPY lib/db/src ./lib/db/src
+
+RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm --filter @workspace/api-server run build
+
+ENV NODE_ENV=production
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
