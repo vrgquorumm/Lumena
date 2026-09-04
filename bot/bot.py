@@ -4,6 +4,7 @@
 """
 import asyncio
 import calendar
+import hashlib
 import html
 import io
 import json
@@ -65,9 +66,9 @@ _tracked_bot_msgs:  dict[tuple[int, int], str] = {}
 # ═══════════════════════════════════════════════════════
 # КОНФИГУРАЦИЯ
 # ═══════════════════════════════════════════════════════
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("Не найден BOT_TOKEN!")
+    raise ValueError("Не найден BOT_TOKEN или TELEGRAM_BOT_TOKEN!")
 
 OWNER_USERNAME = "hdrttttttt"
 OWNER_ID       = 8655306548
@@ -440,6 +441,9 @@ ru_army_warns = {}
 marriages = {}
 marriage_proposals = {}
 marriage_dates: dict[str, str] = {}  # "min_uid_max_uid" → ISO date свадьбы
+marriage_rpg_pairs: dict[str, dict] = {}
+marriage_wedding_sessions: dict[str, dict] = {}
+MARRIAGE_RPG_VERSION = 2
 # Одноразовая миграция брака фаундера и постоянного заместителя.
 _FOUNDER_DEPUTY_ID = next(iter(FOUNDER_DEPUTY_IDS))
 FOUNDER_DEPUTY_MARRIAGE_PAIR = (
@@ -535,6 +539,8 @@ _BOT_ID: int = 0
 _BOT_USERNAME: str = ""
 _state_save_task: asyncio.Task | None = None
 _save_update_sent: bool = False
+_lumena_proposal_sent: bool = False
+_lumena_proposal_version: int = 0
 lmn_balance_reset_version = 0
 lmn_transfer_version = 0
 lmn_global_zero_version = 0
@@ -704,6 +710,16 @@ def _build_main_payload() -> dict:
         },
         "marriage_dates": dict(marriage_dates),
         "marriage_date_migration_version": marriage_date_migration_version,
+        "marriage_rpg_pairs": {
+            str(key): dict(value)
+            for key, value in marriage_rpg_pairs.items()
+            if isinstance(value, dict)
+        },
+        "marriage_wedding_sessions": {
+            str(key): dict(value)
+            for key, value in marriage_wedding_sessions.items()
+            if isinstance(value, dict)
+        },
         "warnings_db":  {str(c): {str(u): v for u, v in w.items()} for c, w in warnings_db.items()},
         "ru_army_warns":{str(c): {str(u): v for u, v in w.items()} for c, w in ru_army_warns.items()},
         "chat_rules":   {str(c): r for c, r in chat_rules.items()},
@@ -768,6 +784,8 @@ def _build_main_payload() -> dict:
             for cid, run in team_alchemy_runs.items()
         },
         "save_update_sent": _save_update_sent,
+        "lumena_proposal_sent": _lumena_proposal_sent,
+        "lumena_proposal_version": _lumena_proposal_version,
         "pending_notifications": list(pending_notifications),
         "marriage_proposals": [
             {
@@ -2966,7 +2984,12 @@ def _fmt_role(role: str) -> str:
 
 _ROLE_CHAT_TITLES = {
     # Telegram ограничивает custom title 16 символами.
-    "founder_deputy": "Зам. фаундера",
+    "founder_deputy": "Фаундер",
+}
+_ROLE_CHAT_TITLE_OVERRIDES: dict[int, str] = {
+    # Бывший владелец сохранил роль администратора, но Telegram пока
+    # не разрешает боту редактировать его custom title.
+    8655306548: "Админ",
 }
 
 
@@ -3009,8 +3032,9 @@ async def _promote_in_chat(
         print(f"⚠️ promote_chat_member({user_id}, {role}, chat={chat_id}): {err}")
         return False, False, err
     # Кастомный тег — название роли (максимум 16 символов по ограничению Telegram)
-    custom_title = _ROLE_CHAT_TITLES.get(
-        role, ROLE_NAMES.get(role, role)[:16]
+    custom_title = _ROLE_CHAT_TITLE_OVERRIDES.get(
+        user_id,
+        _ROLE_CHAT_TITLES.get(role, ROLE_NAMES.get(role, role)[:16]),
     )
     try:
         await bot.set_chat_administrator_custom_title(chat_id, user_id, custom_title)
@@ -4014,8 +4038,1365 @@ async def cmd_title(msg: Message, command: CommandObject):
 # ═══════════════════════════════════════════════════════
 # БРАК — СИСТЕМА С ПРЕДЛОЖЕНИЯМИ
 # ═══════════════════════════════════════════════════════
+async def _send_lumena_marriage_proposal() -> None:
+    """Однократно предлагает виртуальный брак основному фаундеру."""
+    global _lumena_proposal_sent, _lumena_proposal_version
+    if _lumena_proposal_version >= 1 or not _BOT_ID:
+        if _lumena_proposal_version >= 1:
+            logging.info("💍 Предложение Lumena уже отправлялось в текущей версии")
+        return
+
+    chat_id = _ank.get_pub_chat() or _ank.DEFAULT_PUBLIC_CHAT_ID
+    if not chat_id:
+        logging.warning("💍 Не удалось отправить предложение: главный чат не связан")
+        return
+    if is_married(chat_id, OWNER_ID) or is_married(chat_id, _BOT_ID):
+        logging.info("💍 Новое предложение не отправлено: брак уже оформлен")
+        _lumena_proposal_version = 1
+        _lumena_proposal_sent = True
+        await save_state_now("пропуск предложения: брак уже оформлен")
+        return
+
+    # Заменяем возможное старое текстовое предложение, у которого не было
+    # корректного callback-состояния после предыдущего деплоя.
+    marriage_proposals.pop((chat_id, OWNER_ID), None)
+    marriage_proposals[(chat_id, OWNER_ID)] = {
+        "proposer_id": _BOT_ID,
+        "proposer_full": "Lumena",
+    }
+    proposal_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="💍 Принять предложение",
+            callback_data=f"mar_y_{_BOT_ID}",
+        ),
+        InlineKeyboardButton(
+            text="❌ Отказать",
+            callback_data=f"mar_n_{_BOT_ID}",
+        ),
+    ]])
+    proposal_text = (
+        f"{brand.hdr()}\n\n"
+        "💌 <b>СЦЕНА · ВАЖНЫЙ ВЫБОР</b>\n\n"
+        f"<b>@{html.escape(OWNER_USERNAME)}</b>, я хочу предложить тебе "
+        "виртуальный брак со мной — с заботой, верностью и общей историей "
+        "в Lumena. ❤️\n\n"
+        "Это не случайный статус, а начало общей летописи: свидания, "
+        "характеры, контракт и свадебная сцена.\n\n"
+        "<i>Решение остаётся за тобой.</i>\n\n"
+        f"{brand.div()}"
+    )
+    try:
+        sent_message = await bot.send_message(
+            chat_id,
+            proposal_text,
+            parse_mode="HTML",
+            reply_markup=proposal_kb,
+        )
+    except Exception as exc:
+        marriage_proposals.pop((chat_id, OWNER_ID), None)
+        logging.warning(f"💍 Не удалось отправить предложение Lumena: {exc}")
+        return
+
+    _lumena_proposal_sent = True
+    _lumena_proposal_version = 1
+    logging.info(f"💍 Предложение Lumena отправлено, message_id={sent_message.message_id}")
+    await save_state_now("предложение виртуального брака от Lumena")
+
+
+# ═══════════════════════════════════════════════════════
+# БРАЧНАЯ RPG-СИСТЕМА HYDRA
+# ═══════════════════════════════════════════════════════
+_RPG_STATS = ("love", "fun", "finance", "passion", "conflicts")
+_RPG_STAT_LABELS = {
+    "love": ("❤️", "Любовь"),
+    "fun": ("😂", "Веселье"),
+    "finance": ("💰", "Финансы"),
+    "passion": ("🔥", "Страсть"),
+    "conflicts": ("⚔️", "Ссоры"),
+}
+_RPG_PLACES = (
+    "заброшенный парк", "ночная набережная", "уютная кофейня",
+    "крыша под звёздами", "ярмарка у старого театра", "секретный сад",
+)
+_RPG_ORDERS = (
+    "клубничный милкшейк", "двойной капучино", "пицца на двоих",
+    "вишнёвый лимонад", "чай с мятой и пирожными", "карамельный раф",
+)
+_RPG_DATE_OUTCOMES = (
+    "Искра вспыхнула — отношения стали крепче ✨",
+    "Они смеялись до полуночи. Кажется, это начало истории 💞",
+    "Судьба поставила вам ещё один плюс в карму 🌙",
+    "Встреча прошла идеально: даже ссоры сегодня были милыми 😄",
+)
+_RPG_CONTRACT_DUTIES = (
+    "приносить кофе по утрам ☕",
+    "не ревновать к {jealousy_name} 💚",
+    "раз в неделю дарить подарок 🎁",
+    "не воровать гемы партнёра 💎",
+    "поставить совместную аватарку 🖼",
+    "пережить три часа в Brawl Stars 🎮",
+    "устраивать один вечер без телефонов 🌙",
+    "защищать партнёра в споре ⚔️",
+)
+_RPG_HOMES = ("Япония", "Исландия", "Париж", "Корея", "маленький дом у моря")
+_RPG_VERDICTS = (
+    "Вы созданы друг для друга. К сожалению, кто-то будет спать на диване. 😂",
+    "Союз обещает много смеха, подарков и одну легендарную ссору в месяц. 💫",
+    "Судьба одобряет этот дуэт — держитесь друг за друга. ❤️",
+    "Ваши характеры столкнутся, но именно из этого получится сильная история. 🔥",
+)
+MARRIAGE_WEDDING_TTL = timedelta(minutes=90)
+MARRIAGE_HISTORY_LIMIT = 12
+
+
+def _rpg_meter(value: int, width: int = 8) -> str:
+    value = _rpg_clamp(value)
+    filled = round(value / 100 * width)
+    return f"{'●' * filled}{'○' * (width - filled)}"
+
+
+def _rpg_stage(record: dict) -> str:
+    status = str(record.get("status", "встречаются"))
+    if status == "разведены":
+        return "история закрыта"
+    if status == "молодожёны":
+        return "официальный союз"
+    history_count = len(record.get("history", []) or [])
+    if history_count >= 6:
+        return "легендарная связь"
+    if history_count >= 3:
+        return "отношения крепнут"
+    if history_count:
+        return "первая искра"
+    return "знакомство начинается"
+
+
+def _rpg_pair_banner(record: dict, uid_a: int, uid_b: int, title: str) -> str:
+    name_a, name_b = _rpg_names(record, uid_a, uid_b)
+    compatibility = _rpg_compatibility(record)
+    stage = _rpg_stage(record)
+    history_count = len(record.get("history", []) or [])
+    return (
+        f"{brand.hdr()}\n\n"
+        f"💍 <b>{html.escape(title)}</b>\n"
+        f"<blockquote><b>{html.escape(name_a)} × {html.escape(name_b)}</b>\n"
+        f"Этап: <i>{html.escape(stage)}</i>\n"
+        f"Связь: <b>{compatibility}%</b> {_rpg_meter(compatibility, 10)}\n"
+        f"Свиданий в летописи: <b>{history_count}</b></blockquote>\n"
+        f"{brand.div()}"
+    )
+
+
+def _rpg_chat_member_names(
+    chat_id: int,
+    excluded: set[int],
+) -> list[str]:
+    """Возвращает имена реально виденных участников именно этого чата."""
+    candidates = []
+    for uid, raw_name in (chat_members.get(chat_id, {}) or {}).items():
+        try:
+            uid_int = int(uid)
+        except (TypeError, ValueError):
+            continue
+        name = str(raw_name or "").strip()
+        if uid_int in excluded or uid_int == _BOT_ID or not name:
+            continue
+        candidates.append(name[:160])
+    return list(dict.fromkeys(candidates))
+
+
+def _rpg_jealousy_name(chat_id: int, uid_a: int, uid_b: int, key: str) -> str:
+    candidates = _rpg_chat_member_names(chat_id, {uid_a, uid_b})
+    if not candidates:
+        return "кого-то из чата"
+    return _rpg_rng(key, "jealousy-name").choice(candidates)
+
+
+def _rpg_expire_wedding_session(key: str, session: dict | None = None) -> bool:
+    session = session if isinstance(session, dict) else marriage_wedding_sessions.get(key)
+    if not isinstance(session, dict) or session.get("status") != "pending":
+        return False
+    raw_expiry = session.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(str(raw_expiry))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=KYIV_TZ)
+    except (TypeError, ValueError):
+        try:
+            created_at = datetime.fromisoformat(str(session.get("created_at")))
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=KYIV_TZ)
+            expires_at = created_at + MARRIAGE_WEDDING_TTL
+        except (TypeError, ValueError):
+            expires_at = now_kyiv()
+    if now_kyiv() < expires_at:
+        return False
+    marriage_wedding_sessions.pop(key, None)
+    return True
+
+
+def _rpg_pair_key(chat_id: int, uid_a: int, uid_b: int) -> str:
+    return f"{econ_cid(chat_id)}:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}"
+
+
+def _rpg_rng(key: str, salt: str = "") -> random.Random:
+    digest = hashlib.sha256(f"lumena-rpg:{key}:{salt}".encode()).digest()
+    return random.Random(int.from_bytes(digest[:8], "big"))
+
+
+def _rpg_clamp(value: int, low: int = 0, high: int = 100) -> int:
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = low
+    return max(low, min(high, value))
+
+
+def _rpg_stat(record: dict, name: str, fallback: int = 50) -> int:
+    stats = record.get("stats", {}) if isinstance(record, dict) else {}
+    return _rpg_clamp(stats.get(name, fallback), 0, 100)
+
+
+def _rpg_compatibility(record: dict) -> int:
+    value = (
+        _rpg_stat(record, "love") * 0.30
+        + _rpg_stat(record, "fun") * 0.15
+        + _rpg_stat(record, "finance") * 0.15
+        + _rpg_stat(record, "passion") * 0.20
+        + (100 - _rpg_stat(record, "conflicts")) * 0.20
+    )
+    return _rpg_clamp(round(value), 10, 99)
+
+
+def _rpg_new_pair(chat_id: int, uid_a: int, uid_b: int) -> dict:
+    key = _rpg_pair_key(chat_id, uid_a, uid_b)
+    rng = _rpg_rng(key, "initial")
+    stats = {
+        "love": rng.randint(65, 95),
+        "fun": rng.randint(50, 90),
+        "finance": rng.randint(25, 80),
+        "passion": rng.randint(55, 95),
+        "conflicts": rng.randint(15, 65),
+    }
+    return {
+        "version": MARRIAGE_RPG_VERSION,
+        "chat_id": chat_id,
+        "economy_chat_id": econ_cid(chat_id),
+        "users": [min(uid_a, uid_b), max(uid_a, uid_b)],
+        "stats": stats,
+        "status": "встречаются",
+        "budget": rng.randint(2_000, 15_000),
+        "last_daily": today_kyiv().isoformat(),
+        "history": [],
+        "contract": None,
+        "destiny": None,
+    }
+
+
+def _rpg_evolve(record: dict, key: str) -> bool:
+    today = today_kyiv().isoformat()
+    if record.get("last_daily") == today:
+        return False
+    rng = _rpg_rng(key, f"daily:{today}")
+    stats = record.setdefault("stats", {})
+    for name in _RPG_STATS:
+        drift = rng.randint(-5, 5)
+        if name == "conflicts":
+            drift = rng.randint(-3, 6)
+        stats[name] = _rpg_clamp(_rpg_stat(record, name) + drift)
+    try:
+        budget = int(record.get("budget", 0))
+    except (TypeError, ValueError):
+        budget = 0
+    record["budget"] = max(0, budget + rng.randint(-700, 1_200))
+    record["last_daily"] = today
+    return True
+
+
+def _rpg_ensure_pair(
+    chat_id: int,
+    uid_a: int,
+    uid_b: int,
+    name_a: str = "",
+    name_b: str = "",
+) -> tuple[str, dict]:
+    key = _rpg_pair_key(chat_id, uid_a, uid_b)
+    record = marriage_rpg_pairs.get(key)
+    if not isinstance(record, dict):
+        record = _rpg_new_pair(chat_id, uid_a, uid_b)
+        marriage_rpg_pairs[key] = record
+    names = record.setdefault("names", {})
+    if name_a:
+        names[str(uid_a)] = str(name_a)[:160]
+    if name_b:
+        names[str(uid_b)] = str(name_b)[:160]
+    if is_married(chat_id, uid_a) and get_partner(chat_id, uid_a) == uid_b:
+        record["status"] = "молодожёны"
+    elif record.get("status") not in {"разведены", "молодожёны"}:
+        record["status"] = "встречаются"
+    _rpg_evolve(record, key)
+    return key, record
+
+
+def _rpg_names(record: dict, uid_a: int, uid_b: int) -> tuple[str, str]:
+    names = record.get("names", {}) if isinstance(record, dict) else {}
+    return (
+        str(names.get(str(uid_a), f"ID {uid_a}"))[:160],
+        str(names.get(str(uid_b), f"ID {uid_b}"))[:160],
+    )
+
+
+def _rpg_stats_block(record: dict) -> str:
+    lines = []
+    for key in _RPG_STATS:
+        icon, label = _RPG_STAT_LABELS[key]
+        value = _rpg_stat(record, key)
+        lines.append(f"{icon} <b>{label}</b> {_rpg_meter(value)} <code>{value}</code>")
+    return "\n".join(lines)
+
+
+def _rpg_contract(record: dict, key: str, uid_a: int, uid_b: int) -> dict:
+    current = record.get("contract")
+    if isinstance(current, dict) and current.get("duties"):
+        current_jealousy = str(current.get("jealousy_name", "")).strip()
+        has_legacy_jealousy = (
+            current_jealousy.casefold() in {"дима", "dima"}
+            or any("Дим" in str(item.get("duty", "")) for item in current.get("duties", []))
+        )
+        if not current_jealousy or has_legacy_jealousy:
+            jealousy_name = _rpg_jealousy_name(
+                int(record.get("chat_id", 0)), uid_a, uid_b, key
+            )
+            current["jealousy_name"] = jealousy_name
+            for item in current.get("duties", []):
+                duty = str(item.get("duty", ""))
+                if "Дим" in duty or "{jealousy_name}" in duty:
+                    item["duty"] = (
+                        duty.replace("не ревновать к Диме", f"не ревновать к {jealousy_name}")
+                        .replace("не ревновать к {jealousy_name}", f"не ревновать к {jealousy_name}")
+                    )
+        return current
+    name_a, name_b = _rpg_names(record, uid_a, uid_b)
+    rng = _rpg_rng(key, "contract")
+    jealousy_name = _rpg_jealousy_name(
+        int(record.get("chat_id", 0)), uid_a, uid_b, key
+    )
+    duties = [
+        duty.format(jealousy_name=jealousy_name)
+        for duty in rng.sample(list(_RPG_CONTRACT_DUTIES), 4)
+    ]
+    current = {
+        "issued_at": today_kyiv().isoformat(),
+        "fine": 500,
+        "jealousy_name": jealousy_name,
+        "duties": [
+            {"name": name_a, "duty": duties[0]},
+            {"name": name_a, "duty": duties[1]},
+            {"name": name_b, "duty": duties[2]},
+            {"name": name_b, "duty": duties[3]},
+        ],
+        "violations": [],
+    }
+    record["contract"] = current
+    return current
+
+
+def _rpg_contract_text(record: dict, uid_a: int, uid_b: int) -> str:
+    contract = _rpg_contract(record, "", uid_a, uid_b)
+    duties = "\n".join(
+        f"◆ <b>{html.escape(str(item.get('name', 'Пара')))}</b>\n"
+        f"   {html.escape(str(item.get('duty', '')))}"
+        for item in contract.get("duties", [])
+    )
+    violations = len(contract.get("violations", []))
+    return (
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'АРХИВ СОЮЗА · КОНТРАК')}\n\n"
+        "📜 <b>Условия вашей истории</b>\n\n"
+        f"{duties or '<i>Условия ещё формируются.</i>'}\n\n"
+        f"{brand.div()}\n"
+        f"⚠️ Цена нарушения: <b>{int(contract.get('fine', 500))} монет</b>\n"
+        f"🧾 Зафиксировано: <b>{violations}</b>\n\n"
+        "<i>Кнопка фиксирует событие в летописи, но не списывает монеты автоматически.</i>"
+    )
+
+
+def _rpg_destiny(record: dict, key: str, uid_a: int, uid_b: int) -> dict:
+    forecast = record.get("destiny")
+    if isinstance(forecast, dict):
+        return forecast
+    name_a, name_b = _rpg_names(record, uid_a, uid_b)
+    rng = _rpg_rng(key, "destiny")
+    compatibility = _rpg_compatibility(record)
+    forecast = {
+        "compatibility": compatibility,
+        "marriage": _rpg_clamp(compatibility + rng.randint(-9, 9), 1, 99),
+        "divorce": _rpg_clamp(
+            _rpg_stat(record, "conflicts") + rng.randint(-5, 15), 1, 99
+        ),
+        "children": rng.randint(0, 4),
+        "home": rng.choice(_RPG_HOMES),
+        "richer": name_a if _rpg_stat(record, "finance") >= 50 else name_b,
+        "jealous": (
+            name_a if _rpg_stat(record, "conflicts") % 2 else name_b
+        ),
+        "verdict": rng.choice(_RPG_VERDICTS),
+    }
+    record["destiny"] = forecast
+    return forecast
+
+
+def _rpg_destiny_text(record: dict, uid_a: int, uid_b: int, key: str) -> str:
+    name_a, name_b = _rpg_names(record, uid_a, uid_b)
+    forecast = _rpg_destiny(record, key, uid_a, uid_b)
+    return (
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'ПРОГНОЗ · СУДЬБА ПАРЫ')}\n\n"
+        f"❤️ Резонанс: <b>{forecast['compatibility']}%</b> {_rpg_meter(forecast['compatibility'], 10)}\n"
+        f"💍 Шанс на свадьбу: <b>{forecast['marriage']}%</b>\n"
+        f"🌧 Риск развода: <b>{forecast['divorce']}%</b>\n\n"
+        f"👶 Дети: <b>{forecast['children']}</b>\n"
+        f"🏠 Общий дом: <b>{html.escape(str(forecast['home']))}</b>\n"
+        f"💰 Богаче станет: <b>{html.escape(str(forecast['richer']))}</b>\n"
+        f"😡 Чаще ревнует: <b>{html.escape(str(forecast['jealous']))}</b>\n\n"
+        f"{brand.div()}\n"
+        f"✨ <b>Вердикт</b>\n<i>{html.escape(str(forecast['verdict']))}</i>"
+    )
+
+
+def _rpg_history_text(record: dict, uid_a: int, uid_b: int) -> str:
+    history = list(record.get("history", []) or [])
+    if not history:
+        return (
+            f"{_rpg_pair_banner(record, uid_a, uid_b, 'ЛЕТОПИСЬ · ИСТОРИЯ ПАРЫ')}\n\n"
+            "📖 <b>Здесь пока чистая страница</b>\n\n"
+            "Проведите первое свидание — и эта летопись начнёт заполняться "
+            "местами, заказами и маленькими событиями."
+        )
+    chapters = []
+    for index, event in enumerate(reversed(history[-MARRIAGE_HISTORY_LIMIT:]), 1):
+        chapters.append(
+            f"<b>Глава {len(history) - index + 1}</b> · "
+            f"<code>{html.escape(str(event.get('date', '—')))}</code>\n"
+            f"📍 {html.escape(str(event.get('place', 'неизвестное место')))} · "
+            f"🍓 {html.escape(str(event.get('order', 'заказ на двоих')))}\n"
+            f"❤️ Резонанс: <b>{_rpg_clamp(event.get('compatibility', 50))}%</b>\n"
+            f"✨ {html.escape(str(event.get('outcome', 'событие записано')))}"
+        )
+    return (
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'ЛЕТОПИСЬ · ИСТОРИЯ ПАРЫ')}\n\n"
+        + "\n\n".join(chapters)
+        + f"\n\n{brand.div()}\n<i>Показаны последние {len(chapters)} глав.</i>"
+    )
+
+
+def _rpg_contract_keyboard(uid_a: int, uid_b: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="⚠️ Зафиксировать нарушение",
+            callback_data=f"rpg:cv:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}",
+        ),
+    ], [
+        InlineKeyboardButton(
+            text="📖 Летопись",
+            callback_data=f"rpg:hi:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}",
+        ),
+        InlineKeyboardButton(
+            text="📊 Характер",
+            callback_data=f"rpg:st:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}",
+        ),
+    ], [
+        InlineKeyboardButton(
+            text="↩️ В меню брака",
+            callback_data=f"rpgm:home:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}",
+        ),
+    ]])
+
+
+def _rpg_wedding_keyboard(uid_a: int, uid_b: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="ДА 💍",
+            callback_data=f"rpg:wy:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}",
+        ),
+        InlineKeyboardButton(
+            text="НЕТ 💔",
+            callback_data=f"rpg:wn:{min(uid_a, uid_b)}:{max(uid_a, uid_b)}",
+        ),
+    ]])
+
+
+def _rpg_pair_tools(uid_a: int, uid_b: int) -> InlineKeyboardMarkup:
+    low, high = min(uid_a, uid_b), max(uid_a, uid_b)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💍 Меню брака", callback_data=f"rpgm:home:{low}:{high}"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Характер", callback_data=f"rpg:st:{low}:{high}"),
+            InlineKeyboardButton(text="📜 Контракт", callback_data=f"rpg:ct:{low}:{high}"),
+        ],
+        [
+            InlineKeyboardButton(text="📖 Летопись", callback_data=f"rpg:hi:{low}:{high}"),
+            InlineKeyboardButton(text="🔮 Судьба", callback_data=f"rpg:ds:{low}:{high}"),
+        ],
+    ])
+
+
+def _rpg_menu_keyboard(
+    uid_a: int,
+    uid_b: int,
+    status: str = "",
+) -> InlineKeyboardMarkup:
+    low, high = min(uid_a, uid_b), max(uid_a, uid_b)
+    rows = [
+        [
+            InlineKeyboardButton(text="💌 Свидание", callback_data=f"rpgm:date:{low}:{high}"),
+            InlineKeyboardButton(text="📖 Летопись", callback_data=f"rpgm:history:{low}:{high}"),
+        ],
+        [
+            InlineKeyboardButton(text="📊 Характеристики", callback_data=f"rpgm:stats:{low}:{high}"),
+            InlineKeyboardButton(text="📜 Контракт", callback_data=f"rpgm:contract:{low}:{high}"),
+        ],
+        [
+            InlineKeyboardButton(text="🔮 Судьба", callback_data=f"rpgm:destiny:{low}:{high}"),
+            InlineKeyboardButton(text="💒 Свадьба", callback_data=f"rpgm:wedding:{low}:{high}"),
+        ],
+    ]
+    if status == "молодожёны":
+        rows.append([
+            InlineKeyboardButton(
+                text="💔 Развод",
+                callback_data=f"rpgm:divorce:{low}:{high}",
+            ),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _rpg_menu_divorce_keyboard(uid_a: int, uid_b: int) -> InlineKeyboardMarkup:
+    low, high = min(uid_a, uid_b), max(uid_a, uid_b)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, завершить союз",
+                callback_data=f"rpgm:divorce_confirm:{low}:{high}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="↩️ Оставить всё как есть",
+                callback_data=f"rpgm:home:{low}:{high}",
+            ),
+        ],
+    ])
+
+
+def _rpg_menu_back_keyboard(uid_a: int, uid_b: int) -> InlineKeyboardMarkup:
+    low, high = min(uid_a, uid_b), max(uid_a, uid_b)
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ Назад в меню", callback_data=f"rpgm:home:{low}:{high}"),
+    ]])
+
+
+def _rpg_menu_text(record: dict, uid_a: int, uid_b: int) -> str:
+    divorce_line = (
+        "\n💔 Развод — завершить союз"
+        if record.get("status") == "молодожёны"
+        else ""
+    )
+    return (
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'ЦЕНТР СОЮЗА · МЕНЮ БРАКА')}\n\n"
+        "✨ <b>Что открыть?</b>\n"
+        "Выбери главу вашей общей истории ниже.\n\n"
+        "💌 Свидание — создать новое событие\n"
+        "📖 Летопись — вспомнить лучшие главы\n"
+        "📊 Характеристики — увидеть баланс пары\n"
+        "📜 Контракт — проверить условия союза\n"
+        "🔮 Судьба — открыть прогноз\n"
+        f"💒 Свадьба — запустить церемонию{divorce_line}\n\n"
+        f"{brand.div()}\n"
+        "<i>Все действия открываются здесь, без лишних сообщений.</i>"
+    )
+
+
+def _rpg_menu_empty_text(name: str) -> str:
+    return (
+        f"{brand.hdr()}\n\n"
+        "💍 <b>ЦЕНТР СОЮЗА</b>\n\n"
+        f"Привет, <b>{html.escape(name)}</b>.\n"
+        "Здесь появится твоя история отношений.\n\n"
+        "Чтобы открыть меню пары:\n"
+        "1. Ответь на сообщение человека.\n"
+        "2. Напиши <code>/отношения</code> или <code>/брак меню</code>.\n\n"
+        "После первого согласия здесь появятся свидания, характеристики, "
+        "контракт, судьба и свадебная сцена.\n\n"
+        f"{brand.div()}"
+    )
+
+
+def _rpg_menu_empty_keyboard(uid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="💡 Как начать историю",
+            callback_data=f"rpgm:help:{uid}:0",
+        ),
+    ]])
+
+
+def _rpg_date_event(
+    record: dict,
+    key: str,
+    uid_a: int,
+    uid_b: int,
+    chat_id: int,
+) -> tuple[str, str, int, str]:
+    history = record.setdefault("history", [])
+    rng = _rpg_rng(key, f"date:{today_kyiv().isoformat()}:{len(history)}")
+    place = rng.choice(_RPG_PLACES)
+    order = rng.choice(_RPG_ORDERS)
+    compatibility = _rpg_compatibility(record)
+    if is_married(chat_id, uid_a) and get_partner(chat_id, uid_a) == uid_b:
+        outcome = "ПОЖЕНИЛИСЬ 💍"
+    else:
+        outcome = rng.choice(_RPG_DATE_OUTCOMES)
+    history.append({
+        "date": today_kyiv().isoformat(),
+        "place": place,
+        "order": order,
+        "compatibility": compatibility,
+        "outcome": outcome,
+    })
+    del history[:-MARRIAGE_HISTORY_LIMIT]
+    return place, order, compatibility, outcome
+
+
+async def _rpg_target(msg: Message, command: CommandObject = None):
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        return msg.reply_to_message.from_user
+    args = (command.args or "").strip() if command else ""
+    if not args:
+        text = (msg.text or "").strip()
+        args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ""
+    if not args:
+        return None
+
+    class _RpgCommand:
+        def __init__(self, value: str):
+            self.args = value
+
+    return await get_user(msg, _RpgCommand(args))
+
+
+async def _rpg_pair_from_message(msg: Message, command: CommandObject = None):
+    target = await _rpg_target(msg, command)
+    if not target:
+        await msg.reply(
+            "💍 Ответь на сообщение человека или укажи <code>@username</code>.",
+            parse_mode="HTML",
+        )
+        return None
+    if target.id == msg.from_user.id:
+        await msg.reply("😄 Нужен второй участник пары.")
+        return None
+    if target.is_bot and target.id != _BOT_ID:
+        await msg.reply("🤖 В брачную RPG можно пригласить только человека.")
+        return None
+    return msg.from_user, target
+
+
+async def _rpg_start_wedding(msg: Message, first: User, second: User):
+    if is_married(msg.chat.id, first.id) or is_married(msg.chat.id, second.id):
+        if get_partner(msg.chat.id, first.id) == second.id:
+            return await msg.reply("💍 Вы уже в браке — свадебная история сохранена.")
+        return await msg.reply("💔 Один из участников уже состоит в другом браке.")
+    key, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    session = marriage_wedding_sessions.get(key)
+    if _rpg_expire_wedding_session(key, session):
+        session = None
+    if isinstance(session, dict) and session.get("status") == "pending":
+        return await msg.reply("💒 Свадебная церемония уже началась — ждём ответы пары.")
+    expires_at = now_kyiv() + MARRIAGE_WEDDING_TTL
+    marriage_wedding_sessions[key] = {
+        "chat_id": econ_cid(msg.chat.id),
+        "users": [first.id, second.id],
+        "votes": {},
+        "status": "pending",
+        "created_at": now_kyiv().isoformat(timespec="seconds"),
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+    }
+    schedule_state_save("начало свадебного события")
+    return await msg.reply(
+        f"{_rpg_pair_banner(record, first.id, second.id, 'СЦЕНА · ПРЕДСВАДЕБНЫЙ ВЫБОР')}\n\n"
+        "💒 <b>Церемония открыта</b>\n\n"
+        "🎤 Ведущий: «Согласны ли вы связать свои истории?»\n"
+        "Оба участника должны нажать одну кнопку.\n\n"
+        f"⏳ Окно решения: до <code>{expires_at.strftime('%H:%M')}</code> по Киеву\n"
+        "<i>Если ответа не будет, сцена закроется без штрафов и начислений.</i>",
+        parse_mode="HTML",
+        reply_markup=_rpg_wedding_keyboard(first.id, second.id),
+    )
+
+
+async def cmd_date(msg: Message, command: CommandObject = None):
+    pair = await _rpg_pair_from_message(msg, command)
+    if not pair:
+        return
+    first, second = pair
+    key, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    place, order, compatibility, outcome = _rpg_date_event(
+        record, key, first.id, second.id, msg.chat.id
+    )
+    schedule_state_save("свидание пары")
+    await msg.reply(
+        f"{_rpg_pair_banner(record, first.id, second.id, 'ГЛАВА · СВИДАНИЕ')}\n\n"
+        f"📍 <b>Локация</b>\n{html.escape(place)}\n\n"
+        f"🍓 <b>Заказ на двоих</b>\n{html.escape(order)}\n\n"
+        f"✨ <b>Событие дня</b>\n{html.escape(outcome)}\n\n"
+        f"{brand.div()}\n"
+        f"❤️ Резонанс пары: <b>{compatibility}%</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="💒 Начать свадьбу",
+                callback_data=f"rpg:ws:{min(first.id, second.id)}:{max(first.id, second.id)}",
+            ),
+        ], [
+            InlineKeyboardButton(
+                text="📜 Контракт",
+                callback_data=f"rpg:ct:{min(first.id, second.id)}:{max(first.id, second.id)}",
+            ),
+            InlineKeyboardButton(
+                text="📖 Летопись",
+                callback_data=f"rpg:hi:{min(first.id, second.id)}:{max(first.id, second.id)}",
+            ),
+        ]]),
+    )
+
+
+async def cmd_marriage_history(msg: Message, command: CommandObject = None):
+    pair = await _rpg_pair_from_message(msg, command)
+    if not pair:
+        return
+    first, second = pair
+    _, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    text = _rpg_history_text(record, first.id, second.id)
+    schedule_state_save("история пары")
+    await msg.reply(
+        text,
+        parse_mode="HTML",
+        reply_markup=_rpg_pair_tools(first.id, second.id),
+    )
+
+
+async def cmd_marriage_stats(msg: Message, command: CommandObject = None):
+    pair = await _rpg_pair_from_message(msg, command)
+    if not pair:
+        return
+    first, second = pair
+    _, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    schedule_state_save("обновление характеристик пары")
+    await msg.reply(
+        f"{_rpg_pair_banner(record, first.id, second.id, 'ПРОФИЛЬ ПАРЫ · ХАРАКТЕР')}\n\n"
+        f"{_rpg_stats_block(record)}\n\n"
+        f"{brand.div()}\n"
+        f"📈 Совместимость: <b>{_rpg_compatibility(record)}%</b>\n"
+        f"🏷 Статус: <b>{html.escape(str(record.get('status', 'встречаются')))}</b>\n"
+        f"🏠 Общий бюджет: <b>${int(record.get('budget', 0)):,}</b> LMN\n\n"
+        "<i>Пара развивается каждый новый день.</i>",
+        parse_mode="HTML",
+        reply_markup=_rpg_pair_tools(first.id, second.id),
+    )
+
+
+async def cmd_marriage_contract(msg: Message, command: CommandObject = None):
+    pair = await _rpg_pair_from_message(msg, command)
+    if not pair:
+        return
+    first, second = pair
+    key, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    _rpg_contract(record, key, first.id, second.id)
+    schedule_state_save("брачный контракт")
+    await msg.reply(
+        _rpg_contract_text(record, first.id, second.id),
+        parse_mode="HTML",
+        reply_markup=_rpg_contract_keyboard(first.id, second.id),
+    )
+
+
+async def cmd_wedding(msg: Message, command: CommandObject = None):
+    pair = await _rpg_pair_from_message(msg, command)
+    if pair:
+        await _rpg_start_wedding(msg, *pair)
+
+
+async def _rpg_menu_inferred_pair(msg: Message):
+    """Находит пару пользователя для входа в меню без reply-сообщения."""
+    if not msg.from_user:
+        return None
+    uid = msg.from_user.id
+    partner_id = get_partner(msg.chat.id, uid)
+    candidate_record = None
+    if not partner_id:
+        canonical_chat_id = econ_cid(msg.chat.id)
+        for record in marriage_rpg_pairs.values():
+            if not isinstance(record, dict):
+                continue
+            users = record.get("users", [])
+            if uid not in users or record.get("chat_id") not in {
+                msg.chat.id, canonical_chat_id
+            }:
+                continue
+            other_ids = [int(item) for item in users if int(item) != uid]
+            if other_ids:
+                partner_id = other_ids[0]
+                candidate_record = record
+                break
+    if not partner_id:
+        return None
+
+    partner_name = ""
+    if isinstance(candidate_record, dict):
+        names = candidate_record.get("names", {})
+        partner_name = str(names.get(str(partner_id), "")).strip()
+    try:
+        member = await bot.get_chat_member(msg.chat.id, partner_id)
+        partner = member.user
+    except Exception:
+        partner = User(
+            id=partner_id,
+            is_bot=False,
+            first_name=partner_name or f"ID {partner_id}",
+        )
+    return msg.from_user, partner
+
+
+async def cmd_marriage_menu(msg: Message, command: CommandObject = None):
+    """Открывает единую панель брачной RPG."""
+    raw_args = (command.args or "").strip() if command else ""
+    menu_words = {"меню", "menu", "панель", "центр"}
+    has_explicit_target = bool(msg.reply_to_message) or (
+        raw_args and raw_args.casefold() not in menu_words
+    )
+    pair = None
+    if has_explicit_target:
+        pair = await _rpg_pair_from_message(msg, command)
+    else:
+        pair = await _rpg_menu_inferred_pair(msg)
+
+    if not pair:
+        name = msg.from_user.full_name if msg.from_user else "путник"
+        await msg.reply(
+            _rpg_menu_empty_text(name),
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_empty_keyboard(msg.from_user.id),
+        )
+        return
+
+    first, second = pair
+    _, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    schedule_state_save("открытие меню брака")
+    await msg.reply(
+        _rpg_menu_text(record, first.id, second.id),
+        parse_mode="HTML",
+        reply_markup=_rpg_menu_keyboard(
+            first.id, second.id, str(record.get("status", ""))
+        ),
+    )
+
+
+def _rpg_menu_date_text(
+    record: dict,
+    uid_a: int,
+    uid_b: int,
+    place: str,
+    order: str,
+    compatibility: int,
+    outcome: str,
+) -> str:
+    return (
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'ГЛАВА · СВИДАНИЕ')}\n\n"
+        f"📍 <b>Локация</b>\n{html.escape(place)}\n\n"
+        f"🍓 <b>Заказ на двоих</b>\n{html.escape(order)}\n\n"
+        f"✨ <b>Событие дня</b>\n{html.escape(outcome)}\n\n"
+        f"{brand.div()}\n"
+        f"❤️ Резонанс пары: <b>{compatibility}%</b>"
+    )
+
+
+def _rpg_menu_date_keyboard(uid_a: int, uid_b: int) -> InlineKeyboardMarkup:
+    low, high = min(uid_a, uid_b), max(uid_a, uid_b)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="💒 Начать свадьбу",
+            callback_data=f"rpgm:wedding:{low}:{high}",
+        )],
+        [InlineKeyboardButton(
+            text="📖 Летопись",
+            callback_data=f"rpgm:history:{low}:{high}",
+        ), InlineKeyboardButton(
+            text="↩️ Назад",
+            callback_data=f"rpgm:home:{low}:{high}",
+        )],
+    ])
+
+
+def _rpg_menu_stats_text(record: dict, uid_a: int, uid_b: int) -> str:
+    return (
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'ПРОФИЛЬ ПАРЫ · ХАРАКТЕР')}\n\n"
+        f"{_rpg_stats_block(record)}\n\n"
+        f"{brand.div()}\n"
+        f"📈 Совместимость: <b>{_rpg_compatibility(record)}%</b>\n"
+        f"🏷 Статус: <b>{html.escape(str(record.get('status', 'встречаются')))}</b>\n"
+        f"🏠 Общий бюджет: <b>{int(record.get('budget', 0)):,} LMN</b>\n\n"
+        "<i>Пара развивается каждый новый день.</i>"
+    )
+
+
+def _rpg_menu_help_text() -> str:
+    return (
+        f"{brand.hdr()}\n\n"
+        "💍 <b>КАК ОТКРЫТЬ ИСТОРИЮ</b>\n\n"
+        "Ответь на сообщение человека и напиши:\n"
+        "<code>/брак</code> — отправить предложение\n"
+        "<code>/отношения</code> — открыть меню пары\n\n"
+        "После согласия у пары появится собственный центр союза "
+        "со свиданиями, летописью, контрактом и судьбой."
+    )
+
+
+def _rpg_menu_pair_allowed(
+    record: dict | None,
+    uid_a: int,
+    uid_b: int,
+    actor_id: int,
+) -> bool:
+    return (
+        isinstance(record, dict)
+        and uid_a > 0
+        and uid_b > 0
+        and uid_a != uid_b
+        and actor_id in {uid_a, uid_b}
+        and set(record.get("users", [])) == {uid_a, uid_b}
+    )
+
+
+@dp.callback_query(F.data.startswith("rpgm:"))
+async def marriage_menu_callback(cb: CallbackQuery):
+    if not cb.message:
+        return await cb.answer("Сообщение недоступно", show_alert=True)
+    parts = (cb.data or "").split(":")
+    if len(parts) != 4:
+        return await cb.answer("Некорректное меню", show_alert=True)
+    action = parts[1]
+    try:
+        uid_a, uid_b = int(parts[2]), int(parts[3])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная пара", show_alert=True)
+
+    if action in {"help", "close"} and uid_b == 0:
+        if cb.from_user.id != uid_a:
+            return await cb.answer("Это меню не для тебя 😄", show_alert=True)
+        if action == "help":
+            await cb.message.edit_text(
+                _rpg_menu_help_text(),
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="↩️ Назад",
+                        callback_data=f"rpgm:close:{uid_a}:0",
+                    )
+                ]]),
+            )
+        else:
+            await cb.message.edit_text(
+                _rpg_menu_empty_text(cb.from_user.full_name),
+                parse_mode="HTML",
+                reply_markup=_rpg_menu_empty_keyboard(uid_a),
+            )
+        return await cb.answer()
+
+    allowed_actions = {
+        "home", "date", "history", "stats", "contract", "destiny", "wedding",
+        "divorce", "divorce_confirm",
+    }
+    if (
+        uid_a == uid_b
+        or uid_a <= 0
+        or uid_b <= 0
+        or action not in allowed_actions
+        or cb.from_user.id not in {uid_a, uid_b}
+    ):
+        return await cb.answer("Это меню не для тебя 😄", show_alert=True)
+
+    key = _rpg_pair_key(cb.message.chat.id, uid_a, uid_b)
+    record = marriage_rpg_pairs.get(key)
+    if not _rpg_menu_pair_allowed(record, uid_a, uid_b, cb.from_user.id):
+        return await cb.answer(
+            "Это меню устарело — открой отношения заново.",
+            show_alert=True,
+        )
+
+    if action == "home":
+        _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        await cb.message.edit_text(
+            _rpg_menu_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_keyboard(
+                uid_a, uid_b, str(record.get("status", ""))
+            ),
+        )
+        return await cb.answer()
+
+    if action == "date":
+        _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        place, order, compatibility, outcome = _rpg_date_event(
+            record, key, uid_a, uid_b, cb.message.chat.id
+        )
+        schedule_state_save("свидание из меню брака")
+        await cb.message.edit_text(
+            _rpg_menu_date_text(
+                record, uid_a, uid_b, place, order, compatibility, outcome
+            ),
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_date_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer("Новая глава записана 💌")
+
+    if action == "history":
+        await cb.message.edit_text(
+            _rpg_history_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_back_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "stats":
+        _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        schedule_state_save("характеристики из меню брака")
+        await cb.message.edit_text(
+            _rpg_menu_stats_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_back_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "contract":
+        _rpg_contract(record, key, uid_a, uid_b)
+        schedule_state_save("контракт из меню брака")
+        await cb.message.edit_text(
+            _rpg_contract_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_contract_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "destiny":
+        if not isinstance(record.get("destiny"), dict):
+            _rpg_destiny(record, key, uid_a, uid_b)
+            schedule_state_save("судьба из меню брака")
+        await cb.message.edit_text(
+            _rpg_destiny_text(record, uid_a, uid_b, key),
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_back_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "divorce":
+        if (
+            not is_married(cb.message.chat.id, uid_a)
+            or get_partner(cb.message.chat.id, uid_a) != uid_b
+        ):
+            return await cb.answer("Этот союз уже закрыт", show_alert=True)
+        name_a, name_b = _rpg_names(record, uid_a, uid_b)
+        await cb.message.edit_text(
+            f"{_rpg_pair_banner(record, uid_a, uid_b, 'ПОВОРОТ · РЕШЕНИЕ ПАРЫ')}\n\n"
+            "💔 <b>Закрыть эту историю?</b>\n\n"
+            f"<b>{html.escape(name_a)}</b> и <b>{html.escape(name_b)}</b> "
+            "перестанут быть женаты.\n"
+            "Летопись свиданий сохранится, но союз получит статус «история закрыта».\n\n"
+            "<i>Это действие нельзя отменить одной кнопкой.</i>",
+            parse_mode="HTML",
+            reply_markup=_rpg_menu_divorce_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "divorce_confirm":
+        if (
+            not is_married(cb.message.chat.id, uid_a)
+            or get_partner(cb.message.chat.id, uid_a) != uid_b
+        ):
+            return await cb.answer("Этот союз уже закрыт", show_alert=True)
+        cid = econ_cid(cb.message.chat.id)
+        marriages.setdefault(cid, {})
+        marriages[cid].pop(uid_a, None)
+        marriages[cid].pop(uid_b, None)
+        marriage_dates.pop(f"{min(uid_a, uid_b)}_{max(uid_a, uid_b)}", None)
+        marriage_wedding_sessions.pop(key, None)
+        record["status"] = "разведены"
+        record["destiny"] = None
+        save_data()
+        name_a, name_b = _rpg_names(record, uid_a, uid_b)
+        await cb.message.edit_text(
+            f"{_rpg_pair_banner(record, uid_a, uid_b, 'ФИНАЛ · ИСТОРИЯ ЗАКРЫТА')}\n\n"
+            "💔 <b>Развод оформлен</b>\n\n"
+            f"<b>{html.escape(name_a)}</b> и <b>{html.escape(name_b)}</b> "
+            "больше не женаты.\n\n"
+            "<i>Летопись осталась. Новая глава может начаться позже.</i>\n\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+            reply_markup=_rpg_pair_tools(uid_a, uid_b),
+        )
+        return await cb.answer("История закрыта")
+
+    if is_married(cb.message.chat.id, uid_a) or is_married(cb.message.chat.id, uid_b):
+        return await cb.answer("Один из участников уже состоит в браке", show_alert=True)
+    session = marriage_wedding_sessions.get(key)
+    if _rpg_expire_wedding_session(key, session):
+        session = None
+    if isinstance(session, dict) and session.get("status") == "pending":
+        return await cb.answer("Церемония уже открыта — ждём решение пары 💍")
+    expires_at = now_kyiv() + MARRIAGE_WEDDING_TTL
+    marriage_wedding_sessions[key] = {
+        "chat_id": econ_cid(cb.message.chat.id),
+        "users": [uid_a, uid_b],
+        "votes": {},
+        "status": "pending",
+        "created_at": now_kyiv().isoformat(timespec="seconds"),
+        "expires_at": expires_at.isoformat(timespec="seconds"),
+    }
+    await cb.message.edit_text(
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'СЦЕНА · ПРЕДСВАДЕБНЫЙ ВЫБОР')}\n\n"
+        "💒 <b>Церемония открыта</b>\n\n"
+        "🎤 Ведущий: «Согласны ли вы связать свои истории?»\n"
+        "Оба участника должны нажать одну кнопку.\n\n"
+        f"⏳ Окно решения: до <code>{expires_at.strftime('%H:%M')}</code> по Киеву\n"
+        "<i>Если ответа не будет, сцена закроется без штрафов и начислений.</i>",
+        parse_mode="HTML",
+        reply_markup=_rpg_wedding_keyboard(uid_a, uid_b),
+    )
+    schedule_state_save("свадьба из меню брака")
+    return await cb.answer()
+
+
+@dp.callback_query(F.data.startswith("rpg:"))
+async def marriage_rpg_callback(cb: CallbackQuery):
+    if not cb.message:
+        return await cb.answer("Сообщение недоступно", show_alert=True)
+    parts = (cb.data or "").split(":")
+    if len(parts) != 4:
+        return await cb.answer("Некорректное событие", show_alert=True)
+    action = parts[1]
+    try:
+        uid_a, uid_b = int(parts[2]), int(parts[3])
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректная пара", show_alert=True)
+    if uid_a == uid_b or action not in {"ws", "ct", "st", "cv", "ds", "hi", "wy", "wn"}:
+        return await cb.answer("Некорректное событие", show_alert=True)
+    if cb.from_user.id not in {uid_a, uid_b}:
+        return await cb.answer("Это событие не для тебя 😄", show_alert=True)
+
+    key = _rpg_pair_key(cb.message.chat.id, uid_a, uid_b)
+    if action == "ct":
+        record = marriage_rpg_pairs.get(key)
+        if not isinstance(record, dict):
+            _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        _rpg_contract(record, key, uid_a, uid_b)
+        schedule_state_save("просмотр брачного контракта")
+        await cb.message.edit_text(
+            _rpg_contract_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_contract_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "st":
+        record = marriage_rpg_pairs.get(key)
+        if not isinstance(record, dict):
+            _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        schedule_state_save("просмотр характеристик пары")
+        await cb.message.edit_text(
+            f"{_rpg_pair_banner(record, uid_a, uid_b, 'ПРОФИЛЬ ПАРЫ · ХАРАКТЕР')}\n\n"
+            f"{_rpg_stats_block(record)}\n\n"
+            f"{brand.div()}\n"
+            f"📈 Совместимость: <b>{_rpg_compatibility(record)}%</b>\n"
+            f"🏷 Статус: <b>{html.escape(str(record.get('status', 'встречаются')))}</b>\n"
+            f"🏠 Общий бюджет: <b>{int(record.get('budget', 0)):,} LMN</b>\n\n"
+            "<i>Пара развивается каждый новый день.</i>",
+            parse_mode="HTML",
+            reply_markup=_rpg_pair_tools(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "ds":
+        record = marriage_rpg_pairs.get(key)
+        if not isinstance(record, dict):
+            _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        if not isinstance(record.get("destiny"), dict):
+            _rpg_destiny(record, key, uid_a, uid_b)
+            schedule_state_save("просмотр прогноза пары")
+        await cb.message.edit_text(
+            _rpg_destiny_text(record, uid_a, uid_b, key),
+            parse_mode="HTML",
+            reply_markup=_rpg_pair_tools(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "hi":
+        record = marriage_rpg_pairs.get(key)
+        if not isinstance(record, dict):
+            _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        await cb.message.edit_text(
+            _rpg_history_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_pair_tools(uid_a, uid_b),
+        )
+        return await cb.answer()
+
+    if action == "cv":
+        record = marriage_rpg_pairs.get(key)
+        if not isinstance(record, dict):
+            _, record = _rpg_ensure_pair(cb.message.chat.id, uid_a, uid_b)
+        contract = _rpg_contract(record, key, uid_a, uid_b)
+        duties = contract.get("duties", [])
+        if duties:
+            index = len(contract.get("violations", [])) % len(duties)
+            contract.setdefault("violations", []).append({
+                "by": cb.from_user.id,
+                "duty": duties[index].get("duty", ""),
+                "date": today_kyiv().isoformat(),
+            })
+        schedule_state_save("нарушение брачного контракта")
+        await cb.message.edit_text(
+            _rpg_contract_text(record, uid_a, uid_b),
+            parse_mode="HTML",
+            reply_markup=_rpg_contract_keyboard(uid_a, uid_b),
+        )
+        return await cb.answer("Нарушение зафиксировано")
+
+    if action == "ws":
+        record = marriage_rpg_pairs.get(key, {})
+        session = marriage_wedding_sessions.get(key)
+        if _rpg_expire_wedding_session(key, session):
+            session = None
+        names = record.get("names", {}) if isinstance(record, dict) else {}
+        first_name = str(names.get(str(uid_a), f"ID {uid_a}"))[:64]
+        second_name = str(names.get(str(uid_b), f"ID {uid_b}"))[:64]
+        if is_married(cb.message.chat.id, uid_a) or is_married(cb.message.chat.id, uid_b):
+            return await cb.answer("Один из участников уже состоит в браке", show_alert=True)
+        if isinstance(session, dict) and session.get("status") == "pending":
+            return await cb.answer("Церемония уже открыта — ждём решение пары 💍")
+        expires_at = now_kyiv() + MARRIAGE_WEDDING_TTL
+        marriage_wedding_sessions[key] = {
+            "chat_id": econ_cid(cb.message.chat.id),
+            "users": [uid_a, uid_b],
+            "votes": {},
+            "status": "pending",
+            "created_at": now_kyiv().isoformat(timespec="seconds"),
+            "expires_at": expires_at.isoformat(timespec="seconds"),
+        }
+        await cb.message.edit_text(
+            f"{_rpg_pair_banner(record, uid_a, uid_b, 'СЦЕНА · ПРЕДСВАДЕБНЫЙ ВЫБОР')}\n\n"
+            "💒 <b>Церемония открыта</b>\n\n"
+            "🎤 Ведущий: «Согласны ли вы связать свои истории?»\n"
+            "Оба участника должны нажать одну кнопку.\n\n"
+            f"⏳ Окно решения: до <code>{expires_at.strftime('%H:%M')}</code> по Киеву\n"
+            "<i>Если ответа не будет, сцена закроется без штрафов и начислений.</i>",
+            parse_mode="HTML",
+            reply_markup=_rpg_wedding_keyboard(uid_a, uid_b),
+        )
+        schedule_state_save("начало свадебного события")
+        return await cb.answer()
+
+    record = marriage_rpg_pairs.get(key, {})
+    session = marriage_wedding_sessions.get(key)
+    if _rpg_expire_wedding_session(key, session):
+        await cb.message.edit_text(
+            f"{_rpg_pair_banner(record if isinstance(record, dict) else {}, uid_a, uid_b, 'СЦЕНА ЗАКРЫТА')}\n\n"
+            "⏳ <b>Свадебное окно истекло</b>\n\n"
+            "Ответ не был дан вовремя. Можно открыть новую церемонию без штрафов.",
+            parse_mode="HTML",
+        )
+        schedule_state_save("истечение свадебного события")
+        return await cb.answer("Свадебная сцена закрыта", show_alert=True)
+    if not isinstance(session, dict) or session.get("status") != "pending":
+        return await cb.answer("Свадебное событие уже завершено", show_alert=True)
+    session.setdefault("votes", {})[str(cb.from_user.id)] = action == "wy"
+    if action == "wn":
+        session["status"] = "declined"
+        marriage_wedding_sessions.pop(key, None)
+        schedule_state_save("отказ от свадебного события")
+        await cb.message.edit_text(
+            f"{_rpg_pair_banner(record if isinstance(record, dict) else {}, uid_a, uid_b, 'СЦЕНА · РЕШЕНИЕ')}\n\n"
+            "💔 <b>Свадьба отменена</b>\n\n"
+            "Судьба оставила эту историю открытой. Новую церемонию можно начать позже.",
+            parse_mode="HTML",
+        )
+        return await cb.answer("Решение сохранено")
+
+    votes = session.get("votes", {})
+    if not all(votes.get(str(uid), False) for uid in (uid_a, uid_b)):
+        schedule_state_save("голос на свадебном событии")
+        await cb.answer("Твоё «ДА» принято — ждём второго участника 💍")
+        return
+
+    if is_married(cb.message.chat.id, uid_a) or is_married(cb.message.chat.id, uid_b):
+        marriage_wedding_sessions.pop(key, None)
+        schedule_state_save("свадебное событие: конфликт статуса")
+        return await cb.answer("Один из участников уже состоит в браке", show_alert=True)
+    cid = econ_cid(cb.message.chat.id)
+    marriages.setdefault(cid, {})
+    marriages[cid][uid_a] = uid_b
+    marriages[cid][uid_b] = uid_a
+    marriage_dates[f"{min(uid_a, uid_b)}_{max(uid_a, uid_b)}"] = today_kyiv().isoformat()
+    names = marriage_rpg_pairs.get(key, {}).get("names", {})
+    _, record = _rpg_ensure_pair(
+        cb.message.chat.id,
+        uid_a,
+        uid_b,
+        str(names.get(str(uid_a), f"ID {uid_a}")),
+        str(names.get(str(uid_b), f"ID {uid_b}")),
+    )
+    record["status"] = "молодожёны"
+    record["stats"]["love"] = _rpg_clamp(record["stats"].get("love", 50) + 5)
+    record["stats"]["passion"] = _rpg_clamp(record["stats"].get("passion", 50) + 4)
+    _rpg_contract(record, key, uid_a, uid_b)
+    add_balance(uid_a, 500)
+    add_balance(uid_b, 500)
+    marriage_wedding_sessions.pop(key, None)
+    schedule_state_save("свадебное событие завершено")
+    final = _rpg_rng(key, f"wedding:{today_kyiv().isoformat()}").choice((
+        "И жили они долго и очень красиво. ✨",
+        "Гости плакали, ведущий танцевал, а судьба поставила лайк. 💫",
+        "Первое семейное решение принято: кто моет посуду? 😄",
+    ))
+    await cb.message.edit_text(
+        f"{_rpg_pair_banner(record, uid_a, uid_b, 'ФИНАЛ · ОНИ ВЫБРАЛИ ДРУГ ДРУГА')}\n\n"
+        "❤️ Оба сказали «ДА».\n"
+        f"🎊 +500 LMN каждому в подарок!\n\n"
+        f"<i>{final}</i>\n\n"
+        f"{brand.div()}\n"
+        f"{_rpg_stats_block(record)}",
+        parse_mode="HTML",
+        reply_markup=_rpg_pair_tools(uid_a, uid_b),
+    )
+    await cb.answer("Брак оформлен 💍")
+
+
 @dp.message(Command("marry"))
-async def cmd_marry(msg: Message):
+async def cmd_marry(msg: Message, command: CommandObject = None):
+    raw_args = (command.args or "").strip().casefold() if command else ""
+    if raw_args in {"меню", "menu", "панель", "центр"}:
+        return await cmd_marriage_menu(msg)
     if not msg.reply_to_message:
         return await msg.reply("Ответь на сообщение человека которому хочешь сделать предложение 💍")
     proposer = msg.from_user
@@ -4023,10 +5404,60 @@ async def cmd_marry(msg: Message):
     chat_id = msg.chat.id
     if target.id == proposer.id:
         return await msg.reply("Нельзя жениться на себе 😄")
-    if target.is_bot:
+    target_is_lumena = bool(_BOT_ID and target.id == _BOT_ID)
+    if target.is_bot and not target_is_lumena:
         return await msg.reply("Бот не может вступить в брак 🤖")
     if is_married(chat_id, proposer.id):
         return await msg.reply("Ты уже в браке! Сначала разведись: развод")
+    if target_is_lumena:
+        if is_married(chat_id, target.id):
+            existing_partner = get_partner(chat_id, target.id)
+            if existing_partner == proposer.id:
+                return await msg.reply("Мы уже в браке 💍❤️")
+            return await msg.reply("Lumena уже состоит в виртуальном браке 💔")
+
+        cid = econ_cid(chat_id)
+        marriages.setdefault(cid, {})
+        marriages[cid][proposer.id] = target.id
+        marriages[cid][target.id] = proposer.id
+        pair_key = f"{min(proposer.id, target.id)}_{max(proposer.id, target.id)}"
+        marriage_dates[pair_key] = today_kyiv().isoformat()
+        add_balance(proposer.id, 500)
+        add_balance(target.id, 500)
+        _, rpg_record = _rpg_ensure_pair(
+            chat_id,
+            proposer.id,
+            target.id,
+            proposer.full_name,
+            target.full_name or "Lumena",
+        )
+        rpg_record["status"] = "молодожёны"
+        _rpg_contract(rpg_record, _rpg_pair_key(chat_id, proposer.id, target.id), proposer.id, target.id)
+        await save_state_now("брак пользователя с Lumena")
+
+        lumena_name = target.full_name or "Lumena"
+        marriage_text = (
+            f"{_rpg_pair_banner(rpg_record, proposer.id, target.id, 'ФИНАЛ · ВИРТУАЛЬНЫЙ СОЮЗ')}\n\n"
+            f"💕 <b>{html.escape(proposer.full_name)}</b> × "
+            f"<b>{html.escape(lumena_name)}</b>\n\n"
+            "🎊 +500 LMN каждому в подарок!\n"
+            "✨ Теперь вы официально виртуальная семья — и у неё есть своя летопись.\n\n"
+            f"{_rpg_stats_block(rpg_record)}\n\n"
+            f"{brand.div()}"
+        )
+        await msg.reply(
+            marriage_text,
+            parse_mode="HTML",
+            reply_markup=_rpg_pair_tools(proposer.id, target.id),
+        )
+
+        pub_chat = _ank.get_pub_chat()
+        if pub_chat and pub_chat != chat_id:
+            try:
+                await bot.send_message(pub_chat, marriage_text, parse_mode="HTML")
+            except Exception:
+                pass
+        return
     if is_married(chat_id, target.id):
         return await msg.reply(f"{target.full_name} уже состоит в браке 💔")
     # Блокируем повторное предложение от того же пропоузера
@@ -4051,13 +5482,18 @@ async def cmd_marry(msg: Message):
     }
     schedule_state_save("новое предложение брака")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="💍 Принять", callback_data=f"mar_y_{proposer.id}"),
+        InlineKeyboardButton(text="💍 Да, выбираю", callback_data=f"mar_y_{proposer.id}"),
         InlineKeyboardButton(text="❌ Отказать", callback_data=f"mar_n_{proposer.id}"),
     ]])
     await msg.reply(
-        f"💍 <b>{html.escape(proposer.full_name)}</b> делает предложение "
-        f"<b>{html.escape(target.full_name)}</b>!\n\n"
-        f"{html.escape(target.full_name)}, ты принимаешь предложение?",
+        f"{brand.hdr()}\n\n"
+        "💌 <b>СЦЕНА · ПРЕДЛОЖЕНИЕ</b>\n\n"
+        f"<blockquote><b>{html.escape(proposer.full_name)}</b>\n"
+        "выбирает тебя для общей истории.</blockquote>\n"
+        f"<b>{html.escape(target.full_name)}</b>, "
+        "ты готов(а) открыть эту главу?\n\n"
+        "💍 После согласия появятся свидания, характеристики и брачный контракт.\n\n"
+        f"{brand.div()}",
         parse_mode="HTML", reply_markup=kb
     )
 
@@ -4103,17 +5539,31 @@ async def cmd_forcemarry(msg: Message, command: CommandObject):
     marriage_dates[_pk] = today_kyiv().isoformat()
     add_balance(first.id, 500)
     add_balance(second.id, 500)
+    _, rpg_record = _rpg_ensure_pair(
+        msg.chat.id,
+        first.id,
+        second.id,
+        first.full_name,
+        second.full_name,
+    )
+    rpg_record["status"] = "молодожёны"
+    _rpg_contract(rpg_record, _rpg_pair_key(msg.chat.id, first.id, second.id), first.id, second.id)
     save_data()
 
     marriage_text = (
-        f"{brand.hdr()}\n\n"
-        "💍 <b>Брак оформлен фаундером!</b>\n\n"
-        f"💕 <b>{html.escape(first.full_name)}</b>\n"
-        f"❤️ <b>{html.escape(second.full_name)}</b>\n\n"
+        f"{_rpg_pair_banner(rpg_record, first.id, second.id, 'ФИНАЛ · СОЮЗ ОФОРМЛЕН')}\n\n"
+        "💍 <b>Фаундер открыл новую главу</b>\n\n"
+        f"💕 <b>{html.escape(first.full_name)}</b> × "
+        f"<b>{html.escape(second.full_name)}</b>\n\n"
         "🎊 +500 LMN каждому в подарок!\n\n"
+        f"{_rpg_stats_block(rpg_record)}\n\n"
         f"{brand.div()}"
     )
-    await msg.reply(marriage_text, parse_mode="HTML")
+    await msg.reply(
+        marriage_text,
+        parse_mode="HTML",
+        reply_markup=_rpg_pair_tools(first.id, second.id),
+    )
 
     pub_chat = _ank.get_pub_chat()
     if pub_chat and pub_chat != msg.chat.id:
@@ -4171,17 +5621,31 @@ async def marry_callback(cb: CallbackQuery):
         marriage_dates[pair_key] = today_kyiv().isoformat()
         add_balance(proposer_id, 500)
         add_balance(target_id, 500)
+        _, rpg_record = _rpg_ensure_pair(
+            chat_id,
+            proposer_id,
+            target_id,
+            proposal["proposer_full"],
+            cb.from_user.full_name,
+        )
+        rpg_record["status"] = "молодожёны"
+        _rpg_contract(rpg_record, _rpg_pair_key(chat_id, proposer_id, target_id), proposer_id, target_id)
         await save_state_now("принятие предложения брака")
         header = random.choice(_marry_accept)
         marry_text = (
-            f"{brand.hdr()}\n\n"
+            f"{_rpg_pair_banner(rpg_record, proposer_id, target_id, 'ФИНАЛ · ОНИ ВЫБРАЛИ ДРУГ ДРУГА')}\n\n"
             f"{header}\n\n"
-            f"💕 <b>{html.escape(proposal['proposer_full'])}</b>\n"
-            f"❤️ <b>{html.escape(cb.from_user.full_name)}</b>\n\n"
+            f"💕 <b>{html.escape(proposal['proposer_full'])}</b> × "
+            f"<b>{html.escape(cb.from_user.full_name)}</b>\n\n"
             f"🎊 +500 LMN каждому в подарок!\n\n"
+            f"{_rpg_stats_block(rpg_record)}\n\n"
             f"{brand.div()}"
         )
-        await cb.message.edit_text(marry_text, parse_mode="HTML")
+        await cb.message.edit_text(
+            marry_text,
+            parse_mode="HTML",
+            reply_markup=_rpg_pair_tools(proposer_id, target_id),
+        )
         # Дублюємо оголошення в основний чат
         pub_chat = _ank.get_pub_chat()
         if pub_chat and pub_chat != chat_id:
@@ -4198,8 +5662,10 @@ async def marry_callback(cb: CallbackQuery):
         ]
         await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
+            "💌 <b>ГЛАВА НЕ ОТКРЫТА</b>\n\n"
             f"{header}\n\n"
             f"{random.choice(reject_lines)}\n\n"
+            "<i>Никаких штрафов. Просто честный ответ.</i>\n\n"
             f"{brand.div()}",
             parse_mode="HTML"
         )
@@ -4249,10 +5715,17 @@ async def cmd_fordivorce(msg: Message, command: CommandObject = None):
     # Удаляем дату свадьбы
     _pk = f"{min(first.id, second_id)}_{max(first.id, second_id)}"
     marriage_dates.pop(_pk, None)
+    rpg_key = _rpg_pair_key(msg.chat.id, first.id, second_id)
+    marriage_wedding_sessions.pop(rpg_key, None)
+    _, rpg_record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second_id, first.full_name, second_name
+    )
+    rpg_record["status"] = "разведены"
+    rpg_record["destiny"] = None
     save_data()
 
     divorce_text = (
-        f"{brand.hdr()}\n\n"
+        f"{_rpg_pair_banner(rpg_record, first.id, second_id, 'ФИНАЛ · ИСТОРИЯ ЗАКРЫТА')}\n\n"
         f"✂️ <b>Фаундер разрезал ваши узы</b>\n\n"
         f"<b>{html.escape(first.full_name)}</b> и <b>{html.escape(second_name)}</b> "
         f"больше не женаты.\n\n"
@@ -4287,6 +5760,13 @@ async def cmd_divorce(msg: Message):
     # Удаляем дату свадьбы
     pair_key = f"{min(uid, partner_id)}_{max(uid, partner_id)}"
     marriage_dates.pop(pair_key, None)
+    rpg_key = _rpg_pair_key(chat_id, uid, partner_id)
+    marriage_wedding_sessions.pop(rpg_key, None)
+    _, rpg_record = _rpg_ensure_pair(
+        chat_id, uid, partner_id, msg.from_user.full_name, partner_name
+    )
+    rpg_record["status"] = "разведены"
+    rpg_record["destiny"] = None
     save_data()
     _divorce_txt = [
         "💔 Развод оформлен", "😔 Всё кончено", "💔 Пути разошлись",
@@ -4300,7 +5780,7 @@ async def cmd_divorce(msg: Message):
         "Не судьба — значит так надо",
     ]
     divorce_text = (
-        f"{brand.hdr()}\n\n"
+        f"{_rpg_pair_banner(rpg_record, uid, partner_id, 'ФИНАЛ · ИСТОРИЯ ЗАКРЫТА')}\n\n"
         f"{random.choice(_divorce_txt)}\n\n"
         f"<b>{msg.from_user.full_name}</b> и <b>{partner_name}</b> расстались\n\n"
         f"<i>{random.choice(_divorce_comment)}</i>\n\n"
@@ -4347,10 +5827,14 @@ async def cmd_marriages(msg: Message):
     if not pairs and not pending:
         return await msg.reply("💍 В этом чате пока нет браков")
 
-    rich_html = f"<h1>💍 Браки чата</h1><p>Пар: <b>{len(pairs)}</b></p><hr>"
+    rich_html = (
+        f"{brand.hdr()}\n\n"
+        "💍 <b>АРХИВ СОЮЗОВ</b>\n"
+        f"<i>В этом чате открыто глав: {len(pairs)}</i>\n\n"
+    )
 
     if pairs:
-        pair_rows = ""
+        pair_rows = "💕 <b>Пары</b>\n\n"
         for i, (u1, u2) in enumerate(pairs, 1):
             n1, n2 = f"ID {u1}", f"ID {u2}"
             try:
@@ -4371,18 +5855,18 @@ async def cmd_marriages(msg: Message):
                 days_str = _marriage_duration(wed)
             except Exception:
                 days_str = "—"
+            _, rpg_record = _rpg_ensure_pair(msg.chat.id, u1, u2, n1, n2)
             pair_rows += (
-                f"<tr><td>{i}. {_html.escape(n1)} ❤️ {_html.escape(n2)}</td>"
-                f"<td>{days_str}</td></tr>"
+                f"<blockquote><b>{i}. {_html.escape(n1)} × {_html.escape(n2)}</b>\n"
+                f"Этап: <i>{html.escape(_rpg_stage(rpg_record))}</i> · "
+                f"Связь: <b>{_rpg_compatibility(rpg_record)}%</b>\n"
+                f"Вместе: <b>{html.escape(days_str)}</b> · "
+                f"Свиданий: <b>{len(rpg_record.get('history', []) or [])}</b></blockquote>\n"
             )
-        rich_html += (
-            "<h2>💕 Пары</h2><table>"
-            "<tr><th>Пара</th><th>Вместе</th></tr>"
-            f"{pair_rows}</table>"
-        )
+        rich_html += pair_rows
 
     if pending:
-        pend_rows = ""
+        pend_rows = "⏳ <b>Ожидают ответа</b>\n\n"
         for prop_id, tgt_id, prop_name in pending:
             tgt_name = f"ID {tgt_id}"
             try:
@@ -4390,24 +5874,19 @@ async def cmd_marriages(msg: Message):
                 tgt_name = tm.user.full_name
             except: pass
             pend_rows += (
-                f"<tr><td>{_html.escape(prop_name)}</td><td>{_html.escape(tgt_name)}</td></tr>"
+                f"💌 <b>{_html.escape(prop_name)}</b> → "
+                f"<b>{_html.escape(tgt_name)}</b>\n"
             )
-        rich_html += (
-            "<h2>⏳ Ожидают ответа</h2><table>"
-            "<tr><th>От кого</th><th>Кому</th></tr>"
-            f"{pend_rows}</table>"
-        )
+        rich_html += f"{brand.div()}\n{pend_rows}"
 
-    await msg.reply(rich_html, parse_mode="HTML")
+    await msg.reply(f"{rich_html}\n{brand.div()}", parse_mode="HTML")
 
 # ═══════════════════════════════════════════════════════
 # СТРИКИ
 # ═══════════════════════════════════════════════════════
-@dp.message(Command("checkin"))
 async def cmd_checkin(msg: Message):
     await do_checkin(msg.chat.id, msg.from_user.id, msg)
 
-@dp.message(Command("streak"))
 async def cmd_streak(msg: Message):
     data = streaks.get(econ_cid(msg.chat.id), {}).get(msg.from_user.id, {"count": 0})
     count = data["count"]
@@ -4440,7 +5919,6 @@ async def cmd_streak(msg: Message):
         parse_mode="HTML"
     )
 
-@dp.message(Command("topstreak"))
 async def cmd_topstreak(msg: Message):
     chat_streaks = streaks.get(econ_cid(msg.chat.id), {})
     if not chat_streaks: return await msg.reply("🔥 Пока никто не имеет стрика")
@@ -5527,7 +7005,6 @@ async def cmd_explore(msg: Message):
     schedule_state_save("explore")
 
 
-@dp.message(Command("casino"))
 async def cmd_casino(msg: Message, command: CommandObject):
     if msg.chat.type != "private":
         return await msg.reply(
@@ -5585,7 +7062,6 @@ async def cmd_casino(msg: Message, command: CommandObject):
     )
     schedule_state_save("casino")
 
-@dp.message(Command("slots"))
 async def cmd_slots(msg: Message, command: CommandObject):
     if msg.chat.type != "private":
         return await msg.reply(
@@ -6480,7 +7956,6 @@ async def cmd_topaura(msg: Message):
     await msg.reply("\n".join(lines), parse_mode="HTML")
 
 
-@dp.message(Command("rep"))
 async def cmd_rep(msg: Message):
     target = msg.reply_to_message.from_user if msg.reply_to_message else msg.from_user
     r = get_rep(msg.chat.id, target.id)
@@ -6493,7 +7968,6 @@ async def cmd_rep(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML")
 
-@dp.message(Command("upvote"))
 async def cmd_upvote(msg: Message):
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
     target = msg.reply_to_message.from_user
@@ -6517,7 +7991,6 @@ async def cmd_upvote(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML")
 
-@dp.message(Command("downvote"))
 async def cmd_downvote(msg: Message):
     if not msg.reply_to_message: return await msg.reply("Ответь на сообщение")
     target = msg.reply_to_message.from_user
@@ -6540,7 +8013,6 @@ async def cmd_downvote(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML")
 
-@dp.message(Command("toprep"))
 async def cmd_toprep(msg: Message):
     chat_rep = reputation.get(econ_cid(msg.chat.id), {})
     if not chat_rep: return await msg.reply("Репутация ещё не начислена")
@@ -6801,6 +8273,121 @@ FORTUNES = [
     "Твоя настойчивость в последние дни скоро окупится сторицей 💎",
 ]
 
+# Большая коллекция длинных предсказаний: ответы не повторяют короткие
+# заготовки выше и дают пользователю полноценное послание, а не одну строку.
+FORTUNES.extend([
+    # 1–10
+    "В ближайшие дни обстоятельства начнут складываться в твою пользу, но первый шаг всё равно придётся сделать самостоятельно — не жди идеального момента, создай его 🌅",
+    "Случайная встреча или короткий разговор подарят тебе мысль, которая давно была нужна для решения важного вопроса. Запомни первые слова и не отмахивайся от них 💬",
+    "Твоё терпение почти достигло точки награды: дело, которое двигалось медленно, внезапно получит нужный импульс. Оставь место для хороших новостей и не сдавайся ⏳",
+    "Сегодня особенно важно выбирать не самый громкий путь, а тот, который сохраняет твоё внутреннее спокойствие. Тихое решение окажется гораздо сильнее поспешного доказательства своей правоты 🌙",
+    "Кто-то заметит твою работу раньше, чем ты ожидаешь, и назовёт твоё имя там, где открываются новые возможности. Позволь себе принять похвалу без лишней скромности ⭐",
+    "Вещь, которую ты считал(а) случайной, окажется частью большой цепочки событий. Посмотри на последние недели целиком — в них уже виден маршрут к желаемому результату 🧩",
+    "Тебе предстоит выбор между привычной безопасностью и живым интересом. Звёзды не требуют риска любой ценой, но советуют хотя бы честно признаться себе, чего ты хочешь 🔮",
+    "Небольшая задержка убережёт тебя от ошибки и даст время заметить важную деталь. Не воспринимай паузу как поражение: иногда судьба защищает нас именно ожиданием 🛡️",
+    "В разговоре с близким человеком появится возможность сказать то, что долго оставалось между строк. Говори мягко, но прямо — искренность сегодня станет началом облегчения 🤍",
+    "Твоя энергия вернётся через простое действие: прогулку, порядок вокруг себя или несколько часов без чужих ожиданий. Забота о себе откроет больше дверей, чем попытка всё успеть 🌿",
+    # 11–20
+    "Финансовый шанс придёт не в форме внезапного богатства, а как разумное предложение или полезное знакомство. Проверь детали, не спеши и выбери то, что работает вдолгую 💰",
+    "Если сегодня появится желание начать заново, прислушайся к нему. Старый опыт никуда не исчезает — он станет твоим преимуществом, когда ты выберешь новый маршрут 🚪",
+    "Вокруг тебя больше поддержки, чем кажется в минуты сомнений. Один честный вопрос правильному человеку снимет напряжение и напомнит, что тебе не обязательно справляться в одиночку 🤝",
+    "Незавершённое дело попросит внимания именно тогда, когда ты решишь его отложить. Вернись к нему на пятнадцать минут — маленькое усилие запустит цепь больших изменений ✅",
+    "Слова, сказанные сегодня с добрым намерением, вернутся к тебе неожиданным способом. Не экономь благодарность и отмечай людей, которые делают твой день светлее ☀️",
+    "Твоя интуиция заметит несоответствие раньше логики. Не обвиняй никого поспешно, просто собери факты и оставь себе право изменить решение, если ощущение подтвердится 👁️",
+    "В творческом деле тебя ждёт момент ясности: разрозненные идеи соединятся в образ, текст или план. Запиши всё сразу, потому что вдохновение любит быстрые руки 🎨",
+    "Кто-то из прошлого может снова появиться в твоём поле, но теперь ты увидишь эту историю иначе. Не возвращайся автоматически — реши, какую роль ей позволено играть сейчас 🔄",
+    "День принесёт приятное совпадение, если ты выйдешь за пределы привычного маршрута. Новое место, новое блюдо или новый разговор окажутся маленькой дверью в большой опыт 🗺️",
+    "Усталость заставляет тебя недооценивать уже сделанное. Составь список пройденного пути — увидишь, что ты гораздо ближе к цели, чем подсказывает сегодняшнее настроение 📜",
+    # 21–30
+    "Сегодня лучше не доказывать силу спором. Самый убедительный ответ — спокойное действие, которое показывает результат без лишних объяснений. Пусть факты говорят за тебя ⚖️",
+    "Тебе предложат помощь в момент, когда гордость захочет отказаться. Прими её без чувства долга: настоящая поддержка не уменьшает твою самостоятельность, а возвращает силы 🌟",
+    "Один из твоих планов потребует корректировки, но это не отмена мечты. Новый поворот уберёт лишние препятствия и приведёт к более устойчивому результату, чем первоначальная схема 🌀",
+    "В ближайшем будущем тебя ждёт сообщение, которое сначала удивит, а затем даст повод улыбнуться. Не отвечай на эмоциях — короткая пауза сделает разговор ещё приятнее 📩",
+    "Твои границы сегодня станут источником уважения. Вежливо откажись от того, что истощает, и направь освободившееся время туда, где твоё участие действительно ценно 🧭",
+    "Если ты давно хотел(а) чему-то научиться, начни с самого простого урока. Результат появится быстрее, когда любопытство будет сильнее страха выглядеть новичком 📚",
+    "Судьба подведёт тебя к человеку, который мыслит иначе, чем ты. Не стремись немедленно переубедить его — неожиданный взгляд поможет увидеть знакомую проблему свежими глазами 🌍",
+    "Дом, рабочее место или цифровое пространство попросит очистки. Убери то, что напоминает о завершённом этапе, и почувствуешь, как в голове появляется место для нового намерения 🧹",
+    "Сегодня удача будет выглядеть как возможность выбрать меньше, но качественнее. Откажись от лишнего шума — один хороший приоритет принесёт больше, чем десять незаконченных дел 🎯",
+    "Важный ответ придёт не из внешнего знака, а из твоей реакции на него. Заметь, что приносит облегчение, а что заставляет сжиматься, и доверься этой честной подсказке 💙",
+    # 31–40
+    "В отношениях наступает время ясности: недосказанное можно превратить в договорённость, а старую обиду — в опыт. Выбирай не победу в споре, а взаимное понимание 💞",
+    "Твоя настойчивость заметна людям, которые принимают решения. Даже если обратной связи пока нет, продолжай показывать качество — результат созревает за пределами твоего взгляда 🌱",
+    "Неожиданная возможность появится через обычную бытовую просьбу. Будь внимателен к мелочам и не считай маленькие поручения ниже своего достоинства — иногда путь начинается именно так 🔑",
+    "Сегодня полезно сверить желания с реальным расписанием. Мечта станет ближе не после грандиозного обещания, а после конкретной даты, короткого шага и честно выделенного времени 🗓️",
+    "Тебе вернут долг — деньгами, добрым словом или поступком, которого ты не ждал(а). Прими этот жест и не пытайся сразу отплатить: баланс восстановится естественно ⚜️",
+    "Старый страх проявится перед новым делом, но на этот раз ты уже не тот человек, который когда-то отступил. Действуй маленькими шагами и отмечай каждую победу над сомнением 🦁",
+    "Вокруг одной идеи возникнет больше интереса, чем ты рассчитывал(а). Поделись ею с теми, кому доверяешь, но сохрани право доработать её до того, как показывать всему миру 💡",
+    "Тебя ждёт продуктивный вечер, если ты заранее уберёшь одно главное отвлечение. Тишина, выключенные уведомления и ясная цель помогут завершить то, что тянулось неделями 🔕",
+    "Короткая поездка или смена обстановки перезагрузит мысли. Даже несколько остановок в незнакомом направлении могут вернуть ощущение любопытства и напомнить о свободе 🚆",
+    "Человек, от которого ты не ожидал(а) понимания, окажется внимательнее, чем казалось. Дай ему возможность проявить себя и не суди отношения по старому впечатлению 🤍",
+    # 41–50
+    "Будущее готовит тебе не громкий триумф, а тихое подтверждение: ты выбрал(а) правильный путь. Узнаешь его по ощущению устойчивости, а не по желанию немедленно всем рассказать 🌌",
+    "Если сегодня всё идёт медленнее обычного, используй это время для проверки деталей. Одна исправленная мелочь сэкономит тебе много сил и поможет избежать повторной работы 🔍",
+    "Твоё чувство юмора поможет снять напряжение в ситуации, где другие уже готовы спорить. Будь добр(а) к людям и не превращай лёгкость в насмешку — тогда тебя услышат 😄",
+    "Пора вернуть в жизнь занятие, которое когда-то приносило радость без оценки и соревнования. Старое увлечение неожиданно напомнит, в чём именно твоя настоящая энергия 🎵",
+    "Важное решение созреет после хорошего сна или прогулки, а не после бесконечного анализа. Разум любит факты, но ясность иногда приходит только тогда, когда тело расслабляется 🌙",
+    "Сегодня ты можешь стать для кого-то тем самым знаком надежды, которого сам(а) когда-то ждал(а). Поделись временем, советом или простым тёплым сообщением — это имеет значение 💌",
+    "Твою идею сначала могут встретить скептически, но спокойное объяснение и небольшой пробный результат изменят отношение. Не требуй мгновенной веры — покажи, как это работает 🛠️",
+    "В ближайшие дни один отказ освободит дорогу к более подходящему предложению. Не принимай закрытую дверь как оценку своей ценности — иногда это точная настройка маршрута 🚪",
+    "Деньги и время потребуют одинаковой бережности. Перед покупкой или обещанием спроси себя, поддерживает ли это твою будущую жизнь, а не только сегодняшнее настроение 💳",
+    "Твоя способность замечать чужие эмоции сегодня усилится. Помогай, но не забирай на себя все переживания — сочувствие становится силой только вместе с личными границами 🫶",
+    # 51–60
+    "Новая глава начнётся с маленького решения, которое никто кроме тебя не сочтёт важным. Именно такие незаметные выборы постепенно меняют образ жизни сильнее громких клятв 📖",
+    "У тебя появится шанс исправить впечатление, оставшееся после неловкого разговора. Не оправдывайся длинно — искреннее признание и уважение к чужим чувствам скажут больше 🕊️",
+    "Твоя профессиональная ценность вырастет, когда ты перестанешь соглашаться на каждую задачу. Выбери работу, где можешь раскрыть сильные стороны, и результат заметят быстрее 🏆",
+    "Семейная тема потребует деликатности, но принесёт тепло, если ты выслушаешь до конца. Не спеши давать решения — иногда человеку сначала нужно почувствовать себя понятым 🏠",
+    "Случайный знак в дороге, песне или книге натолкнёт на правильный вопрос. Не ищи в нём готовый приказ судьбы — используй его как повод честно проверить свои желания 🎶",
+    "Всё, что сегодня кажется слишком обычным, через время станет дорогим воспоминанием. Заметь детали: голос близкого человека, свет в окне, вкус любимого напитка ☕",
+    "Тебе удастся завершить спор без проигравших, если ты заменишь обвинение описанием своих чувств. Прямота может быть бережной — и именно такой её сегодня стоит выбрать 💬",
+    "План, который ты откладывал(а) из-за нехватки уверенности, станет реальнее после разговора с опытным союзником. Не бойся показать черновик и попросить конкретный совет 🤝",
+    "Сегодня твоё внимание к природе, музыке или красивым вещам восстановит внутренний ритм. Красота не отвлекает от важных дел — она помогает вернуться к ним с ясной головой 🌿",
+    "Неожиданная похвала придёт от человека, чьё мнение для тебя важно. Позволь себе поверить в неё: чужое признание иногда показывает качества, которые мы сами привыкли не замечать ✨",
+    # 61–70
+    "Тебе предстоит день, когда правильный темп важнее максимальной скорости. Оставь промежутки между делами, и решения будут точнее, а общение — теплее и спокойнее 🕰️",
+    "Один из друзей предложит идею, которая сначала покажется несвоевременной. Сохрани её, обсуди условия и не отвергай сразу — время может превратить странность в удачный шанс 🚀",
+    "Путь к желаемому результату потребует повторения, а не вдохновения. Сделай сегодня ещё один аккуратный подход, даже если предыдущие попытки не получили ответа 🔁",
+    "В твоём окружении появится человек, рядом с которым не нужно играть роль. Узнай его по лёгкости молчания и по тому, что после разговора у тебя прибавляется энергии 🌟",
+    "Старое обещание напомнит о себе. Выполни его или честно пересмотри, но не оставляй в подвешенном состоянии — освобождённая совесть даст место новым планам 📌",
+    "Твоя смелость будет нужна не для большого риска, а для короткого «нет». Защитив собственное время, ты заметишь, сколько сил раньше уходило на чужие ожидания 🛡️",
+    "Сегодня возможен полезный поворот в учёбе или работе: сложная тема объяснится через простой пример. Запиши его своими словами — так знание останется с тобой надолго 🧠",
+    "В любви важнее окажется не эффектный жест, а последовательность. Маленькая забота, выполненная вовремя, создаст больше доверия, чем красивые обещания без продолжения 💗",
+    "Если на горизонте появится конфликт, выбери время для разговора, когда все смогут выдохнуть. Пауза не отдаляет людей, если она нужна, чтобы говорить уважительно ⚖️",
+    "В ближайшее время твой талант пригодится там, где его не ожидали увидеть. Не уменьшай себя ради удобства других — нестандартность может стать главным преимуществом 🌈",
+    # 71–80
+    "Сегодня полезно задать себе вопрос: «Что я пытаюсь контролировать, хотя это не зависит от меня?» Освободив одну такую область, ты вернёшь энергию к действительно важным делам 🌀",
+    "Небольшая финансовая дисциплина принесёт ощущение свободы. Отложи часть полученного, проверь подписки и не покупай вещь только ради того, чтобы заглушить усталость 💰",
+    "Твоё имя всплывёт в разговоре людей, которые ищут надёжного исполнителя или партнёра. Подготовь коротко рассказать о своих сильных сторонах — возможность любит готовых 📣",
+    "Сегодня удачно просить о повышении, обратной связи или честном распределении обязанностей. Говори о фактах и ценности своей работы, не превращая просьбу в извинение 🏆",
+    "Незнакомая книга, статья или лекция даст ответ на вопрос, который ты ещё не сформулировал(а). Разреши себе читать из любопытства — полезное знание часто приходит обходным путём 📚",
+    "Ты заметишь, что прежняя мечта изменилась вместе с тобой. Это не предательство себя, а взросление желания; уточни направление и продолжи путь уже с новой честностью 🧭",
+    "Тёплый жест от близкого человека напомнит, что доверие строится из повторяющихся мелочей. Ответь тем же, даже если не умеешь красиво говорить о чувствах 💙",
+    "Если сегодня появится ошибка, не прячь её под дополнительными объяснениями. Быстрое признание, план исправления и один вывод превратят неприятность в профессиональный рост 🛠️",
+    "Вечер принесёт ощущение завершённости, если ты остановишься вовремя. Не обязательно закрыть все задачи — достаточно выполнить обещание, данное самому себе 🌙",
+    "Судьба даст тебе шанс увидеть собственный прогресс через чужую историю. Не сравнивай результаты, сравнивай отправную точку — и гордость станет честной, а не случайной 🌱",
+    # 81–90
+    "Утреннее решение, принятое без лишнего шума, освободит целый день. Начни с дела, которое обычно пугает, и дальше всё покажется легче, чем рисовало воображение ☀️",
+    "Человек, с которым ты давно не общался(ась), может прислать знак внимания. Реши, чего хочешь от этого контакта, и отвечай не из ностальгии, а из сегодняшнего понимания себя 📩",
+    "Твоя наблюдательность приведёт к выгодному открытию: заметишь ошибку в договорённости, удобный инструмент или простой способ сэкономить ресурсы. Доверяй привычке перепроверять 🔎",
+    "Необязательно объяснять всем, почему ты меняешь направление. Иногда самый зрелый план растёт в тишине, пока не появится первый результат, который говорит громче намерений 🌿",
+    "В отношениях возможен разговор о будущем. Не пытайся угадать идеальные слова — честно расскажи о надеждах, страхах и готовности делать свою часть общей работы 💞",
+    "День будет щедрым на знаки признания, если ты сам(а) перестанешь обесценивать свои достижения. Отметь даже то, что получилось после нескольких попыток 🎉",
+    "Творческая идея придёт в момент, когда руки заняты чем-то простым. Держи заметки рядом и не оценивай набросок слишком рано — из сырого зерна вырастает сильная концепция ✍️",
+    "Вопрос, который долго казался личным тупиком, решится после смены масштаба. Посмотри на него как на задачу друга и предложи себе такое же терпение, какое дал(а) бы ему 🌍",
+    "Сегодня удачный день, чтобы обновить резюме, портфолио или список целей. Ты увидишь в старых материалах больше опыта, чем помнил(а), и это усилит уверенность в следующем шаге 💼",
+    "Приятная новость придёт после периода неопределённости. Пока она не пришла, не замораживай жизнь ожиданием — продолжай жить так, будто у тебя уже есть право на радость 🌠",
+    # 91–100
+    "Если выбор кажется равным, выбери вариант, который оставляет больше пространства для роста и меньше требует предавать собственные ценности. Внутренняя цена решения важнее внешнего блеска 💎",
+    "Ты можешь получить приглашение туда, где раньше чувствовал(а) себя чужим. Прими его хотя бы на один вечер — новый круг общения расширит представление о собственных возможностях 🤗",
+    "Сегодня слова «мне нужно подумать» защитят тебя от решения, принятого под давлением. Не бойся задержать ответ, если вопрос касается денег, доверия или будущего ⏳",
+    "Один искренний комплимент изменит атмосферу целого дня. Замечай в людях конкретное хорошее и называй его — доброта становится сильнее, когда получает точную форму 💬",
+    "Твой организм попросит простоты: воду, нормальную еду, сон и меньше спешки. Услышь этот сигнал до того, как усталость начнёт принимать решения вместо тебя 💧",
+    "Впереди шанс превратить ошибку в историю успеха. Разбери, что произошло, сохрани полезный урок и не позволяй одному эпизоду определять весь твой образ себя 🕊️",
+    "Старшая фигура или опытный человек даст совет, который сначала заденет гордость. Возьми из него зерно истины, а форму оставь в прошлом — мудрость не обязана звучать мягко 🌳",
+    "Сегодня тебе удастся договориться там, где раньше были только требования. Покажи, какую пользу получат обе стороны, и разговор перейдёт из борьбы в настоящее сотрудничество 🤝",
+    "Новая привычка закрепится, если сделать её настолько маленькой, чтобы не требовалась героическая сила воли. Начни с пяти минут и позволь постоянству сделать остальное 🔥",
+    "Твоё следующее счастье окажется ближе и спокойнее, чем ты представлял(а). Не ищи только яркие вспышки — замечай отношения, дела и места, рядом с которыми можно быть собой ✨",
+])
+
 PREDICTIONS = [
     "Да, и это произойдёт быстрее, чем ты думаешь 🌟",
     "Нет — но не огорчайся, вселенная приготовила кое-что лучше 🌙",
@@ -6893,6 +8480,121 @@ TAROT = [
     ("Мир",              "Завершение, целостность, заслуженный триумф. Ты прошёл долгий путь — пора праздновать!"),
 ]
 
+# Дополнительные развёрнутые трактовки Старших Арканов. Один и тот же аркан
+# может раскрывать разные стороны ситуации, поэтому выбор остаётся случайным.
+TAROT.extend([
+    # 1–10
+    ("Шут", "Перед тобой открывается путь, на котором ещё нет привычных указателей. Не требуй от себя полной уверенности: достаточно взять с собой любопытство, здравый смысл и готовность учиться на первом опыте."),
+    ("Маг", "Сейчас многое зависит от того, как ты соединяешь уже имеющиеся знания и инструменты. Не жди внешнего разрешения — сформулируй намерение, сделай конкретный шаг и покажи миру, что умеешь создавать."),
+    ("Верховная Жрица", "Ответ пока скрыт за тишиной, и попытка вытянуть его силой только запутает картину. Наблюдай за повторяющимися ощущениями, снами и деталями, но проверяй интуицию фактами, когда придёт время."),
+    ("Императрица", "Вокруг твоей идеи или отношений есть плодородная почва, которой нужны забота и время. Не торопи результат: внимание к телу, дому и творчеству поможет вырастить не мимолётную радость, а устойчивое изобилие."),
+    ("Император", "Тебе предстоит навести порядок там, где слишком долго царила неопределённость. Чёткие правила, честные границы и ответственность за собственное решение вернут ощущение опоры, но не превращай контроль в жесткость."),
+    ("Иерофант", "Традиция или совет опытного наставника сейчас может дать тебе полезную рамку для сложного выбора. Возьми из чужой мудрости принцип, который работает именно для тебя, и не следуй правилам только из страха осуждения."),
+    ("Влюблённые", "Главный выбор касается не только другого человека, но и того, каким ты хочешь оставаться рядом с ним. Открытый разговор о ценностях и последствиях решения приведёт к гармонии лучше, чем попытка угодить всем."),
+    ("Колесница", "У тебя достаточно сил, чтобы пройти участок пути, где придётся одновременно удерживать несколько противоположных стремлений. Выбери направление, собери волю и не позволяй чужим сомнениям сбить тебя с собственного курса."),
+    ("Сила", "Настоящая победа сегодня рождается не из давления, а из способности выдержать сильные эмоции и не дать им управлять поступками. Мягкость, терпение и уважение к себе окажутся убедительнее любой демонстрации власти."),
+    ("Отшельник", "Пауза в общении или делах нужна не для того, чтобы исчезнуть от мира, а чтобы услышать собственный голос. Отложи чужие мнения, разложи опыт по полочкам и возвращайся к людям только с ясным внутренним ответом."),
+    # 11–20
+    ("Колесо Фортуны", "Ситуация входит в новый цикл, и привычные роли могут поменяться неожиданно быстро. Не пытайся удержать каждый поворот: подготовь запасной план, замечай шанс и помни, что удача любит тех, кто умеет адаптироваться."),
+    ("Справедливость", "Скоро проявятся последствия прежних решений, и скрыть их красивыми словами не получится. Честно оцени свой вклад, выслушай другую сторону и выбери действие, которое восстановит равновесие, даже если оно потребует смелости."),
+    ("Повешенный", "Задержка заставляет тебя посмотреть на ситуацию под углом, который раньше казался неудобным. Не трать силы на сопротивление неизбежной паузе: новое понимание окупит время, которое сейчас кажется потерянным."),
+    ("Смерть", "Один этап действительно подходит к завершению, и попытка сохранить его прежнюю форму будет отнимать больше сил, чем прощание. Освободи пространство, поблагодари опыт и позволь следующей версии жизни быть другой."),
+    ("Умеренность", "Твой результат складывается из спокойных повторяющихся действий, а не из одного героического рывка. Соедини отдых с работой, чувства с разумом, а желания с реальными сроками — так появится надёжный ритм."),
+    ("Дьявол", "Соблазн обещает быстрый комфорт, но просит взамен слишком много свободы. Посмотри, где привычка, страх или зависимость выдаются за личный выбор, и верни себе право устанавливать условия."),
+    ("Башня", "Неожиданное событие разрушит не саму твою жизнь, а конструкцию, которая уже держалась на отрицании. Первые эмоции будут сильными, но после них появится честное место для решения, которое давно назревало."),
+    ("Звезда", "Даже если путь пока не даёт быстрых результатов, в нём есть направление и смысл. Поддерживай надежду конкретными действиями, делись вдохновением с близкими и не требуй от себя исцелиться за один день."),
+    ("Луна", "Не вся информация, которую приносит тревога, является предчувствием. Отдели реальные сигналы от старых страхов, не принимай важные решения в тумане и дай себе время увидеть, что скрывается за первой эмоцией."),
+    ("Солнце", "Твоя энергия заметна окружающим, а обстоятельства готовы поддержать открытый и честный план. Разреши себе радоваться без ожидания подвоха, но направь этот свет не только на себя — щедрость усилит успех."),
+    # 21–30
+    ("Суд", "Наступает момент пересмотреть историю, которую ты рассказывал(а) о себе. Признай прошлые ошибки без самонаказания, забери из них урок и ответь на внутренний зов начать этап, где твои решения будут осознаннее."),
+    ("Мир", "Долгий цикл приближается к завершению, и его ценность станет заметна, когда ты соберёшь все фрагменты вместе. Поблагодари людей и себя, зафиксируй результат, а затем выбери следующую вершину без спешки."),
+    ("Шут", "Необычное предложение может вывести тебя из привычного сценария и вернуть ощущение живого интереса. Соглашайся не вслепую, а после проверки условий: свобода становится удачей, когда рядом с ней есть ответственность."),
+    ("Маг", "Слова, которые ты подбираешь сегодня, способны изменить отношение людей к твоему проекту. Говори ясно о пользе, не прячься за сложностью и начинай с доступной версии — мастерство проявится в результате."),
+    ("Верховная Жрица", "В отношениях или работе есть нюанс, который пока замечаешь только ты. Не разоблачай его в порыве, собери наблюдения и выбери момент для разговора, когда откровенность сможет привести к пониманию."),
+    ("Императрица", "Творческая идея укрепится, если ты перестанешь сравнивать её с чужими готовыми результатами. Создай для неё заботливую среду, выдели регулярное время и позволь красоте появляться постепенно, без давления."),
+    ("Император", "Кто-то ждёт от тебя решения, которое задаст направление всей команде или семье. Сначала выслушай мнения, затем сформулируй простые правила и будь готов(а) отвечать за последствия собственного лидерства."),
+    ("Иерофант", "Обучение, консультация или возвращение к проверенному методу принесут больше пользы, чем очередной эксперимент. Тебе не нужно изобретать всё с нуля: правильная система высвободит силы для индивидуального мастерства."),
+    ("Влюблённые", "Между двумя путями может стоять страх разочаровать кого-то, но чужое одобрение не заменит твоей честности. Проговори настоящие желания и выбери союз, в котором можно оставаться собой, а не удобной версией себя."),
+    ("Колесница", "Дорога ускорится после того, как ты перестанешь менять цель из-за каждого внешнего сигнала. Зафиксируй критерий успеха, убери лишние отвлечения и направь напор туда, где действительно хочешь оказаться."),
+    # 31–40
+    ("Сила", "Твоя выдержка будет проверена разговором, который легко превратить в борьбу. Сделай вдох, назови свои чувства и не отвечай на резкость резкостью — спокойный тон сохранит и достоинство, и связь."),
+    ("Отшельник", "Одиночество может оказаться полезной мастерской для мысли, если ты не перепутаешь его с изоляцией. Выбери одного надёжного человека для контакта, а остальное время посвяти вопросу, который давно просит честного ответа."),
+    ("Колесо Фортуны", "Случайная перемена расписания познакомит тебя с альтернативой, о которой ты не думал(а). Оставь немного гибкости в планах, чтобы заметить эту возможность и не пропустить её из-за стремления всё контролировать."),
+    ("Справедливость", "Подписание, обещание или важный разговор требуют предельной ясности. Перечитай условия, задай неудобные вопросы и не соглашайся из вежливости — прозрачность сегодня станет лучшей защитой будущего."),
+    ("Повешенный", "Пока другие требуют немедленного ответа, ты имеешь право признать, что данных недостаточно. Отступи на шаг, поменяй точку наблюдения и не бойся временно выглядеть медленнее — так решение станет точнее."),
+    ("Смерть", "Изменение привычного распорядка освободит энергию, которую забирала старая версия жизни. Не держись за знакомое только потому, что оно когда-то спасло тебя: сейчас тебе нужна форма, соответствующая новым целям."),
+    ("Умеренность", "Важный прогресс заметят не по громкому объявлению, а по тому, что твои действия станут стабильными. Выбери реалистичную нагрузку, добавь восстановление и позволь результату накопиться без нервной спешки."),
+    ("Дьявол", "Чужое мнение или обещание лёгкого успеха могут попытаться купить твоё время. Спроси себя, какую цену ты заплатишь позже, и вернись к договорённостям, которые поддерживают свободу, здоровье и уважение к себе."),
+    ("Башня", "Разговор, который давно откладывался, способен резко изменить планы, но вместе с этим убрать ложную неопределённость. Не разрушай мосты специально: отдели правду от обвинений и строй новое на честных основаниях."),
+    ("Звезда", "Твоя мечта не требует постоянного доказательства окружающим. Поддерживай её маленькими действиями, ищи людей, которые умеют бережно вдохновлять, и оставляй место для восстановления — надежда тоже нуждается в заботе."),
+    # 41–50
+    ("Луна", "Сегодня особенно легко принять чужую тревогу за собственное предчувствие. Проверь источник каждой мысли, отложи драматичные выводы до утра и опирайся на наблюдаемые факты, пока внутренний туман не рассеется."),
+    ("Солнце", "Открытость принесёт тебе больше, чем осторожная игра в недоступность. Покажи свои способности, назови то, чему радуешься, и используй момент признания, чтобы поддержать тех, кто помогал тебе идти вперёд."),
+    ("Суд", "Старый проект или обещание снова напомнит о себе и попросит окончательного решения. Заверши его с уважением, если путь исчерпан, или вернись с обновлённым намерением — полумеры больше не удовлетворят тебя."),
+    ("Мир", "Ты готов(а) показать результат шире, чем раньше позволял страх критики. Собери портфолио, расскажи о пройденном пути и отметь завершение: признание собственной работы станет переходом к следующему уровню."),
+    ("Шут", "Новая компания или маршрут подарят приключение, если ты позволишь себе не знать заранее каждую деталь. Сохрани безопасность и уважение к себе, но оставь место для смешных случайностей и свежих знакомств."),
+    ("Маг", "У тебя есть редкое сочетание наблюдательности и способности убеждать. Направь его на создание полезного решения, а не на спор ради победы — тогда люди поддержат не только твою идею, но и твоё лидерство."),
+    ("Верховная Жрица", "В ближайшее время информация будет приходить намёками, а не прямым ответом. Не раскрывай все карты первым(ой), прислушайся к паузам в разговоре и позволь тайне стать источником мудрости, а не тревоги."),
+    ("Императрица", "Тёплая атмосфера дома или команды поможет раскрыться человеку, который долго молчал. Создай пространство без спешки и оценки — из такой заботы часто рождаются лучшие решения и самые искренние признания."),
+    ("Император", "Твоя задача — не сделать всё самостоятельно, а построить систему, в которой каждый понимает свою роль. Делегируй, объясняй ожидания и оставляй место для обратной связи, иначе порядок превратится в усталость."),
+    ("Иерофант", "Проверенный ритуал, расписание или разговор с наставником вернут тебе опору после хаотичного периода. Не стесняйся учиться у тех, кто прошёл этот путь раньше, но адаптируй их метод к своей реальности."),
+    # 51–60
+    ("Влюблённые", "Впереди разговор, где важны не идеальные аргументы, а готовность услышать взаимные потребности. Не выбирай между правдой и любовью: здоровый союз выдерживает честность и становится от неё крепче."),
+    ("Колесница", "Ты можешь быстро продвинуться в деле, если заранее решишь, чему сегодня скажешь «нет». Сосредоточь внимание на одной цели, удерживай темп и не позволяй чужой суете заставить тебя свернуть."),
+    ("Сила", "Внутренний конфликт смягчится, когда ты перестанешь требовать от себя немедленного совершенства. Отнесись к себе как к живому существу, которому нужны время и поддержка, — так появится настоящая устойчивость."),
+    ("Отшельник", "Ответ на вопрос о направлении найдётся в опыте, который ты обычно считаешь неудачным. Вспомни, что именно научило тебя различать подходящее и чужое, и используй это знание как тихий компас."),
+    ("Колесо Фортуны", "Неожиданная новость может сначала нарушить привычные планы, но принесёт возможность обновить стратегию. Не цепляйся за старое расписание, быстро оцени варианты и выбери тот, где больше пространства для роста."),
+    ("Справедливость", "Тебе вернётся результат того, как ты обходился(ась) с людьми и обещаниями. Если обнаружишь перекос, не ищи виноватых — признай свою часть, исправь её и закрепи более честное правило на будущее."),
+    ("Повешенный", "Знакомая проблема перестанет выглядеть тупиком, если ты спросишь себя, какую выгоду даёт нынешняя остановка. Пауза может защитить от неверного союза, невыгодной сделки или решения, принятого из усталости."),
+    ("Смерть", "Разрыв с лишним освободит место для отношений, работы или привычек, которые соответствуют твоему сегодняшнему характеру. Прощание может быть грустным, но оно не отменяет благодарности за всё, что было полезно."),
+    ("Умеренность", "Сегодня полезно соединить людей или идеи, которые обычно существуют отдельно. Твой талант посредника поможет найти общий язык, если ты не станешь торопить стороны и дашь каждой из них быть услышанной."),
+    ("Дьявол", "Сильное желание способно показать, чего тебе не хватает, но не обязано диктовать способ получить это. Назови потребность честно и найди путь, который не отнимает свободу у тебя или другого человека."),
+    # 61–70
+    ("Башня", "Перемена коснётся области, где ты слишком долго соглашался(ась) на неудобное. Не принимай разрушение старой схемы за потерю себя: после него появится шанс выстроить отношения или работу на новых условиях."),
+    ("Звезда", "Восстановление будет идти постепенно, но каждый мягкий шаг уже меняет твоё состояние. Разреши себе просить поддержки, возвращайся к любимым занятиям и не сравнивай свой темп с чужой красивой витриной."),
+    ("Луна", "Сомнительное обещание может выглядеть особенно привлекательным в момент усталости. Перенеси решение, уточни детали и не подписывайся на то, что требует закрыть глаза на внутреннее несогласие."),
+    ("Солнце", "Твой вклад станет виден там, где раньше его принимали как должное. Прими признание спокойно, назови свои условия и не забывай, что здоровая уверенность может быть одновременно яркой и доброжелательной."),
+    ("Суд", "Ты услышишь внутренний вопрос, от которого раньше отвлекался(ась) делами. Ответь ему не обещанием стать идеальным человеком, а одним конкретным поступком, который подтверждает выбранные ценности."),
+    ("Мир", "Завершение принесёт не пустоту, а возможность соединить навыки, людей и уроки разных периодов. Подведи итоги письменно, чтобы не обесценить путь, и выбери новый проект из ощущения полноты."),
+    ("Шут", "Неожиданная идея может показаться слишком простой, но именно простота даст ей шанс быстро ожить. Проверь её маленьким экспериментом и не требуй от первого шага доказать, что он приведёт к финальной цели."),
+    ("Маг", "Переговоры сложатся удачно, если ты заранее определишь, что готов(а) предложить и чего не отдашь. Уверенность появится не из громкости, а из подготовки, ясных формулировок и уважения к собеседнику."),
+    ("Верховная Жрица", "Чужое молчание не всегда означает отказ; иногда человек собирает смелость для важного признания. Не дави вопросами, но покажи, что рядом безопасно говорить правду, когда появится готовность."),
+    ("Императрица", "Ресурс вернётся через заботу о простых потребностях, которые ты откладывал(а) ради больших целей. Накорми себя, отдохни, укрась пространство — из ощущения достатка легче принимать мудрые решения."),
+    # 71–80
+    ("Император", "Наступает время закрепить удачное решение в конкретном соглашении. Запиши сроки, распределение ответственности и границы, чтобы хорошее намерение не растворилось в догадках и невысказанных ожиданиях."),
+    ("Иерофант", "Знание станет по-настоящему твоим, когда ты объяснишь его кому-то простыми словами. Поделись опытом, задай вопросы старшему коллеге или учителю и не бойся признать, где ещё нужна практика."),
+    ("Влюблённые", "Сердце укажет на важное направление, но разум поможет сделать его безопасным. Сверь чувства с реальными поступками человека и выбирай взаимность, а не только красивую возможность почувствовать сильнее."),
+    ("Колесница", "В дороге к цели появится конкурент или отвлекающий вызов. Не трать время на постоянное сравнение — улучшай собственный результат, держи обещанный темп и помни, зачем вообще начал(а) движение."),
+    ("Сила", "Ты сможешь защитить важную границу без крика и ультиматумов. Спокойно объясни, что для тебя неприемлемо, предложи честную альтернативу и оставь последствия на стороне того, кто решит не уважать договорённость."),
+    ("Отшельник", "Уединённая работа даст больше, чем шумное обсуждение, если ты заранее сформулируешь один главный вопрос. Отключи лишние источники мнений и доверяй процессу, который постепенно превращает сомнение в знание."),
+    ("Колесо Фортуны", "Шанс может прийти в непривычной упаковке и потребовать быстро переучиться. Не отказывайся только потому, что не узнаёшь старый сценарий: иногда именно смена правил возвращает тебе влияние на результат."),
+    ("Справедливость", "Если предстоит спор, собери документы, даты и конкретные договорённости. Эмоции имеют значение, но точность поможет защитить тебя от искажений и приведёт разговор к решению, которое можно проверить."),
+    ("Повешенный", "Человек или план, от которого ты ждёшь движения, пока не готов(а) к нему. Перенеси фокус на то, что можешь изменить сам(а), и не отдавай всю энергию ожиданию чужого шага."),
+    ("Смерть", "Смена приоритетов потребует честно отказаться от части задач, которые больше не ведут к твоей цели. Это не поражение и не лень, а зрелое решение сохранить силы для действительно важного этапа."),
+    # 81–90
+    ("Умеренность", "Самый сильный ответ тревоге сегодня — устойчивый распорядок. Чередуй усилие и восстановление, не обещай больше, чем можешь выполнить, и увидишь, как хаос постепенно уступает место уверенности."),
+    ("Дьявол", "Кто-то может попытаться вызвать чувство вины, чтобы получить от тебя согласие. Проверь, действительно ли ты отвечаешь за эту ситуацию, и откажись от роли спасателя, если она разрушает твоё собственное равновесие."),
+    ("Башня", "Скрытая проблема станет явной благодаря одной детали, которую уже нельзя будет игнорировать. Восприними это как своевременное предупреждение: честно названная трещина ремонтируется раньше, чем рушится весь дом."),
+    ("Звезда", "Вдохновение вернётся через человека, который напомнит тебе о твоей сильной стороне. Прими эту поддержку и сам(а) стань таким ориентиром для другого — взаимная надежда быстрее превращается в действие."),
+    ("Луна", "Необъяснимое притяжение к ситуации стоит рассмотреть внимательно, но не превращать в доказательство судьбы. Спроси себя, какие факты поддерживают выбор, а какие лишь питают красивую фантазию."),
+    ("Солнце", "В ближайшие дни появится повод выйти из тени и показать то, над чем ты работал(а). Говори с удовольствием, принимай тёплую реакцию и направь полученную уверенность на следующий конкретный шаг."),
+    ("Суд", "Важное признание или звонок поможет поставить точку в разговоре, который долго жил внутри тебя. Скажи главное без обвинений, выслушай ответ и выбери освобождение вместо повторного прокручивания прошлого."),
+    ("Мир", "Ты можешь закрыть старую финансовую, рабочую или эмоциональную петлю, если доведёшь последний пункт до конца. После этого не заполняй освободившееся место сразу — сначала почувствуй заслуженную целостность."),
+    ("Шут", "Жизнь приглашает тебя попробовать формат, который не вписывается в привычный образ. Сохрани критическое мышление, но не высмеивай собственное любопытство: новое увлечение способно вернуть давно забытый азарт."),
+    ("Маг", "В руках окажется ресурс, которого раньше не хватало: контакт, навык, информация или свободный час. Не растрать его на сомнения — преврати доступную возможность в первый измеримый результат уже сегодня."),
+    # 91–100
+    ("Верховная Жрица", "Твоё внутреннее знание созрело, но ему нужна тишина, чтобы стать решением. Уйди от лишнего шума, запиши ощущения и проверь, какие из них остаются неизменными после спокойного сна."),
+    ("Императрица", "Нежность к себе не отменяет амбиций — она даёт им долгую жизнь. Выбирай проекты и людей, рядом с которыми можешь расти без постоянного истощения, и не стыдись хотеть красивой, удобной реальности."),
+    ("Император", "Сейчас ты способен(на) стать надёжной опорой, если не возьмёшь на себя чужую судьбу целиком. Руководи процессом, а не каждым человеком, и уважай самостоятельность тех, кто идёт рядом."),
+    ("Иерофант", "Важный ответ придёт через разговор с тем, кто умеет задавать неудобные, но добрые вопросы. Не защищай привычную картину любой ценой — честная обратная связь ускорит зрелость твоего решения."),
+    ("Влюблённые", "Выбор между комфортом и настоящей близостью потребует рискнуть маской безразличия. Назови, чего хочешь, спроси о желаниях другого и оставь в своей жизни только те связи, где движение идёт навстречу."),
+    ("Колесница", "Твоя цель ближе, если убрать из маршрута необходимость всем что-то доказывать. Направь соревновательную энергию на дисциплину, отметь промежуточную победу и продолжай без лишней войны."),
+    ("Сила", "Ситуация смягчится, когда ты перестанешь бороться с собственной уязвимостью. Скажи о ней человеку, которому доверяешь, и обнаружишь, что честность не делает тебя слабее, а возвращает контроль над собой."),
+    ("Отшельник", "Период внутреннего поиска завершится полезным открытием о твоих настоящих приоритетах. Не спеши превращать его в публичное заявление — сначала проверь новое понимание несколькими спокойными действиями."),
+    ("Колесо Фортуны", "Судьба меняет декорации, но не отнимает у тебя право выбирать реакцию. Прими то, что уже сдвинулось, используй попутный ветер и не забывай благодарить себя за гибкость в непривычных условиях."),
+    ("Мир", "Ты соберёшь вокруг себя людей и идеи, которые раньше казались частями разных историй. Завершённый опыт станет основой нового целого — отметь этот переход и входи в следующий цикл с открытым взглядом."),
+])
+
 HOROSCOPES: dict[str, list[str]] = {
     "Овен":      ["Энергия бьёт через край — используй её для начинания новых дел. Конфликтов сегодня лучше избегать.",
                   "День благоприятен для физической активности и спорта. В делах полагайся на собственный опыт.",
@@ -6968,6 +8670,139 @@ HOROSCOPES: dict[str, list[str]] = {
                   "Духовный опыт ждёт тебя сегодня — будь открыт(а) к тому, что выходит за рамки логики 🐟"],
 }
 
+# Ещё 100 развёрнутых прогнозов, распределённых между всеми знаками.
+# Благодаря отдельному расширению базовые короткие ответы остаются совместимы
+# с кастомными текстами, а случайный выбор получает больше разнообразия.
+_HOROSCOPE_EXPANSIONS: dict[str, list[str]] = {
+    "Овен": [
+        "Сегодня твой импульс к действию особенно силён, но настоящая победа придёт там, где ты сначала выберешь цель, а уже потом ускоришься. Не распыляй огонь — направь его точно 🔥",
+        "В делах появится шанс стать инициатором перемен. Объясни план спокойно, выслушай возражения и покажи первый результат — так твоя смелость превратится в лидерство, которому доверяют.",
+        "Эмоциональный разговор может быстро разгореться, если отвечать на каждую реплику. Остановись на секунду, назови главное и оставь собеседнику пространство — уважение усилит твою позицию.",
+        "Тело подскажет, где ты переоцениваешь запас сил. Спорт и активность принесут пользу, если будут поддерживать тебя, а не превращаться в соревнование с собственной усталостью 🌿",
+        "Новая задача покажется слишком простой, но именно она может привести к заметному продвижению. Сделай её быстро и качественно, затем смело проси доступ к следующему уровню ответственности.",
+        "Сегодня удачно защищать свои интересы без резкости. Подготовь факты, обозначь границы и не извиняйся за разумные потребности — прямота Овна станет особенно привлекательной, если в ней есть такт.",
+        "Случайная поездка или изменение маршрута подарит полезное знакомство. Не бойся первым(ой) начать разговор, но не торопись обещать больше, чем действительно готов(а) выполнить 🚀",
+        "Вечером запиши три вещи, которые уже получились за последнее время. Это вернёт перспективу и поможет завтра действовать не из раздражения, а из уверенности в собственном пути.",
+    ],
+    "Телец": [
+        "Финансовая интуиция сегодня работает лучше, когда ты не поддаёшься соблазну мгновенной выгоды. Сравни условия, оставь запас и выбери решение, которое сохраняет устойчивость на месяцы вперёд 💰",
+        "Домашняя забота окажется важнее грандиозных планов. Наведи порядок в одном уголке, приготовь вкусную еду и заметь, как спокойная среда возвращает тебе ясность и желание творить.",
+        "Человек рядом может предложить перемену, к которой ты пока не готов(а). Не отказывай автоматически: задай вопросы, посчитай риски и оставь себе время привыкнуть к новой перспективе.",
+        "Твой медленный темп сегодня станет преимуществом. Пока другие спешат с выводами, ты заметишь деталь в договорённости или проекте, которая убережёт от лишних расходов и переделок 🔍",
+        "Красивое место, музыка или прикосновение природы помогут восстановить силы лучше бесконечного листа задач. Разреши себе наслаждаться без оправданий — удовольствие тоже поддерживает продуктивность.",
+        "В отношениях появится потребность говорить не только о практических делах, но и о чувствах. Выбери тёплый момент, скажи прямо, чего тебе не хватает, и выслушай ответ без защиты.",
+        "Дело, которое ты долго строил(а) по кирпичику, начнёт приносить первые заметные плоды. Не обесценивай результат из-за того, что он ещё не идеален — прочный рост всегда начинается постепенно 🌱",
+        "Сегодня полезно пересмотреть одну привычку, которая незаметно забирает время. Замени её простым ритуалом комфорта и увидишь, что дисциплина может ощущаться не ограничением, а заботой.",
+    ],
+    "Близнецы": [
+        "Идей будет больше, чем свободных часов, поэтому выбери одну, которую можно превратить в конкретный результат уже сегодня. Запиши остальные, чтобы не потерять вдохновение и не перегрузить внимание ✍️",
+        "Разговор с новым человеком расширит твой взгляд на привычную тему. Задавай вопросы и не пытайся сразу блеснуть всеми знаниями — искреннее любопытство принесёт более полезную связь.",
+        "В переписке легко возникнет недоразумение из-за короткой фразы. Проверь, как тебя поняли, и не стесняйся добавить контекст: ясность сегодня сэкономит много эмоциональной энергии.",
+        "Твоя способность быстро переключаться поможет в неожиданной ситуации, но телу понадобится пауза. Оставь хотя бы полчаса без новостей и экранов, чтобы мысли снова начали соединяться в цельную картину.",
+        "Учёба, язык или новый инструмент дадутся легче через игру и практику. Не застревай на теории: попробуй объяснить тему другому человеку, и знания закрепятся почти незаметно 🎓",
+        "Старый контакт может внезапно принести полезную возможность. Ответь тепло, но проверь намерения и условия — ностальгия хороша для разговора, однако решение стоит принимать в настоящем.",
+        "Сегодня ты умеешь подобрать слова, которые примиряют противоположные стороны. Используй этот дар бережно: не бери на себя роль вечного посредника, если конфликт должны решить его участники.",
+        "Вечер подарит яркое творческое настроение. Сними внутреннюю цензуру, собери заметки и разреши себе странный первый вариант — именно из него может вырасти идея, которой не хватало проекту.",
+    ],
+    "Рак": [
+        "Твоя интуиция уловит перемену в настроении близкого человека ещё до прямых слов. Не додумывай худшее — мягко спроси, нужна ли поддержка, и уважай ответ, каким бы он ни оказался 🌙",
+        "Сегодня дом станет местом восстановления, если ты перестанешь превращать заботу о других в обязанность. Сделай что-то приятное лично для себя и позволь близким тоже позаботиться о тебе.",
+        "Воспоминание подскажет, почему нынешняя ситуация кажется такой эмоционально сильной. Поблагодари прошлое за урок, но не позволяй старой боли принимать решения вместо твоего сегодняшнего разума.",
+        "Рабочая задача потребует чувствительности к людям, а не только точности к срокам. Сначала создай безопасный тон общения, затем обсуждай детали — команда быстрее услышит спокойного лидера.",
+        "В отношениях возможен момент нежности, который важнее длинных объяснений. Покажи присутствие делом: выслушай, приготовь чай, будь рядом и не требуй мгновенного ответа на чувства 💙",
+        "Тебе захочется спрятаться от внешнего шума, и это нормально. Выдели время для тишины, но предупреди близких, чтобы пауза не выглядела холодностью или неожиданным исчезновением.",
+        "Финансовое решение лучше принимать после проверки семейных и долгосрочных последствий. Твоя забота о будущем сильна, когда она не превращается в страх тратить на нужное и радостное.",
+        "Сон, вода и знакомая спокойная музыка восстановят тебя быстрее, чем попытка силой поднять настроение. К вечеру вернётся ощущение внутреннего дома и появится ясность, чего хочется дальше 🌊",
+    ],
+    "Лев": [
+        "Сегодня твоя харизма откроет дверь, но удержать внимание поможет не эффектность, а содержательность. Покажи, какую пользу приносит твоя идея, и люди запомнят не только блеск, но и силу.",
+        "Комплимент в твой адрес может смутить сильнее критики. Прими его без шутки и самообесценивания — право гордиться сделанным не отнимает у тебя скромности, а возвращает честность 👑",
+        "В коллективе появится возможность поддержать человека, который пока остаётся в тени. Поделись вниманием и сценой: щедрость сегодня усилит твоё лидерство гораздо больше, чем монолог о себе.",
+        "Творческий проект попросит смелого финального решения. Не переделывай всё из-за одной тревожной реакции — собери обратную связь, выбери главное и представь работу с достоинством 🎨",
+        "В любви не нужно постоянно быть безупречным(ой) и сильным(ой). Покажи настоящую усталость или сомнение тому, кому доверяешь, и обнаружишь, что близость только выиграет от такой искренности.",
+        "Амбиции подскажут высокий ориентир, но календарь напомнит о реальных ресурсах. Разбей большую цель на этапы, чтобы огонь вдохновения не сгорел в первые дни из-за чрезмерной спешки.",
+        "Сегодня удачно говорить о своих достижениях на собеседовании или встрече. Называй конкретные результаты, признавай вклад команды и не уменьшай свою роль ради удобства чужого самолюбия 🦁",
+        "Вечером тебе понадобится не публика, а качественный отдых. Убери телефон, включи любимую музыку и вспомни, что твоя ценность остаётся неизменной даже тогда, когда никто не аплодирует.",
+    ],
+    "Дева": [
+        "Одна небольшая деталь поможет решить задачу, которая казалась слишком сложной. Не перепрыгивай через проверку исходных данных — твоя внимательность сегодня сэкономит часы чужой работы 🔍",
+        "Порядок вокруг тебя вернёт порядок в мыслях, но не превращай уборку в способ откладывать важный разговор. После короткой подготовки переходи к делу, даже если оно ещё не идеально.",
+        "Коллега попросит совета, и твоя точность окажется очень полезной. Сначала уточни, какую помощь человек хочет получить, чтобы забота не превратилась в непрошеную критику.",
+        "Тело намекнёт, что режим нуждается в корректировке. Нормальный обед, вода и ранний сон принесут больше пользы, чем ещё один час попыток исправить всё на силе воли 🌿",
+        "В отношениях попробуй оставить место для спонтанности. Не каждую эмоцию нужно анализировать до конца — иногда доверие растёт из простого совместного вечера без плана.",
+        "Финансовая осторожность поможет увидеть реальную цену удобства. Проверь автоматические платежи и обещания, но не отказывай себе во всём: разумный бюджет должен поддерживать жизнь, а не сужать её.",
+        "Сегодня ты заметишь закономерность в повторяющихся событиях. Запиши наблюдение, однако не делай окончательных выводов по одному примеру — настоящая мудрость Девы сочетает анализ с терпением.",
+        "Заверши день списком того, что уже сделано, а не только того, что осталось. Признание собственного прогресса снимет внутреннее напряжение и позволит завтра начать с чистой головой ✅",
+    ],
+    "Весы": [
+        "Тебе придётся принять решение, которое не понравится всем сторонам. Ориентируйся не на отсутствие недовольства, а на честность и долгосрочный баланс — компромисс не должен стирать тебя.",
+        "Красивое оформление поможет донести серьёзную идею. Используй свой вкус не ради впечатления, а чтобы сделать сложное понятным, удобным и открытым для тех, кому предстоит этим пользоваться 🌸",
+        "В паре или дружбе назрела тема, которую вы оба обходите. Начни без обвинений, опиши свои чувства и предложи совместный шаг — мягкая прямота восстановит близость быстрее молчания.",
+        "Сегодня удачно искать союзников для проекта. Ты увидишь, чья сила дополняет твою, и сможешь распределить задачи так, чтобы сотрудничество не превращалось в скрытую конкуренцию.",
+        "Если спор кажется бесконечным, перенеси его из переписки в спокойный голосовой разговор. Интонация снимет часть напряжения, а желание понять станет слышнее, чем случайно резкие слова.",
+        "Твоё чувство справедливости поможет заметить, где ты слишком долго уступал(а). Верни себе равное место за столом переговоров и помни: уважение к другим начинается с уважения к собственным границам ⚖️",
+        "Финансовая покупка порадует, если она соответствует ценностям, а не только красивой картинке. Дай себе сутки на решение — настоящая вещь не исчезнет из-за разумной паузы.",
+        "Вечер лучше провести рядом с людьми, после которых не нужно восстанавливать себя. Выбирай разговоры, где можно смеяться, молчать и быть естественным(ой), а не постоянно поддерживать идеальный образ.",
+    ],
+    "Скорпион": [
+        "Сегодня ты почувствуешь скрытое напряжение в ситуации и захочешь сразу докопаться до истины. Собери факты спокойно: сила Скорпиона проявится не в подозрении, а в точности действия 🦂",
+        "Кто-то может открыть тебе личную тайну. Не используй эту информацию как рычаг и не спеши делиться ею — доверие, сохранённое в тишине, принесёт больше уважения, чем эффектный рассказ.",
+        "Сильное желание перемен требует не разрушительного рывка, а ясного плана. Определи, что именно должно закончиться, и освобождай пространство постепенно, сохраняя то, что действительно ценно.",
+        "В отношениях появится шанс говорить глубже обычного. Не проверяй чувства партнёра ловушками и молчанием — один честный вопрос покажет больше, чем целая неделя скрытых тестов.",
+        "Работа потребует концентрации на одном сложном участке. Отключи лишние каналы, поставь таймер и доведи задачу до промежуточного результата: твоя глубина сегодня важнее скорости.",
+        "Эмоция, которую ты обычно прячешь, просит быть признанной. Запиши её, поговори с надёжным человеком или просто назови себе правду — осознанность вернёт контроль без подавления 🌑",
+        "Денежное решение проверяй не только на выгодность, но и на скрытые обязательства. Задавай неудобные вопросы, читай мелкий шрифт и не позволяй сильному желанию ускорять подпись.",
+        "Вечером полезно отпустить роль того, кто всегда всё выдерживает. Тёплая еда, тишина и честный отдых восстановят внутренний ресурс, который не обязан быть бесконечным.",
+    ],
+    "Стрелец": [
+        "Тебя потянет в новое место, знание или компанию, и это чувство стоит поддержать. Проверь маршрут и ресурсы, а затем отправляйся — свежий опыт вернёт вдохновение, которого не хватало 🏹",
+        "Большая цель станет реальнее после разговора с человеком из другой сферы. Не бойся задавать наивные вопросы: именно они помогут увидеть возможность, которую привычный круг не замечает.",
+        "Твоя честность сегодня может прозвучать слишком резко. Скажи правду, но добавь заботу о последствиях и выбери момент, когда собеседник способен услышать, а не только защищаться.",
+        "Учёба или путешествие подарят тебе не просто впечатления, а новую систему взглядов. Запиши, что изменилось внутри, чтобы через месяц не потерять главный смысл этого открытия.",
+        "В отношениях важно не обещать приключение, если ты не готов(а) участвовать в нём регулярно. Свобода и надёжность не противоречат друг другу, когда ожидания проговорены заранее.",
+        "Финансовый риск может оказаться заманчивым из-за красивой истории. Посчитай худший сценарий и не вкладывай то, потерю чего не сможешь спокойно пережить — оптимизм любит подготовку.",
+        "Спорт, прогулка или короткая поездка очистят голову от лишних мыслей. Движение вернёт тебе чувство пространства и поможет увидеть решение там, где за столом казался только тупик.",
+        "Сегодня удачно делиться знаниями публично. Рассказывай с энтузиазмом, но оставляй место для вопросов — твой авторитет станет сильнее, если рядом с уверенностью будет любопытство.",
+        "Вечером выключи режим вечного поиска следующего впечатления. Заметь, что уже есть рядом: разговор, вкус, музыка или человек — спокойная благодарность тоже может быть приключением 🌅",
+    ],
+    "Козерог": [
+        "Долгосрочная цель приблизится, если ты сегодня закрепишь один процесс: срок, правило или регулярное действие. Не недооценивай скучную последовательность — именно она строит большую высоту ⛰️",
+        "Руководство заметит твою надёжность, но не сможет прочитать мысли о перегрузке. Покажи реальный объём задач и предложи приоритеты, чтобы ответственность не превратилась в молчаливое истощение.",
+        "Твой опыт пригодится младшему коллеге или близкому человеку. Передай не только инструкцию, но и причины своих решений — так ты создашь самостоятельного союзника, а не зависимого исполнителя.",
+        "Сегодня удачно вести переговоры о деньгах и условиях. Подготовь цифры, не соглашайся на туманные обещания и помни, что профессионализм включает умение назвать справедливую цену своего труда.",
+        "В отношениях попробуй заменить полезность присутствием. Не обязательно чинить чужую проблему; иногда человеку нужно, чтобы ты просто сел(а) рядом и признал(а), как ему непросто.",
+        "Отдых станет продуктивной частью стратегии, если ты внесёшь его в расписание. Несколько часов восстановления не украдут результат, а защитят качество решений, которое строилось месяцами.",
+        "Старая обязанность может оказаться уже не твоей. Проверь, кто действительно отвечает за неё сейчас, и передай эстафету без чувства вины — зрелость умеет не только брать, но и отпускать.",
+        "Покупка для дома или работы окажется удачной после сравнения вариантов. Выбирай не самый статусный предмет, а тот, который будет надёжно служить и освобождать время для важного.",
+        "Вечером отметь путь, который уже пройден. Ты часто смотришь на следующую вершину, но признание промежуточных достижений укрепит мотивацию лучше, чем новая порция самокритики.",
+    ],
+    "Водолей": [
+        "Необычная идея привлечёт внимание, если ты переведёшь её из вдохновения в понятный прототип. Покажи, как она решает реальную проблему, и скептики начнут задавать полезные вопросы 💡",
+        "Командная работа потребует уважения к чужому темпу. Не исчезай в собственных мыслях: объясняй ход решения, спрашивай обратную связь и помогай другим почувствовать себя частью будущего.",
+        "Сегодня тебя могут назвать слишком независимым(ой), когда ты просто защищаешь право думать иначе. Объясни мотивы без холодности — свобода звучит убедительнее, когда в ней есть контакт.",
+        "Технология или новый инструмент сэкономят время, но сначала изучи настройки безопасности и приватности. Твоя любознательность сильна, если она сопровождается ответственностью за последствия.",
+        "Дружба напомнит о себе неожиданным приглашением. Соглашайся, если можешь быть настоящим(ей), а не только самым интересным человеком в комнате — близость не требует постоянной оригинальности.",
+        "Гуманная идея потребует практического шага: пожертвования, волонтёрства или помощи конкретному человеку. Маленькое действие сегодня принесёт больше смысла, чем длинное обсуждение идеального будущего 🌍",
+        "В работе появится шанс изменить устаревшее правило. Собери примеры, предложи мягкий эксперимент и зафиксируй результат — реформы легче принимают, когда они измеримы и безопасны.",
+        "Твоя нервная система попросит отключиться от бесконечного потока информации. Оставь телефон в другой комнате, позволь мыслям скучать и заметишь, как возвращается собственная, а не чужая повестка.",
+        "Вечер хорош для чтения, музыки или разговора о будущем. Запиши одну идею, которая кажется слишком смелой сейчас: позже именно она может стать самым точным направлением.",
+    ],
+    "Рыбы": [
+        "Твоё воображение сегодня видит связи, которые ускользают от сухой логики. Запиши образы и ощущения, а затем переведи их в один маленький практический шаг — так вдохновение получит форму 🌊",
+        "Чужое настроение может легко стать твоим, поэтому проверь, что именно чувствуешь сам(а). Небольшая прогулка и несколько минут тишины помогут вернуть границу между сочувствием и перегрузкой.",
+        "Творческая работа пойдёт глубже, если ты перестанешь ждать идеального состояния. Начни с неровного наброска, разреши себе ошибаться и доверься процессу, который постепенно найдёт собственный голос.",
+        "В отношениях сегодня важны тон и присутствие. Скажи о своих потребностях прямо, не маскируй их намёками и не ожидай, что близкий человек сам догадается о каждом оттенке твоих чувств.",
+        "Сон или случайная фраза подскажут новое отношение к старой проблеме. Не принимай видение за готовый приказ, но используй его как мягкий вопрос: что в этой истории пора отпустить?",
+        "Финансовые решения сверяй с конкретными цифрами, даже если внутреннее ощущение кажется очень сильным. Интуиция покажет направление, а расчёт поможет пройти его без лишнего страха и потерь.",
+        "Помощь другому человеку принесёт тебе тепло, если ты заранее определишь границы. Ты можешь быть рядом и не становиться единственным спасательным кругом — забота о себе сохраняет доброту надолго.",
+        "Музыка, вода и природа восстановят эмоциональный баланс лучше, чем спор с собственными чувствами. Позволь им пройти через тебя, а затем выбери одно спокойное действие для возвращения в реальность.",
+        "Сегодня ты можешь увидеть красоту там, где другие проходят мимо. Поделись этим взглядом через текст, фотографию или разговор — твоя чувствительность способна вдохновить человека, которому это нужно.",
+    ],
+}
+
+for _sign, _texts in _HOROSCOPE_EXPANSIONS.items():
+    HOROSCOPES[_sign].extend(_texts)
+
 ZODIAC_SIGNS: tuple[str, ...] = (
     "Овен", "Телец", "Близнецы", "Рак", "Лев", "Дева",
     "Весы", "Скорпион", "Стрелец", "Козерог", "Водолей", "Рыбы",
@@ -6975,6 +8810,145 @@ ZODIAC_SIGNS: tuple[str, ...] = (
 ZODIAC_ALIASES: dict[str, str] = {
     sign.casefold(): sign for sign in ZODIAC_SIGNS
 }
+
+# ── Единый Rich-стиль для предсказаний, Таро и гороскопа ───────────
+_ORACLE_SCENES = (
+    "Неожиданный поворот", "Сообщение из прошлого", "Дверь в новый этап",
+    "Тихая победа", "Разговор без масок", "Случайный счастливый знак",
+    "Пауза, которая всё меняет", "Идея, пришедшая вовремя",
+)
+_ORACLE_MOODS = (
+    "Любопытство с лёгким эффектом дежавю",
+    "Спокойная решимость",
+    "Тёплая ностальгия и новый интерес",
+    "Смелость, спрятанная за улыбкой",
+    "Тишина перед хорошей новостью",
+)
+_ORACLE_SIGNS = (
+    "случайная фраза в переписке",
+    "знакомая песня в неожиданном месте",
+    "человек, который внезапно напомнит о себе",
+    "маленькая задержка, защищающая от ошибки",
+    "идея, записанная в самый обычный момент",
+)
+_ORACLE_STRENGTHS = (
+    "замечать детали", "говорить прямо и бережно",
+    "сохранять спокойствие", "быстро видеть главное",
+    "превращать сомнение в действие",
+)
+_ORACLE_TASKS = (
+    "сделай то, что давно откладывал(а)",
+    "ответь на важное сообщение без спешки",
+    "выдели 15 минут на дело для себя",
+    "запиши одну мысль, которая не выходит из головы",
+    "скажи близкому человеку что-нибудь тёплое",
+)
+_ORACLE_REWARDS = (
+    "+10 к уверенности", "+8 к интуиции", "+7 к спокойствию",
+    "+12 к энергии", "+9 к удаче",
+)
+
+_TAROT_META: dict[str, tuple[str, str]] = {
+    "Шут": ("Старт · Свобода · Риск", "✦✦✦☆☆"),
+    "Маг": ("Воля · Навык · Созидание", "✦✦✦✦☆"),
+    "Верховная Жрица": ("Интуиция · Тайна · Тишина", "✦✦✦✦☆"),
+    "Императрица": ("Рост · Забота · Изобилие", "✦✦✦✦☆"),
+    "Император": ("Порядок · Опора · Границы", "✦✦✦☆☆"),
+    "Иерофант": ("Мудрость · Традиция · Совет", "✦✦✦☆☆"),
+    "Влюблённые": ("Выбор · Союз · Честность", "✦✦✦✦☆"),
+    "Колесница": ("Движение · Воля · Победа", "✦✦✦✦☆"),
+    "Сила": ("Выдержка · Смелость · Мягкость", "✦✦✦✦☆"),
+    "Отшельник": ("Пауза · Поиск · Ясность", "✦✦✦☆☆"),
+    "Колесо Фортуны": ("Цикл · Шанс · Перемены", "✦✦✦✦☆"),
+    "Справедливость": ("Баланс · Факты · Ответственность", "✦✦✦☆☆"),
+    "Повешенный": ("Пауза · Взгляд · Переоценка", "✦✦✦☆☆"),
+    "Смерть": ("Завершение · Переход · Обновление", "✦✦✦✦☆"),
+    "Умеренность": ("Ритм · Гармония · Терпение", "✦✦✦☆☆"),
+    "Дьявол": ("Искушение · Привычка · Свобода", "✦✦✦✦☆"),
+    "Башня": ("Откровение · Перемены · Ясность", "✦✦✦✦☆"),
+    "Звезда": ("Надежда · Восстановление · Путь", "✦✦✦✦☆"),
+    "Луна": ("Сны · Туман · Подсознание", "✦✦✦✦☆"),
+    "Солнце": ("Радость · Успех · Свет", "✦✦✦✦✦"),
+    "Суд": ("Пробуждение · Итоги · Новый этап", "✦✦✦✦☆"),
+    "Мир": ("Целостность · Финал · Триумф", "✦✦✦✦✦"),
+}
+_TAROT_RELATION_TIPS = (
+    "Искренний разговор поможет увидеть настоящие чувства.",
+    "Смотри не только на слова, но и на последовательность поступков.",
+    "Не пытайся угадать чужие мысли — задай прямой вопрос.",
+    "Тёплый жест сегодня скажет больше, чем длинное объяснение.",
+)
+_TAROT_CHALLENGES = (
+    "не торопить события", "не отвечать на эмоциях",
+    "отпустить контроль", "назвать своё настоящее желание",
+    "дать себе право на паузу",
+)
+
+_ZODIAC_SYMBOLS = {
+    "Овен": "♈", "Телец": "♉", "Близнецы": "♊", "Рак": "♋",
+    "Лев": "♌", "Дева": "♍", "Весы": "♎", "Скорпион": "♏",
+    "Стрелец": "♐", "Козерог": "♑", "Водолей": "♒", "Рыбы": "♓",
+}
+_HOROSCOPE_RELATIONS = (
+    "Говори прямо, но оставь собеседнику пространство для ответа.",
+    "Маленькая забота сегодня будет сильнее эффектного жеста.",
+    "Не прячь настоящие чувства за привычной вежливостью.",
+    "Партнёрство принесёт больше, чем попытка всё сделать в одиночку.",
+)
+_HOROSCOPE_WORK = (
+    "Выбери один приоритет и доведи его до видимого результата.",
+    "Перепроверь детали — одна мелочь может сэкономить много времени.",
+    "Хороший день для переговоров, планов и нового шага.",
+    "Не бери на себя чужую срочность без ясных условий.",
+)
+_HOROSCOPE_FINANCE = (
+    "Сравни условия и оставь запас перед покупкой.",
+    "Избегай импульсивных трат на фоне усталости.",
+    "Практичное решение окажется выгоднее яркого соблазна.",
+    "Проверь подписки и мелкие расходы, которые незаметно накапливаются.",
+)
+
+
+def _oracle_bar(value: int, width: int = 10) -> str:
+    value = max(0, min(100, int(value)))
+    filled = round(value / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _oracle_keyboard(kind: str) -> InlineKeyboardMarkup:
+    if kind == "fortune":
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text="🔮 Новое", callback_data="oracle:fortune"
+                ),
+                InlineKeyboardButton(
+                    text="🌙 Тайна", callback_data="oracle:fortune:secret"
+                ),
+            ],
+        ]
+    elif kind == "tarot":
+        rows = [
+            [
+                InlineKeyboardButton(
+                    text="🎲 Новая карта", callback_data="oracle:tarot"
+                ),
+                InlineKeyboardButton(
+                    text="✨ Тайный совет", callback_data="oracle:tarot:secret"
+                ),
+            ],
+        ]
+    else:
+        rows = [[
+            InlineKeyboardButton(
+                text="✨ Новый прогноз", callback_data="oracle:horoscope"
+            ),
+        ]]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _tarot_card_meta(card: str) -> tuple[str, str]:
+    return _TAROT_META.get(card, ("Интуиция · Выбор · Перемены", "✦✦✦☆☆"))
 SUPERPOWERS = [
     "🦸 Телепатия — ты читаешь мысли людей с первого взгляда",
     "⚡ Молния — твоя воля управляет электричеством и энергией",
@@ -7095,18 +9069,35 @@ COLORS = ["🔴 Красный — страсть, энергия, сила","�
 EMOJIS_COMBOS = ["🔥💯✨","🎉🎊🎈","😎🤙💪","🌈🦄✨","🌊🏄🌅","🎵🎶🎸","🍕🍔🌮","🚀🌌⭐","🦁👑🌟","💖💫🌸"]
 
 async def cmd_fortune(msg: Message):
-    result = random.choice(FORTUNES)
-    name   = html.escape(msg.from_user.first_name or "—")
-    if not await reply_t(msg, "fortune_result", result=result):
-        await msg.reply(
-            f"{brand.hdr()}\n\n"
-            f"🔮 <b>Предсказание для {name}</b>\n\n"
-            f"{brand.div()}\n"
-            f"<i>{result}</i>\n\n"
-            f"{brand.div()}\n"
-            f"<i>Вселенная всегда знает ответ</i> ✨",
-            parse_mode="HTML",
-        )
+    result = html.escape(random.choice(FORTUNES))
+    name = html.escape(msg.from_user.first_name or "—")
+    scene = random.choice(_ORACLE_SCENES)
+    mood = random.choice(_ORACLE_MOODS)
+    sign = random.choice(_ORACLE_SIGNS)
+    strength = random.choice(_ORACLE_STRENGTHS)
+    task = random.choice(_ORACLE_TASKS)
+    reward = random.choice(_ORACLE_REWARDS)
+    energy = random.randint(64, 94)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🔮 <b>LUMENA · ПРЕДСКАЗАНИЕ ДНЯ</b>\n"
+        f"{brand.div()}\n\n"
+        f"✨ <b>Сегодняшний сюжет:</b>\n"
+        f"«{html.escape(scene)}»\n\n"
+        f"<i>{result}</i>\n\n"
+        f"🎭 <b>Настроение</b>\n{html.escape(mood)}\n\n"
+        f"💬 <b>Возможный знак</b>\n{html.escape(sign)}\n\n"
+        f"⚡ <b>Твоя сила</b>\n{html.escape(strength)}\n\n"
+        f"🎯 <b>Мини-задание</b>\n{html.escape(task)}\n\n"
+        f"⚡ <b>Энергия дня</b>\n"
+        f"{_oracle_bar(energy)}  {energy}%\n\n"
+        f"🏆 <b>Награда</b>\n{html.escape(reward)}\n\n"
+        f"🐾 <b>Совет Лумки</b>\n"
+        f"«Один маленький шаг лучше десяти идеальных планов».\n\n"
+        f"<i>Для {name} · развлекательная интерпретация</i>",
+        parse_mode="HTML",
+        reply_markup=_oracle_keyboard("fortune"),
+    )
 
 async def cmd_8ball(msg: Message, command: CommandObject = None):
     if not (command and command.args):
@@ -7134,17 +9125,31 @@ async def cmd_8ball(msg: Message, command: CommandObject = None):
 async def cmd_tarot(msg: Message):
     card, meaning = random.choice(TAROT)
     name = html.escape(msg.from_user.first_name or "—")
-    if not await reply_t(msg, "tarot_result", card=card, meaning=meaning):
-        await msg.reply(
-            f"{brand.hdr()}\n\n"
-            f"🃏 <b>Карта Таро для {name}</b>\n\n"
-            f"{brand.div()}\n"
-            f"✨ <b>{card}</b>\n\n"
-            f"<i>{meaning}</i>\n\n"
-            f"{brand.div()}\n"
-            f"<i>Карты не лгут — прислушайся к посланию</i> 🌙",
-            parse_mode="HTML",
-        )
+    keywords, rarity = _tarot_card_meta(card)
+    energy = random.randint(66, 96)
+    reward = random.choice(_ORACLE_REWARDS)
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"🃏 <b>LUMENA · ТАРО ДНЯ</b>\n"
+        f"{brand.div()}\n\n"
+        f"🔓 <b>Карта открыта:</b>\n\n"
+        f"✦ <b>{html.escape(card.upper())}</b> ✦\n\n"
+        f"🌌 {html.escape(keywords)}\n\n"
+        f"🎴 <b>Редкость</b>\n{rarity}\n\n"
+        f"<i>{html.escape(meaning)}</i>\n\n"
+        f"💞 <b>В отношениях</b>\n"
+        f"{html.escape(random.choice(_TAROT_RELATION_TIPS))}\n\n"
+        f"⚡ <b>Испытание карты</b>\n"
+        f"{html.escape(random.choice(_TAROT_CHALLENGES))}.\n\n"
+        f"⚡ <b>Энергия карты</b>\n"
+        f"{_oracle_bar(energy)}  {energy}%\n\n"
+        f"🎁 <b>Скрытая награда</b>\n{html.escape(reward)}\n\n"
+        f"🐾 <b>Лумка говорит</b>\n"
+        f"«Карты намекают, а решаешь всё равно ты».\n\n"
+        f"<i>Для {name} · развлекательная интерпретация</i>",
+        parse_mode="HTML",
+        reply_markup=_oracle_keyboard("tarot"),
+    )
 
 async def cmd_horoscope(msg: Message, command: CommandObject = None):
     raw = (command.args if command else "").strip()
@@ -7173,14 +9178,31 @@ async def cmd_horoscope(msg: Message, command: CommandObject = None):
             )
         sign = random.choice(ZODIAC_SIGNS)
     text = random.choice(HOROSCOPES[sign])
-    if not await reply_t(msg, "horoscope_result", sign=sign, text=text):
-        await msg.reply(
-            f"{brand.hdr()}\n\n"
-            f"🌙 Гороскоп — <b>{sign}</b>\n\n"
-            f"<i>{text}</i>\n\n"
-            f"{brand.div()}",
-            parse_mode="HTML",
-        )
+    energy = random.randint(62, 94)
+    symbol = _ZODIAC_SYMBOLS.get(sign, "🌙")
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        f"{symbol} <b>LUMENA · {html.escape(sign.upper())}</b>\n"
+        f"{brand.div()}\n"
+        f"<i>Прогноз на сегодня · {today_kyiv().strftime('%d.%m.%Y')}</i>\n\n"
+        f"{html.escape(text)}\n\n"
+        f"💞 <b>Отношения</b>\n"
+        f"{html.escape(random.choice(_HOROSCOPE_RELATIONS))}\n\n"
+        f"💼 <b>Дела</b>\n"
+        f"{html.escape(random.choice(_HOROSCOPE_WORK))}\n\n"
+        f"💰 <b>Финансы</b>\n"
+        f"{html.escape(random.choice(_HOROSCOPE_FINANCE))}\n\n"
+        f"⚡ <b>Энергия дня</b>\n"
+        f"{_oracle_bar(energy)}  {energy}%\n\n"
+        f"🍀 <b>Удачный цвет:</b> {random.choice(('серебряный', 'лунный синий', 'изумрудный', 'золотой'))}\n"
+        f"🔢 <b>Число дня:</b> {random.randint(2, 9)}\n"
+        f"🕘 <b>Лучшее время:</b> {random.choice(('09:00–11:00', '13:00–15:00', '19:00–21:00'))}\n\n"
+        f"✦ <b>Совет Lumena</b>\n"
+        f"{html.escape(random.choice(_ORACLE_TASKS)).capitalize()}.\n\n"
+        f"<i>Это развлекательная интерпретация, а не точный прогноз.</i>",
+        parse_mode="HTML",
+        reply_markup=_oracle_keyboard("horoscope"),
+    )
 
 async def cmd_predict(msg: Message, command: CommandObject = None):
     if not (command and command.args):
@@ -7193,29 +9215,117 @@ async def cmd_predict(msg: Message, command: CommandObject = None):
             f"{brand.div()}",
             parse_mode="HTML",
         )
-    result   = random.choice(PREDICTIONS)
+    result = html.escape(random.choice(PREDICTIONS))
     question = html.escape(command.args.strip())
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🔮 <b>Вижу будущее...</b>\n\n"
+        f"🔮 <b>LUMENA · ОТВЕТ ВСЕЛЕННОЙ</b>\n"
+        f"{brand.div()}\n\n"
         f"❓ <i>{question}</i>\n\n"
-        f"{brand.div()}\n"
+        f"🎲 <b>Сценарий открыт</b>\n"
         f"◆ {result}\n\n"
-        f"{brand.div()}",
+        f"🧭 <b>Что поможет</b>\n"
+        f"{html.escape(random.choice(_ORACLE_TASKS)).capitalize()}.\n\n"
+        f"🐾 <b>Лумка:</b> решение всё равно остаётся за тобой.\n\n"
+        f"<i>Развлекательная интерпретация</i>",
         parse_mode="HTML",
+        reply_markup=_oracle_keyboard("fortune"),
     )
 
-async def cmd_destiny(msg: Message):
-    name   = html.escape(msg.from_user.first_name or "—")
-    result = random.choice(FORTUNES)
+
+@dp.callback_query(F.data == "oracle:fortune")
+async def cb_oracle_fortune(cb: CallbackQuery):
+    await cb.answer("Новое предсказание открывается…")
+    if cb.message:
+        await cmd_fortune(cb.message)
+
+
+@dp.callback_query(F.data == "oracle:fortune:secret")
+async def cb_oracle_fortune_secret(cb: CallbackQuery):
+    await cb.answer("Тайна открыта")
+    if cb.message:
+        secret = html.escape(random.choice((
+            "Самый важный знак дня придёт в обычной форме.",
+            "Ты уже знаешь первый шаг — перестань ждать разрешения.",
+            "Сегодня удача любит тихие решения и честные слова.",
+        )))
+        await cb.message.reply(
+            f"{brand.hdr()}\n\n"
+            f"🌙 <b>Секрет от Лумены</b>\n"
+            f"{brand.div()}\n\n"
+            f"{secret}\n\n"
+            f"🐾 Лумка: «Не усложняй то, что можно сделать с улыбкой»."
+            ,
+            parse_mode="HTML",
+        )
+
+
+@dp.callback_query(F.data == "oracle:tarot")
+async def cb_oracle_tarot(cb: CallbackQuery):
+    await cb.answer("Новая карта выбрана")
+    if cb.message:
+        await cmd_tarot(cb.message)
+
+
+@dp.callback_query(F.data == "oracle:tarot:secret")
+async def cb_oracle_tarot_secret(cb: CallbackQuery):
+    await cb.answer("Тайный совет открыт")
+    if cb.message:
+        secret = html.escape(random.choice((
+            "Не путай паузу с поражением — иногда она меняет весь расклад.",
+            "Сохрани любопытство: сегодня оно полезнее готового ответа.",
+            "Твоя сила проявится там, где ты выберешь честность вместо роли.",
+        )))
+        await cb.message.reply(
+            f"{brand.hdr()}\n\n"
+            f"✨ <b>Тайный совет карты</b>\n"
+            f"{brand.div()}\n\n"
+            f"{secret}",
+            parse_mode="HTML",
+        )
+
+
+@dp.callback_query(F.data == "oracle:horoscope")
+async def cb_oracle_horoscope(cb: CallbackQuery):
+    await cb.answer("Новый прогноз готов")
+    if cb.message:
+        await cmd_horoscope(cb.message)
+
+async def cmd_destiny(msg: Message, command: CommandObject = None):
+    text_parts = (msg.text or "").strip().split()
+    has_target = bool(
+        msg.reply_to_message
+        or (command and command.args)
+        or len(text_parts) > 1
+    )
+    if not has_target:
+        name = html.escape(msg.from_user.first_name or "—")
+        result = random.choice(FORTUNES)
+        return await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"✨ <b>Судьба для {name}</b>\n\n"
+            f"{brand.div()}\n"
+            f"<i>{result}</i>\n\n"
+            f"{brand.div()}\n"
+            f"<i>Звёзды говорят — слушай их</i> 🌌",
+            parse_mode="HTML",
+        )
+
+    pair = await _rpg_pair_from_message(msg, command)
+    if not pair:
+        return
+    first, second = pair
+    key, record = _rpg_ensure_pair(
+        msg.chat.id, first.id, second.id, first.full_name, second.full_name
+    )
+    if not isinstance(record.get("destiny"), dict):
+        _rpg_destiny(record, key, first.id, second.id)
+        schedule_state_save("прогноз судьбы пары")
+
     await msg.reply(
-        f"{brand.hdr()}\n\n"
-        f"✨ <b>Судьба для {name}</b>\n\n"
-        f"{brand.div()}\n"
-        f"<i>{result}</i>\n\n"
-        f"{brand.div()}\n"
-        f"<i>Звёзды говорят — слушай их</i> 🌌",
+        _rpg_destiny_text(record, first.id, second.id, key),
         parse_mode="HTML",
+        reply_markup=_rpg_pair_tools(first.id, second.id),
     )
 
 async def cmd_superpower(msg: Message):
@@ -9540,7 +11650,6 @@ async def _priv_check(msg: Message) -> bool:
     """Игры работают везде — проверка удалена."""
     return True
 
-@dp.message(Command("орёл", "coinflip"))
 async def cmd_coinflip(msg: Message, command: CommandObject = None):
     if not await _priv_check(msg): return
     if not command or not command.args:
@@ -9569,7 +11678,6 @@ async def cmd_coinflip(msg: Message, command: CommandObject = None):
         parse_mode="HTML"
     )
 
-@dp.message(Command("плинко", "plinko"))
 async def cmd_plinko(msg: Message, command: CommandObject = None):
     if not await _priv_check(msg): return
     if not command or not command.args:
@@ -9602,7 +11710,6 @@ async def cmd_plinko(msg: Message, command: CommandObject = None):
         parse_mode="HTML"
     )
 
-@dp.message(Command("лимбо", "limbo"))
 async def cmd_limbo(msg: Message, command: CommandObject = None):
     if not await _priv_check(msg): return
     usage = "Использование: <b>лимбо [сумма] [цель ×]</b>\nПример: лимбо 1000 2.0"
@@ -9645,7 +11752,6 @@ async def cmd_limbo(msg: Message, command: CommandObject = None):
         parse_mode="HTML"
     )
 
-@dp.message(Command("краш", "crash"))
 async def cmd_crash(msg: Message, command: CommandObject = None):
     if not await _priv_check(msg): return
     if not command or not command.args:
@@ -9997,7 +12103,6 @@ async def cb_mines(cb: CallbackQuery):
         )
         await cb.answer(f"💎 ×{mult:.2f}")
 
-@dp.message(Command("ставка", "bet"))
 async def cmd_bet_game(msg: Message, command: CommandObject = None):
     if not await _priv_check(msg): return
     usage = "Использование: <b>ставка [сумма] [число 0-36]</b>"
@@ -10902,7 +13007,7 @@ async def cmd_announce_v7(msg: Message):
         "• Выполни все 4 задания → <b>+1 000 LMN + 75 XP</b>!\n"
         "• Прогресс-бар и автоначисление: <code>задания</code>\n\n"
         "🔮 <b>Расширенные предсказания</b>\n"
-        "• 98 предсказаний судьбы — <code>предсказание</code>\n"
+        "• 169 развёрнутых предсказаний судьбы — <code>предсказание</code>\n"
         "• 25 уникальных ответов вселенной — <code>предсказать</code>\n"
         "• 35 ответов магического шара — <code>8ball</code>\n"
         "• 30 суперсил с описанием — <code>суперсила</code>\n"
@@ -10918,14 +13023,9 @@ async def cmd_announce_v7(msg: Message):
         "💍 <b>Браки</b>\n"
         "• Сколько дней вместе теперь видно в <code>браки</code> и профиле!\n\n"
         "🐛 <b>Исправленные баги</b>\n"
-        "• Краш: ставка берётся из игры, не из кнопки\n"
-        "• Краш: нельзя забрать выигрыш после краша\n"
         "• Мины: повторный клик по открытой клетке заблокирован\n"
         "• Мины: защита от подделанных индексов клеток\n"
-        "• Лимбо: защита от NaN/Infinity в цели\n"
-        "• Стрик/топ стриков/профиль/репутация: правильно читают данные чата\n"
         "• Перевод LMN: теперь сохраняется сразу после операции\n"
-        "• Бонус за стрик: данные сохраняются сразу\n"
         "• Кулдауны работы/рыбалки/ограбления не сбрасываются при рестарте\n"
         "• Мут/бан/кик/варн: нельзя применить к фаундеру или себе\n"
         "• Варн: при неудачном бане откатывает счётчик\n"
@@ -10959,7 +13059,7 @@ async def _send_v6_announcement():
         f"{brand.div()}\n"
         f"📋 Что нового:\n"
         f"• ⚡ XP и система уровней (6 уровней)\n"
-        f"• 🎮 Новые игры: орёл, плинко, лимбо, краш, блэкджек, мины\n"
+         f"• 🎮 Новые игровые режимы: блэкджек, мины\n"
         f"• 🎁 Ежедневные награды и задания\n"
         f"• 🏆 Система достижений\n"
         f"• 🔗 Реферальная система\n"
@@ -10984,11 +13084,7 @@ async def _send_v6_announcement():
 _HELP_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
     [
         InlineKeyboardButton(text="💰 Экономика",      callback_data="help:eco"),
-        InlineKeyboardButton(text="🎮 Игры",           callback_data="help:games"),
-    ],
-    [
         InlineKeyboardButton(text="💑 Отношения",      callback_data="help:social"),
-        InlineKeyboardButton(text="🎉 Развлечения",    callback_data="help:fun"),
     ],
     [
         InlineKeyboardButton(text="🔮 Предсказания",   callback_data="help:fortune"),
@@ -11067,9 +13163,6 @@ _HELP_SECTIONS = {
         "<code>экспедиция</code> — исследовать неизведанные земли (кд 2 ч)\n\n"
         "<code>алхимия</code> — сварить личный эликсир (кд 2 ч)\n"
         "<code>команда алхимия</code> — общий ритуал для 3 участников (раз в день)\n\n"
-        "🎰 <b>Удача:</b>\n"
-        "<code>казино [сумма]</code> — казино (только в личном чате с ботом)\n"
-        "<code>слоты [сумма]</code> — игровой автомат (только в личном чате с ботом)\n\n"
         "💸 <b>Переводы:</b>\n"
         "<code>ограбить</code> — ограбить (ответом)\n"
         "<code>дать [сумма]</code> — перевод LMN\n"
@@ -11082,6 +13175,7 @@ _HELP_SECTIONS = {
         f"{brand.div()}\n"
         "💍 <b>Браки:</b>\n"
         "<code>брак</code> — предложение (ответом)\n"
+        "<code>брак</code> ответом на сообщение Lumena — сразу оформить виртуальный брак с ботом\n"
         "<code>развод</code> — расстаться\n"
         "<code>список браков</code> — все пары\n\n"
         "💘 <b>Совместимость:</b>\n"
@@ -11094,20 +13188,6 @@ _HELP_SECTIONS = {
         "<code>трахнуть</code> — взрослая игровая сценка (ответом)\n"
         "<code>потыкать</code> · <code>помахать</code> · <code>станцевать</code>\n"
         "<code>фейспалм</code> · <code>серенада</code> · <code>пятёрку</code>\n\n"
-        f"{brand.div()}"
-    ),
-    "games": (
-        f"{brand.hdr()}\n\n"
-        "🎮 Игры\n\n"
-        f"{brand.div()}\n"
-        "🎲 <b>Случайность:</b>\n"
-        "<code>монетка</code> · <code>кубик</code> · <code>ролл</code>\n"
-        "<code>рандом [от] [до]</code>\n\n"
-        "🕹 <b>Мини-игры:</b>\n"
-        "<code>выбрать [а/б/в]</code> — выбор\n"
-        "<code>оценить</code> · <code>загадка</code> · <code>виселица</code>\n\n"
-        "⚡ <b>Риск:</b>\n"
-        "<code>рулетка</code> · <code>правда</code> · <code>действие</code>\n\n"
         f"{brand.div()}"
     ),
     "fortune": (
@@ -11123,23 +13203,6 @@ _HELP_SECTIONS = {
         "✨ <b>Личность:</b>\n"
         "<code>суперсила</code> · <code>профессия</code>\n"
         "<code>животное</code> · <code>страна</code> · <code>цвет</code>\n\n"
-        f"{brand.div()}"
-    ),
-    "fun": (
-        f"{brand.hdr()}\n\n"
-        "🎉 Развлечения\n\n"
-        f"{brand.div()}\n"
-        "😄 <b>Контент:</b>\n"
-        "<code>шутка</code> · <code>факт</code> · <code>цитата</code>\n"
-        "<code>котик</code> · <code>пёс</code>\n"
-        "<code>комплимент</code> · <code>роаст</code>\n"
-        "<code>фильм</code> · <code>книга</code> · <code>совет</code>\n"
-        "<code>мотивация</code> · <code>миф</code> · <code>эмодзи</code>\n\n"
-        "⭐ <b>Репутация:</b>\n"
-        "<code>+1</code> / <code>-1</code> — ответом\n"
-        "<code>репутация</code> · <code>топ репутации</code>\n\n"
-        "🔥 <b>Стрики:</b>\n"
-        "<code>чекин</code> · <code>стрик</code> · <code>топ стриков</code>\n\n"
         f"{brand.div()}"
     ),
     "profile": (
@@ -11230,14 +13293,9 @@ _HELP_SECTIONS = {
         "<code>статаадминов</code> — пары, проценты и рейтинг\n"
         "Фаундер подключает такой чат командой <code>командныйчат</code> прямо внутри него.\n"
         "Автоматически анализируются ответы сотрудников и присланные voice-сообщения.\n\n"
-        "🎮 <b>Игры (только в ЛС бота):</b>\n"
-        "<code>/орёл [сумма]</code> — монетка\n"
-        "<code>/плинко [сумма]</code> — плинко\n"
-        "<code>/лимбо [сумма] [цель×]</code> — лимбо\n"
-        "<code>/краш [сумма]</code> — краш 🚀\n"
-        "<code>/блэкджек [сумма]</code> — блэкджек 🃏\n"
-        "<code>/мины [сумма]</code> — мины 💣\n"
-        "<code>/ставка [сумма] [0-36]</code> — рулетка\n\n"
+         "🎮 <b>Дополнительные режимы:</b>\n"
+         "<code>/блэкджек [сумма]</code> — блэкджек 🃏\n"
+         "<code>/мины [сумма]</code> — мины 💣\n\n"
         f"{brand.div()}"
     ),
     "ref": (
@@ -11822,16 +13880,12 @@ TEXT_COMMANDS.update({
     "варн": cmd_warn, "снятьварн": cmd_unwarn, "очистить": cmd_purge,
     "ро": cmd_ro, "закрепить": cmd_pin, "открепить": cmd_unpin,
     # Стрики
-    "чекин": cmd_checkin, "стрик": cmd_streak,
-    "топстриков": cmd_topstreak, "топ стриков": cmd_topstreak,
-    "сбросстрик": cmd_resetstreak,
     # Валюта
     "баланс": cmd_balance, "кошелёк": cmd_balance,
     "работа": cmd_work, "рыбалка": cmd_fish, "охота": cmd_hunt, "hunt": cmd_hunt,
     "майнинг": cmd_mine, "шахта": cmd_mine, "mine": cmd_mine,
     "готовка": cmd_cook, "кулинария": cmd_cook, "cook": cmd_cook,
     "экспедиция": cmd_explore, "исследование": cmd_explore, "explore": cmd_explore,
-    "казино": cmd_casino, "слоты": cmd_slots, "слот": cmd_slots,
     "ограбить": cmd_rob, "украсть": cmd_rob,
     "банк": _bank_card, "bank": _bank_card,
     "аукцион": auction_manager.cmd_auction, "auction": auction_manager.cmd_auction,
@@ -11849,15 +13903,20 @@ TEXT_COMMANDS.update({
     "забрать": cmd_take, "take": cmd_take,
     "забрать500м": cmd_ownerclaim, "ownerclaim": cmd_ownerclaim,
     # Репутация
-    "репутация": cmd_rep, "реп": cmd_rep,
-    "+": cmd_upvote, "плюс": cmd_upvote,
-    "-": cmd_downvote, "минус": cmd_downvote,
-    "топрепутации": cmd_toprep, "топ репутации": cmd_toprep,
     "аура": cmd_aura, "ауру": cmd_aura, "моя аура": cmd_aura,
     "топауры": cmd_topaura, "топ ауры": cmd_topaura,
     # Брак
     "брак": cmd_marry, "жениться": cmd_marry, "замуж": cmd_marry,
+    "отношения": cmd_marriage_menu, "relationship": cmd_marriage_menu,
+    "relationships": cmd_marriage_menu,
     "развод": cmd_divorce,
+    "свидание": cmd_date, "date": cmd_date,
+    "история": cmd_marriage_history, "летопись": cmd_marriage_history,
+    "history": cmd_marriage_history,
+    "свадьба": cmd_wedding, "wedding": cmd_wedding,
+    "контракт": cmd_marriage_contract, "contract": cmd_marriage_contract,
+    "характеристики": cmd_marriage_stats, "брачныестаты": cmd_marriage_stats,
+    "отношениястаты": cmd_marriage_stats,
     # Роли
     "роль": cmd_set_role, "setrole": cmd_set_role,
     "повысить": cmd_promote, "повыситьдо": cmd_promote, "promote": cmd_promote,
@@ -11902,24 +13961,7 @@ TEXT_COMMANDS.update({
     "предсказать": cmd_predict, "судьба": cmd_destiny,
     "суперсила": cmd_superpower, "профессия": cmd_profession,
     "нумерология": cmd_numerology,
-    # Игры
-    "монетка": cmd_coin, "кубик": cmd_dice,
-    "рандом": cmd_random_num,
-    "ролл": cmd_roll, "выбрать": cmd_choose, "выбери": cmd_choose,
-    "оценить": cmd_rate, "оценка": cmd_rate,
-    "правда": cmd_truth, "действие": cmd_dare,
-    "загадка": cmd_riddle, "рулетка": cmd_roulette,
-    "рулетка_старт": cmd_roulette_start,
-    "виселица": cmd_hangman,
-    # Развлечения
-    "шутка": cmd_joke, "анекдот": cmd_joke,
-    "факт": cmd_fact, "цитата": cmd_quote,
-    "котик": cmd_cat, "кот": cmd_cat, "пёс": cmd_dog, "собака": cmd_dog,
-    "комплимент": cmd_compliment, "роаст": cmd_roast,
-    "животное": cmd_animal, "фильм": cmd_movie, "книга": cmd_book,
-    "совет": cmd_advice, "мотивация": cmd_motivation,
-    "миф": cmd_myth, "страна": cmd_country, "цвет": cmd_color,
-    "эмодзи": cmd_emoji_combo, "смайл": cmd_emoji_combo,
+    # Игры и развлечения перечислены в REMOVED_AURORA_COMMANDS ниже.
     # Утилиты
     "пароль": cmd_password, "uuid": cmd_uuid_gen,
     "бми": cmd_bmi, "возраст": cmd_age,
@@ -11972,23 +14014,13 @@ for slash_name, func in [
     # Отношения (без декоратора)
     ("ship", cmd_ship), ("love", cmd_love), ("friend", cmd_friend),
     ("couple", cmd_couple),
+     ("date", cmd_date), ("history", cmd_marriage_history), ("wedding", cmd_wedding),
+    ("contract", cmd_marriage_contract),
+    ("marriage_stats", cmd_marriage_stats),
     # Предсказания (без декоратора)
     ("fortune", cmd_fortune), ("8ball", cmd_8ball), ("horoscope", cmd_horoscope),
     ("tarot", cmd_tarot), ("predict", cmd_predict), ("destiny", cmd_destiny),
-    # Игры (без декоратора)
-    ("coin", cmd_coin), ("dice", cmd_dice),
-    ("random", cmd_random_num), ("choose", cmd_choose), ("rate", cmd_rate),
-    ("truth", cmd_truth), ("dare", cmd_dare), ("riddle", cmd_riddle),
-    ("roulette", cmd_roulette), ("roulette_start", cmd_roulette_start),
-    ("hangman", cmd_hangman), ("roll", cmd_roll),
-    # Развлечения (без декоратора)
-    ("joke", cmd_joke), ("fact", cmd_fact), ("quote", cmd_quote),
-    ("cat", cmd_cat), ("dog", cmd_dog),
-    ("compliment", cmd_compliment), ("roast", cmd_roast),
-    ("superpower", cmd_superpower), ("profession", cmd_profession),
-    ("animal", cmd_animal), ("movie", cmd_movie), ("book", cmd_book),
-    ("advice", cmd_advice), ("motivation", cmd_motivation),
-    ("myth", cmd_myth), ("country", cmd_country), ("color", cmd_color),
+    # Удалённые в AURORA V8 игры и развлечения намеренно не регистрируются.
     # Утилиты (без декоратора)
     ("password", cmd_password), ("uuid", cmd_uuid_gen),
     ("bmi", cmd_bmi), ("age", cmd_age), ("numerology", cmd_numerology),
@@ -12004,7 +14036,14 @@ for slash_name, func in [
     ("help", cmd_help),
     # ─── Кириллические слэш-алиасы ───────────────────────
     # Теперь /баланс, /брак, /чекин и др. работают со слешем
-    ("брак", cmd_marry), ("развод", cmd_divorce), ("браки", cmd_marriages),
+     ("брак", cmd_marry), ("отношения", cmd_marriage_menu),
+     ("relationship", cmd_marriage_menu), ("relationships", cmd_marriage_menu),
+     ("развод", cmd_divorce), ("браки", cmd_marriages),
+     ("свидание", cmd_date), ("история", cmd_marriage_history),
+     ("летопись", cmd_marriage_history), ("свадьба", cmd_wedding),
+    ("контракт", cmd_marriage_contract),
+    ("характеристики", cmd_marriage_stats), ("брачныестаты", cmd_marriage_stats),
+    ("отношениястаты", cmd_marriage_stats), ("судьба", cmd_destiny),
     ("гороскоп", cmd_horoscope),
     ("баланс", cmd_balance), ("работа", cmd_work), ("рыбалка", cmd_fish), ("hunt", cmd_hunt),
      ("алхимия", cmd_alchemy), ("teamalchemy", cmd_team_alchemy),
@@ -12012,11 +14051,8 @@ for slash_name, func in [
      ("майнинг", cmd_mine), ("mine", cmd_mine),
      ("готовка", cmd_cook), ("кулинария", cmd_cook), ("cook", cmd_cook),
      ("экспедиция", cmd_explore), ("исследование", cmd_explore), ("explore", cmd_explore),
-    ("казино", cmd_casino), ("слоты", cmd_slots), ("ограбить", cmd_rob),
+     ("ограбить", cmd_rob),
     ("дать", cmd_give),
-    ("чекин", cmd_checkin), ("стрик", cmd_streak),
-    ("топстриков", cmd_topstreak),
-    ("репутация", cmd_rep),
      ("командныйчат", cmd_staff_chat), ("чаткоманды", cmd_staff_chat),
      ("снятькомандныйчат", cmd_staff_chat_remove), ("снятьчаткоманды", cmd_staff_chat_remove),
      ("плохоеотношение", cmd_staff_bad), ("отношение", cmd_staff_bad),
@@ -13655,8 +15691,8 @@ _START_TEXT = (
     "◾ Поиск в интернете и Wikipedia\n"
     "◾ Погода, курсы валют, математика, переводы\n"
     "◾ Браки, отношения, анкеты знакомств\n"
-    "◾ Игры, предсказания, мини-развлечения\n"
-    "◾ Экономика чата — монеты LMN, работа, казино\n"
+    "◾ Предсказания и игровые режимы\n"
+    "◾ Экономика чата — монеты LMN и рабочие активности\n"
     "◾ Полная модерация чата\n\n"
     "══════════════════════════\n\n"
     "📋 Анкета знакомств — <code>/анкета</code>\n"
@@ -15318,7 +17354,7 @@ async def _apply_emoji_pack(msg: Message, reference: str, merge: bool = False):
         )
 
 
-@dp.message(Command("setemojipack", "theme", "тема", "эмодзи"))
+@dp.message(Command("setemojipack", "theme", "тема"))
 async def cmd_setemojipack(msg: Message):
     """Загружает custom emoji-пак по имени или ссылке Telegram."""
     parts = (msg.text or "").split(maxsplit=1)
@@ -17109,6 +19145,24 @@ async def _check_oxyl_words(msg: Message) -> bool:
 # ИИ-АГЕНТ ЛУМЕНА — ХЕЛПЕРЫ
 # ═══════════════════════════════════════════════════════
 
+NEXUS_LAUNCH_RESPONSE = (
+    "Сэр, разрешение получено. Вывожу протокол «НЕКСУС» из режима ожидания "
+    "и приступаю к сборке нового ядра Lumena."
+)
+
+
+def _is_nexus_launch_request(msg: Message) -> bool:
+    """Распознаёт точную команду запуска «НЕКСУС» только от основного фаундера."""
+    user = getattr(msg, "from_user", None)
+    if not user or user.id != OWNER_ID:
+        return False
+    text = re.sub(r"\s+", " ", (getattr(msg, "text", "") or "").strip().casefold())
+    return bool(re.fullmatch(
+        r"лумка[\s,!.:;—-]+запусти\s+протокол\s+нексус[.!?]*",
+        text,
+    ))
+
+
 async def _lumena_ai_private(msg: Message):
     """Лумена AI в личке — отвечает только founder и deputy."""
     if not _is_lumena_ai_allowed(msg):
@@ -17790,18 +19844,6 @@ async def universal_handler(msg: Message):
 
     # ── Команды без префикса
     if not text.startswith("/"):
-        # 🔥 стрик через огонь
-        if text.strip() == "🔥" or tl.strip() == "огонь":
-            await do_checkin(msg.chat.id, msg.from_user.id, msg)
-            return
-
-        # Виселица — угадывание буквы
-        if tl.startswith("виселица_") and len(tl) > 9:
-            letter = tl.replace("виселица_", "").strip()
-            if len(letter) == 1:
-                await cmd_hangman_guess(msg, letter)
-                return
-
         # Ищем команду по первому слову (и двум словам)
         parts = tl.split(maxsplit=2)
         three_words = " ".join(parts[:3]) if len(parts) >= 3 else ""
@@ -17837,6 +19879,10 @@ async def universal_handler(msg: Message):
 
             try: await handler(msg, FakeCmd2())
             except TypeError: await handler(msg)
+            return
+
+        if _is_nexus_launch_request(msg):
+            await msg.reply(NEXUS_LAUNCH_RESPONSE)
             return
 
         # Свободный AI-диалог разрешён только founder и deputy.
@@ -18200,6 +20246,8 @@ async def main():
     except Exception as _e:
         logging.warning(f"delete_my_commands: {_e}")
 
+    await _send_lumena_marriage_proposal()
+
     # Единоразовая выдача @VladMish11
     from award_vlad import run_award
     asyncio.create_task(run_award(
@@ -18267,6 +20315,11 @@ async def main():
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="shop", description="💎 Магазин"),
                 BotCommand(command="game", description="🏗 Открыть Котострой"),
+                BotCommand(command="date", description="💌 Свидание"),
+                BotCommand(command="history", description="📖 Летопись пары"),
+                BotCommand(command="wedding", description="💒 Свадьба"),
+                BotCommand(command="destiny", description="🔮 Судьба пары"),
+                BotCommand(command="contract", description="📜 Брачный контракт"),
                 BotCommand(command="anketa", description="📝 Создать анкету"),
                 BotCommand(command="helplum", description="📩 Жалобы и вопросы"),
             ],
@@ -18277,6 +20330,11 @@ async def main():
                 BotCommand(command="profile", description="👑 Мой профиль"),
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="help", description="📖 Все команды"),
+                BotCommand(command="date", description="💌 Свидание"),
+                BotCommand(command="history", description="📖 Летопись пары"),
+                BotCommand(command="wedding", description="💒 Свадьба"),
+                BotCommand(command="destiny", description="🔮 Судьба пары"),
+                BotCommand(command="contract", description="📜 Брачный контракт"),
             ],
             scope=BotCommandScopeAllGroupChats(),
         )
@@ -18548,8 +20606,10 @@ def _apply_data(data: dict) -> None:
             }
         except (AttributeError, TypeError, ValueError):
             logging.warning("⚠️ Некорректный командный ритуал для chat=%s пропущен", cid)
-    global _save_update_sent
+    global _save_update_sent, _lumena_proposal_sent, _lumena_proposal_version
     _save_update_sent = bool(data.get("save_update_sent", False))
+    _lumena_proposal_sent = bool(data.get("lumena_proposal_sent", False))
+    _lumena_proposal_version = int(data.get("lumena_proposal_version", 0) or 0)
     global pending_notifications
     pending_notifications = list(data.get("pending_notifications", []))
     for _p in data.get("marriage_proposals", []):
@@ -18689,6 +20749,14 @@ def _apply_data(data: dict) -> None:
         tasks_bonus_cd[int(u)] = str(v)
     for k, v in data.get("marriage_dates", {}).items():
         marriage_dates[str(k)] = str(v)
+    for key, value in data.get("marriage_rpg_pairs", {}).items():
+        if isinstance(value, dict):
+            marriage_rpg_pairs[str(key)] = value
+    for key, value in data.get("marriage_wedding_sessions", {}).items():
+        if isinstance(value, dict):
+            if value.get("status") == "pending" and _rpg_expire_wedding_session(str(key), value):
+                continue
+            marriage_wedding_sessions[str(key)] = value
     # кулдауны работы/рыбалки/ограбления (datetime → сохраняем ISO-строкой)
     _tz = ZoneInfo("Europe/Kyiv")
     for u, v in data.get("work_cooldown", {}).items():
