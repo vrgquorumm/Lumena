@@ -19757,12 +19757,10 @@ async def universal_handler(msg: Message):
             parse_mode="HTML",
         )
 
-    # Founder-only launch phrase for the Aurora process. Keep this scoped to
-    # the main chat so the same natural-language request cannot trigger from
-    # private chats, the admin chat, or another group.
+    # Aurora launch phrase. Keep the exact phrase scoped to the main chat:
+    # it is only a conversational acknowledgement and does not execute code.
     if (
-        is_owner(msg)
-        and msg.chat.id == MAIN_CHAT_ID
+        msg.chat.id == MAIN_CHAT_ID
         and " ".join(tl.replace("ё", "е").split())
         == "лума, начинай запуск кода и параллельно активируй процесс аврора"
     ):
