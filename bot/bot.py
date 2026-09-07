@@ -19757,6 +19757,19 @@ async def universal_handler(msg: Message):
             parse_mode="HTML",
         )
 
+    # Founder-only launch phrase for the Aurora process. Keep this scoped to
+    # the main chat so the same natural-language request cannot trigger from
+    # private chats, the admin chat, or another group.
+    if (
+        is_owner(msg)
+        and msg.chat.id == MAIN_CHAT_ID
+        and " ".join(tl.replace("ё", "е").split())
+        == "лума, начинай запуск кода и параллельно активируй процесс аврора"
+    ):
+        return await msg.reply(
+            "Сэр, приступаю к анализу и параллельно к запуску проекта"
+        )
+
     # ── Дождь монет: первый кто написал "подобрать" — забирает
     if tl == "подобрать" and msg.chat.id in _active_rain and msg.chat.type != "private":
         amount = _active_rain.pop(msg.chat.id)
