@@ -2385,19 +2385,25 @@ def _add_months(value: date, months: int) -> date:
     return date(year, month, day)
 
 def _marriage_duration(start: date, end: date | None = None) -> str:
-    """Возвращает календарный срок брака: «3 мес. 10 дн.»."""
+    """Возвращает календарный срок брака в годах и днях."""
     end = end or today_kyiv()
     if start > end:
         return "0 дн."
-    months = (end.year - start.year) * 12 + end.month - start.month
-    anniversary = _add_months(start, months)
+    years = end.year - start.year
+    anniversary = _add_months(start, years * 12)
     if anniversary > end:
-        months -= 1
-        anniversary = _add_months(start, months)
+        years -= 1
+        anniversary = _add_months(start, years * 12)
     days = (end - anniversary).days
     parts = []
-    if months:
-        parts.append(f"{months} мес.")
+    if years:
+        if years % 10 == 1 and years % 100 != 11:
+            year_word = "год"
+        elif years % 10 in (2, 3, 4) and years % 100 not in (12, 13, 14):
+            year_word = "года"
+        else:
+            year_word = "лет"
+        parts.append(f"{years} {year_word}")
     if days or not parts:
         parts.append(f"{days} дн.")
     return " ".join(parts)
