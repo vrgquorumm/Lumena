@@ -1,5 +1,5 @@
 """
-Лумена Бот — полнофункциональный Telegram бот
+Lumenora — полнофункциональный Telegram бот
 Версия 6.0
 """
 import asyncio
@@ -50,7 +50,6 @@ from aiogram.types import (
 from aiogram.enums import ChatMemberStatus
 
 from lumena import get_lumena_response
-import anketa as _ank
 import ai_agent
 import brand
 import db as _db
@@ -85,7 +84,7 @@ PROTECTED_DEVELOPER_IDS = {8318351777}
 # Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
 REVOKED_FOUNDER_ACCESS_IDS: set[int] = {
     8663692155,
-    1839566911,  # @Not_persons — founder-deputy access revoked; runtime guard
+    1839566911,  # @Not_persons — founder-deputy access revoked
 }
 FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
@@ -93,6 +92,13 @@ DATA_FILE = "data/bot_data.json"
 ADMIN_RULES_FILE = Path(__file__).with_name("admin_rules.txt")
 
 LUMENA_SITE_URL: str = os.environ.get("LUMENA_SITE_URL", "")
+BOT_DISPLAY_NAME = "Lumenora"
+MAIN_CHAT_ID = -1004401287309
+ADMIN_CHAT_ID = -1004292802981
+# Историческая база сообщений главного чата до включения внутреннего счётчика.
+# Новые сообщения продолжают считаться в user_messages и прибавляются к этому
+# значению во всех общих отчётах по главному чату.
+HISTORICAL_MAIN_MESSAGE_BASELINE = 148_764
 _configured_game_url = os.environ.get("GAME_WEBAPP_URL", "").strip()
 if not _configured_game_url and LUMENA_SITE_URL:
     _configured_game_url = f"{LUMENA_SITE_URL.rstrip('/')}/game"
@@ -502,6 +508,9 @@ help_sessions: set[int] = set()
 help_forward_map: dict[int, int] = {}  # message_id сотрудника → ID пользователя
 _active_rain: dict = {}
 _last_rain_time: float = 0.0
+CRYPTO_FLASH_DRIVE_AMOUNT = 70_000_000_000
+_crypto_flash_drive_spawned: bool = False
+_crypto_flash_drive_claimed: bool = False
 
 _link_guard:       dict[int, bool]        = {}
 pending_notifications: list[dict] = []  # [{chat_id, text, parse_mode}] — одноразовые сообщения при старте
@@ -516,7 +525,6 @@ _msg_authors:      dict             = {}
 
 _ECON_CANONICAL: dict[int, int] = {}
 
-ANKETA_PREMIUM_STARS = 300
 ROLES: dict[int, str] = {}
 ROLE_NAMES: dict[str, str] = {
     "founder_deputy": "Заместитель фаундера",
@@ -741,6 +749,8 @@ def _build_main_payload() -> dict:
             for uid, note in FOUNDER_ACCESS_REVOCATIONS.items()
         },
         "last_rain_time": _last_rain_time,
+        "crypto_flash_drive_spawned": _crypto_flash_drive_spawned,
+        "crypto_flash_drive_claimed": _crypto_flash_drive_claimed,
         "link_guard":       {str(c): v for c, v in _link_guard.items()},
         "link_guard_warns": {str(c): {str(u): v for u, v in w.items()}
                              for c, w in _link_guard_warns.items()},
@@ -926,18 +936,12 @@ async def save_state_now(reason: str = "оновлення") -> bool:
     команди: автозбереження та shutdown лишаються страховкою.
     """
     save_data()
-    _ank.save_anketa_settings()
     try:
         await brand.persist_brand_now()
         if not _db.has_pg():
             logging.warning("💾 %s: PostgreSQL недоступний, дані лишилися локально", reason)
             return False
-        records = [
-            ("bot_data", _build_main_payload()),
-            ("anketa_settings", _ank.build_settings_payload()),
-            ("anketa_users", _ank.build_users_payload()),
-        ]
-        ok = await _db.db_set_many(records)
+        ok = await _db.db_set("bot_data", _build_main_payload())
         if not ok:
             logging.warning("💾 %s: PostgreSQL не підтвердив запис", reason)
         return ok
@@ -1006,8 +1010,6 @@ def _known_user_records() -> dict[int, dict]:
     for members in chat_members.values():
         for user_id, name in members.items():
             add_legacy(user_id, name)
-    for uid in _ank._approved_data:
-        add_legacy(uid)
     return records
 
 
@@ -1221,8 +1223,6 @@ async def _save_all_to_db() -> None:
     """
     _to_save = [
         (DATA_FILE,               "bot_data",         "data/bot_data.json"),
-        (_ank.ANKETA_USERS_FILE,  "anketa_users",     "data/anketa_users.json"),
-        (_ank.ANKETA_DATA_FILE,   "anketa_settings",  "data/anketa_settings.json"),
         ("data/custom_texts.json",  "custom_texts",   "data/custom_texts.json"),
         ("data/custom_style.json",  "custom_style",   "data/custom_style.json"),
         ("data/custom_buttons.json","custom_buttons", "data/custom_buttons.json"),
@@ -1325,6 +1325,33 @@ async def coin_rain_loop():
                 _active_rain.pop(chat_id, None)
 
         await asyncio.sleep(RAIN_INTERVAL)
+
+
+async def crypto_flash_drive_once():
+    """Одноразово роняет флешку с криптой в главном чате."""
+    global _crypto_flash_drive_spawned
+
+    await asyncio.sleep(45)
+    if _crypto_flash_drive_spawned or _crypto_flash_drive_claimed:
+        return
+
+    _crypto_flash_drive_spawned = True
+    save_data()
+    try:
+        await bot.send_message(
+            MAIN_CHAT_ID,
+            f"{brand.hdr()}\n\n"
+            "💾 <b>В ГЛАВНОМ ЧАТЕ НАЙДЕНА ФЛЕШКА С КРИПТОЙ!</b>\n\n"
+            f"{brand.div()}\n"
+            "Кто успеет первым написать <b>подобрать</b> — заберёт содержимое.\n\n"
+            f"💰 Приз: <b>{fmt_lmn(CRYPTO_FLASH_DRIVE_AMOUNT)} LMN</b>\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        _crypto_flash_drive_spawned = False
+        save_data()
+        logging.exception("Не удалось уронить одноразовую флешку с криптой")
 
 
 async def auction_loop():
@@ -1502,18 +1529,11 @@ def get_role(uid: int) -> str | None:
 def _role_sync_chat_ids(current_chat_id: int | None = None) -> list[int]:
     """Уникальные чаты, где Telegram-права роли должны совпадать.
 
-    Главный чат хранится как pub_chat, админский — как mod_chat. observer_chat
-    оставлен в списке для совместимости со старой настройкой founder-чата.
-    Текущий чат ставится первым, чтобы команда работала и до полной настройки
-    связки; повторяющиеся ID убираются.
+    Главный и админский чаты фиксированы в конфигурации бота, а дополнительные
+    рабочие чаты приходят из сохранённого состояния.
     """
     result: list[int] = []
-    for raw_chat_id in (
-        current_chat_id,
-        _ank.get_pub_chat(),
-        _ank.get_mod_chat(),
-        _ank.get_observer_chat(),
-    ):
+    for raw_chat_id in (current_chat_id, MAIN_CHAT_ID, ADMIN_CHAT_ID, *staff_team_chats):
         try:
             chat_id = int(raw_chat_id)
         except (TypeError, ValueError):
@@ -1914,28 +1934,11 @@ def is_owner(msg) -> bool:
 
 def _founder_main_chat_id(msg: Message | CallbackQuery = None) -> int | None:
     """Возвращает связанный главный чат для founder-команд."""
-    configured = _ank.get_pub_chat()
-    if configured:
-        try:
-            return int(configured)
-        except (TypeError, ValueError):
-            pass
-    observer_configured = _ank.get_observer_chat()
     current_chat = getattr(msg, "chat", None)
-    if observer_configured and current_chat:
-        try:
-            if int(observer_configured) == int(current_chat.id):
-                # Наблюдательный чат не может стать целью по умолчанию.
-                return None
-        except (TypeError, ValueError):
-            pass
     # До одноразовой привязки разрешаем founder-команду прямо из группы.
     if current_chat and getattr(current_chat, "type", None) != "private":
         return current_chat.id
-    # Совместимость со старым состоянием, где был ровно один командный чат.
-    if len(staff_team_chats) == 1:
-        return next(iter(staff_team_chats))
-    return None
+    return MAIN_CHAT_ID
 
 
 def _command_chat_id(msg: Message) -> int | None:
@@ -1944,13 +1947,6 @@ def _command_chat_id(msg: Message) -> int | None:
         main_chat = _founder_main_chat_id(msg)
         if main_chat is not None:
             return main_chat
-        observer_configured = _ank.get_observer_chat()
-        if observer_configured:
-            try:
-                if int(observer_configured) == int(msg.chat.id):
-                    return None
-            except (TypeError, ValueError):
-                pass
         return getattr(msg.chat, "id", None)
     return getattr(msg.chat, "id", None)
 
@@ -2095,7 +2091,11 @@ def is_verified(uid: int) -> bool:
     return uid in _verified_users
 
 # ── Математическая капча ───────────────────────────────────────
-_captcha_pending: dict[int, int] = {}   # uid → правильный ответ
+_captcha_pending: dict[int, dict[str, float | int | str]] = {}
+CAPTCHA_TTL_SECONDS = 300
+CAPTCHA_MAX_ATTEMPTS = 5
+CAPTCHA_LOCK_SECONDS = 60
+_captcha_locked_until: dict[int, float] = {}
 
 
 def _gen_captcha() -> tuple[str, int]:
@@ -2118,7 +2118,7 @@ def _gen_captcha() -> tuple[str, int]:
         return f"{a} − {b} = ?", a - b
 
 
-def _captcha_keyboard(uid: int, correct: int) -> InlineKeyboardMarkup:
+def _captcha_keyboard(uid: int, correct: int, token: str) -> InlineKeyboardMarkup:
     """4 кнопки с ответами (1 правильный, 3 ложных)."""
     decoys: set[int] = set()
     while len(decoys) < 3:
@@ -2132,23 +2132,29 @@ def _captcha_keyboard(uid: int, correct: int) -> InlineKeyboardMarkup:
     btns = [
         InlineKeyboardButton(
             text=str(opt),
-            callback_data=f"captcha_ans:{uid}:{opt}",
+            callback_data=f"captcha_ans:{uid}:{token}:{opt}",
         )
         for opt in options
     ]
     return InlineKeyboardMarkup(inline_keyboard=[btns[:2], btns[2:]])
 
-def is_anketa_premium(uid: int, username: str = "") -> bool:
-    """True якщо юзер має VIP-статус для анкети (куплений або безкоштовний)."""
-    if uid in _premium_users:
-        return True
-    uname = (username or "").lower().lstrip("@")
-    return uname in _PREMIUM_ALWAYS
 
-def is_anketa_revoke_allowed(username: str) -> bool:
-    """True якщо юзер може розжалувати анкету (фаундер або @veroniksssxa)."""
-    uname = (username or "").lower().lstrip("@")
-    return uname in {OWNER_USERNAME.lower(), "veroniksssxa"}
+def _verification_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text="Проверить, что я человек",
+            callback_data="verify:go",
+        )
+    ]])
+
+
+def _is_start_message(msg: Message) -> bool:
+    text = (msg.text or "").strip().lower()
+    if not text:
+        return False
+    command = text.split(maxsplit=1)[0].split("@", 1)[0]
+    return command in {"/start", "start"}
+
 
 async def is_admin(msg: Message) -> bool:
     if msg.chat.type == "private": return True
@@ -2341,6 +2347,24 @@ def fmt_lmn(n: int) -> str:
 def econ_cid(cid: int) -> int:
     """Возвращает канонический chat_id для экономики — объединяет связанные чаты."""
     return _ECON_CANONICAL.get(cid, cid)
+
+def _message_counts_for_chats(chat_ids) -> tuple[int, int, int]:
+    """Возвращает (текущий счётчик, историческая база, общий итог).
+
+    Историческая база относится только к главному чату и добавляется один раз,
+    даже если связанные каналы переданы в списке повторно.
+    """
+    ids = tuple(dict.fromkeys(cid for cid in chat_ids if cid is not None))
+    tracked = sum(
+        sum(user_messages.get(cid, {}).values())
+        for cid in ids
+    )
+    historical = (
+        HISTORICAL_MAIN_MESSAGE_BASELINE
+        if MAIN_CHAT_ID in ids
+        else 0
+    )
+    return tracked, historical, tracked + historical
 
 def get_rep(chat_id: int, uid: int) -> int:
     return reputation.get(econ_cid(chat_id), {}).get(uid, 0)
@@ -3024,7 +3048,7 @@ async def _promote_in_chat(
     """Выдаёт права администратора в чате по роли.
     Возвращает (promote_ok, title_ok, текст_ошибки)."""
     if chat_id is None:
-        chat_id = _ank.get_pub_chat()
+        chat_id = MAIN_CHAT_ID
     if not chat_id or user_id is None:
         return False, False, "чат не настроен"
     perms = _ROLE_PERMISSIONS.get(role, {})
@@ -3053,7 +3077,7 @@ async def _promote_in_chat(
 async def _demote_in_chat(user_id: int, chat_id: int | None = None) -> tuple[bool, str]:
     """Снимает все права администратора в чате."""
     if chat_id is None:
-        chat_id = _ank.get_pub_chat()
+        chat_id = MAIN_CHAT_ID
     if not chat_id or user_id is None:
         return False, "чат не настроен"
     try:
@@ -3074,11 +3098,8 @@ async def _demote_in_chat(user_id: int, chat_id: int | None = None) -> tuple[boo
 async def _notify_role_assigned(user_id: int, role: str, assigner_name: str) -> None:
     """Отправляет DM юзеру о назначении роли с ссылкой на чат."""
     # Ролевое приглашение ведёт именно в закрытый админский чат, а не в
-    # главный чат публикаций/знакомств.
-    chat_link = (
-        _ank.get_observer_chat_link()
-        or OBSERVER_CHAT_INVITE_LINK
-    )
+    # главный чат.
+    chat_link = OBSERVER_CHAT_INVITE_LINK
     role_icon = _ROLE_ICON.get(role, "🔹")
     role_name = ROLE_NAMES.get(role, role)
     try:
@@ -4046,10 +4067,10 @@ async def _send_lumena_marriage_proposal() -> None:
     global _lumena_proposal_sent, _lumena_proposal_version
     if _lumena_proposal_version >= 1 or not _BOT_ID:
         if _lumena_proposal_version >= 1:
-            logging.info("💍 Предложение Lumena уже отправлялось в текущей версии")
+            logging.info("💍 Предложение Lumenora уже отправлялось в текущей версии")
         return
 
-    chat_id = _ank.get_pub_chat() or _ank.DEFAULT_PUBLIC_CHAT_ID
+    chat_id = MAIN_CHAT_ID
     if not chat_id:
         logging.warning("💍 Не удалось отправить предложение: главный чат не связан")
         return
@@ -4065,7 +4086,7 @@ async def _send_lumena_marriage_proposal() -> None:
     marriage_proposals.pop((chat_id, OWNER_ID), None)
     marriage_proposals[(chat_id, OWNER_ID)] = {
         "proposer_id": _BOT_ID,
-        "proposer_full": "Lumena",
+        "proposer_full": "Lumenora",
     }
     proposal_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
@@ -4082,7 +4103,7 @@ async def _send_lumena_marriage_proposal() -> None:
         "💌 <b>СЦЕНА · ВАЖНЫЙ ВЫБОР</b>\n\n"
         f"<b>@{html.escape(OWNER_USERNAME)}</b>, я хочу предложить тебе "
         "виртуальный брак со мной — с заботой, верностью и общей историей "
-        "в Lumena. ❤️\n\n"
+        "в Lumenora. ❤️\n\n"
         "Это не случайный статус, а начало общей летописи: свидания, "
         "характеры, контракт и свадебная сцена.\n\n"
         "<i>Решение остаётся за тобой.</i>\n\n"
@@ -4097,13 +4118,13 @@ async def _send_lumena_marriage_proposal() -> None:
         )
     except Exception as exc:
         marriage_proposals.pop((chat_id, OWNER_ID), None)
-        logging.warning(f"💍 Не удалось отправить предложение Lumena: {exc}")
+        logging.warning(f"💍 Не удалось отправить предложение Lumenora: {exc}")
         return
 
     _lumena_proposal_sent = True
     _lumena_proposal_version = 1
-    logging.info(f"💍 Предложение Lumena отправлено, message_id={sent_message.message_id}")
-    await save_state_now("предложение виртуального брака от Lumena")
+    logging.info(f"💍 Предложение Lumenora отправлено, message_id={sent_message.message_id}")
+    await save_state_now("предложение виртуального брака от Lumenora")
 
 
 # ═══════════════════════════════════════════════════════
@@ -5417,7 +5438,7 @@ async def cmd_marry(msg: Message, command: CommandObject = None):
             existing_partner = get_partner(chat_id, target.id)
             if existing_partner == proposer.id:
                 return await msg.reply("Мы уже в браке 💍❤️")
-            return await msg.reply("Lumena уже состоит в виртуальном браке 💔")
+            return await msg.reply("Lumenora уже состоит в виртуальном браке 💔")
 
         cid = econ_cid(chat_id)
         marriages.setdefault(cid, {})
@@ -5432,13 +5453,13 @@ async def cmd_marry(msg: Message, command: CommandObject = None):
             proposer.id,
             target.id,
             proposer.full_name,
-            target.full_name or "Lumena",
+            target.full_name or "Lumenora",
         )
         rpg_record["status"] = "молодожёны"
         _rpg_contract(rpg_record, _rpg_pair_key(chat_id, proposer.id, target.id), proposer.id, target.id)
-        await save_state_now("брак пользователя с Lumena")
+        await save_state_now("брак пользователя с Lumenora")
 
-        lumena_name = target.full_name or "Lumena"
+        lumena_name = target.full_name or "Lumenora"
         marriage_text = (
             f"{_rpg_pair_banner(rpg_record, proposer.id, target.id, 'ФИНАЛ · ВИРТУАЛЬНЫЙ СОЮЗ')}\n\n"
             f"💕 <b>{html.escape(proposer.full_name)}</b> × "
@@ -5454,7 +5475,7 @@ async def cmd_marry(msg: Message, command: CommandObject = None):
             reply_markup=_rpg_pair_tools(proposer.id, target.id),
         )
 
-        pub_chat = _ank.get_pub_chat()
+        pub_chat = MAIN_CHAT_ID
         if pub_chat and pub_chat != chat_id:
             try:
                 await bot.send_message(pub_chat, marriage_text, parse_mode="HTML")
@@ -5568,7 +5589,7 @@ async def cmd_forcemarry(msg: Message, command: CommandObject):
         reply_markup=_rpg_pair_tools(first.id, second.id),
     )
 
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if pub_chat and pub_chat != msg.chat.id:
         try:
             await bot.send_message(pub_chat, marriage_text, parse_mode="HTML")
@@ -5650,7 +5671,7 @@ async def marry_callback(cb: CallbackQuery):
             reply_markup=_rpg_pair_tools(proposer_id, target_id),
         )
         # Дублюємо оголошення в основний чат
-        pub_chat = _ank.get_pub_chat()
+        pub_chat = MAIN_CHAT_ID
         if pub_chat and pub_chat != chat_id:
             try:
                 await bot.send_message(pub_chat, marry_text, parse_mode="HTML")
@@ -5737,7 +5758,7 @@ async def cmd_fordivorce(msg: Message, command: CommandObject = None):
     )
     await msg.reply(divorce_text, parse_mode="HTML")
 
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if pub_chat and pub_chat != msg.chat.id:
         try:
             await bot.send_message(pub_chat, divorce_text, parse_mode="HTML")
@@ -5791,7 +5812,7 @@ async def cmd_divorce(msg: Message):
     )
     await msg.reply(divorce_text, parse_mode="HTML")
     # Дублюємо в основний чат
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if pub_chat and pub_chat != msg.chat.id:
         try:
             await bot.send_message(pub_chat, divorce_text, parse_mode="HTML")
@@ -7012,7 +7033,7 @@ async def cmd_casino(msg: Message, command: CommandObject):
     if msg.chat.type != "private":
         return await msg.reply(
             f"🎰 Казино доступно только в личном чате с ботом.\n"
-            f"Открой: <a href=\"{CASINO_BOT_URL}\">Lumena</a>",
+            f"Открой: <a href=\"{CASINO_BOT_URL}\">Lumenora</a>",
             parse_mode="HTML",
         )
     _cur = brand.currency()
@@ -7069,7 +7090,7 @@ async def cmd_slots(msg: Message, command: CommandObject):
     if msg.chat.type != "private":
         return await msg.reply(
             f"🎰 Слоты доступны только в личном чате с ботом.\n"
-            f"Открой: <a href=\"{CASINO_BOT_URL}\">Lumena</a>",
+            f"Открой: <a href=\"{CASINO_BOT_URL}\">Lumenora</a>",
             parse_mode="HTML",
         )
     _cur = brand.currency()
@@ -7454,7 +7475,7 @@ async def cb_bank_actions(cb: CallbackQuery):
         wallet = get_balance(uid)
         return await cb.message.edit_text(
             f"{brand.hdr()}\n\n"
-            "💎 <b>Срочный вклад Lumena</b>\n\n"
+            "💎 <b>Срочный вклад Lumenora</b>\n\n"
             "Положи весь кошелёк под <b>10% годовых</b>.\n"
             "Доход считается посекундно и растёт каждый день.\n\n"
             f"💳 Сейчас в кошельке: <b>{fmt_lmn(wallet)} LMN</b>\n"
@@ -7656,7 +7677,7 @@ async def cmd_founder_medal(msg: Message, command: CommandObject = None):
     description = (
         description.strip()[:300]
         if separator
-        else "За вклад в развитие сообщества Lumena."
+        else "За вклад в развитие сообщества Lumenora."
     )
     if not title:
         return await msg.reply(
@@ -9083,7 +9104,7 @@ async def cmd_fortune(msg: Message):
     energy = random.randint(64, 94)
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🔮 <b>LUMENA · ПРЕДСКАЗАНИЕ ДНЯ</b>\n"
+        f"🔮 <b>LUMENORA · ПРЕДСКАЗАНИЕ ДНЯ</b>\n"
         f"{brand.div()}\n\n"
         f"✨ <b>Сегодняшний сюжет:</b>\n"
         f"«{html.escape(scene)}»\n\n"
@@ -9133,7 +9154,7 @@ async def cmd_tarot(msg: Message):
     reward = random.choice(_ORACLE_REWARDS)
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🃏 <b>LUMENA · ТАРО ДНЯ</b>\n"
+        f"🃏 <b>LUMENORA · ТАРО ДНЯ</b>\n"
         f"{brand.div()}\n\n"
         f"🔓 <b>Карта открыта:</b>\n\n"
         f"✦ <b>{html.escape(card.upper())}</b> ✦\n\n"
@@ -9147,7 +9168,7 @@ async def cmd_tarot(msg: Message):
         f"⚡ <b>Энергия карты</b>\n"
         f"{_oracle_bar(energy)}  {energy}%\n\n"
         f"🎁 <b>Скрытая награда</b>\n{html.escape(reward)}\n\n"
-        f"🐾 <b>Лумка говорит</b>\n"
+        f"🐾 <b>Lumenora говорит</b>\n"
         f"«Карты намекают, а решаешь всё равно ты».\n\n"
         f"<i>Для {name} · развлекательная интерпретация</i>",
         parse_mode="HTML",
@@ -9185,7 +9206,7 @@ async def cmd_horoscope(msg: Message, command: CommandObject = None):
     symbol = _ZODIAC_SYMBOLS.get(sign, "🌙")
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"{symbol} <b>LUMENA · {html.escape(sign.upper())}</b>\n"
+        f"{symbol} <b>LUMENORA · {html.escape(sign.upper())}</b>\n"
         f"{brand.div()}\n"
         f"<i>Прогноз на сегодня · {today_kyiv().strftime('%d.%m.%Y')}</i>\n\n"
         f"{html.escape(text)}\n\n"
@@ -9200,7 +9221,7 @@ async def cmd_horoscope(msg: Message, command: CommandObject = None):
         f"🍀 <b>Удачный цвет:</b> {random.choice(('серебряный', 'лунный синий', 'изумрудный', 'золотой'))}\n"
         f"🔢 <b>Число дня:</b> {random.randint(2, 9)}\n"
         f"🕘 <b>Лучшее время:</b> {random.choice(('09:00–11:00', '13:00–15:00', '19:00–21:00'))}\n\n"
-        f"✦ <b>Совет Lumena</b>\n"
+        f"✦ <b>Совет Lumenora</b>\n"
         f"{html.escape(random.choice(_ORACLE_TASKS)).capitalize()}.\n\n"
         f"<i>Это развлекательная интерпретация, а не точный прогноз.</i>",
         parse_mode="HTML",
@@ -9211,7 +9232,7 @@ async def cmd_predict(msg: Message, command: CommandObject = None):
     if not (command and command.args):
         return await msg.reply(
             f"{brand.hdr()}\n\n"
-            f"🔮 <b>Предсказатель Луменаr</b>\n\n"
+            f"🔮 <b>Предсказатель Lumenora</b>\n\n"
             f"Задай любой вопрос и получи ответ от вселенной:\n"
             f"<code>предсказать твой вопрос</code>\n\n"
             f"Например: <i>предсказать Найду ли я работу мечты?</i>\n\n"
@@ -9222,14 +9243,14 @@ async def cmd_predict(msg: Message, command: CommandObject = None):
     question = html.escape(command.args.strip())
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🔮 <b>LUMENA · ОТВЕТ ВСЕЛЕННОЙ</b>\n"
+        f"🔮 <b>LUMENORA · ОТВЕТ ВСЕЛЕННОЙ</b>\n"
         f"{brand.div()}\n\n"
         f"❓ <i>{question}</i>\n\n"
         f"🎲 <b>Сценарий открыт</b>\n"
         f"◆ {result}\n\n"
         f"🧭 <b>Что поможет</b>\n"
         f"{html.escape(random.choice(_ORACLE_TASKS)).capitalize()}.\n\n"
-        f"🐾 <b>Лумка:</b> решение всё равно остаётся за тобой.\n\n"
+        f"🐾 <b>Lumenora:</b> решение всё равно остаётся за тобой.\n\n"
         f"<i>Развлекательная интерпретация</i>",
         parse_mode="HTML",
         reply_markup=_oracle_keyboard("fortune"),
@@ -9254,10 +9275,10 @@ async def cb_oracle_fortune_secret(cb: CallbackQuery):
         )))
         await cb.message.reply(
             f"{brand.hdr()}\n\n"
-            f"🌙 <b>Секрет от Лумены</b>\n"
+            f"🌙 <b>Секрет от Lumenora</b>\n"
             f"{brand.div()}\n\n"
             f"{secret}\n\n"
-            f"🐾 Лумка: «Не усложняй то, что можно сделать с улыбкой»."
+            f"🐾 Lumenora: «Не усложняй то, что можно сделать с улыбкой»."
             ,
             parse_mode="HTML",
         )
@@ -9651,7 +9672,7 @@ async def cmd_dare(msg: Message):
         "Спой голосовым сообщением любую песню",
         "Расскажи самый глупый факт о себе в чате",
         "Сделай комплимент трём людям в чате прямо сейчас",
-        "Смени статус на «я люблю Lumena» на 30 минут",
+        "Смени статус на «я люблю Lumenora» на 30 минут",
         "Напиши «мяу» в трёх разных чатах и пришли скрины",
         "Угадай кто ответит следующим в этом чате",
         "Напиши что-нибудь только заглавными буквами 5 минут",
@@ -10116,7 +10137,7 @@ async def cmd_whois(msg: Message):
         ]
 
     if is_founder:
-        lines += [f"\n{brand.div()}", "✨ <b>Создатель проекта Lumena</b>"]
+        lines += [f"\n{brand.div()}", "✨ <b>Создатель проекта Lumenora</b>"]
 
     lines.append(f"\n{brand.div()}")
     text = "\n".join(lines)
@@ -10390,10 +10411,10 @@ async def cmd_ping(msg: Message):
 async def cmd_version(msg: Message):
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"🤖 Лумена Бот\n\n"
+        f"🤖 Lumenora\n\n"
         f"📦 Версия: <b>v{BOT_VERSION}</b>\n"
         f"⚡ Функций: <b>100+</b>\n"
-        f"🧠 ИИ: <b>Lumena Engine v4</b>\n"
+        f"🧠 ИИ: <b>Lumenora Engine v4</b>\n"
         f"💬 Движок: <b>собственный, без внешних API</b>\n\n"
         f"{brand.div()}\n"
         f"💙 Сделано с душой",
@@ -10573,11 +10594,11 @@ async def cmd_dog(msg: Message):
 # ═══════════════════════════════════════════════════════
 # ПРАВИЛА ЧАТА
 # ═══════════════════════════════════════════════════════
-DEFAULT_RULES = """🌙 <b>Правила сообщества Lumena</b>
+DEFAULT_RULES = """🌙 <b>Правила сообщества Lumenora</b>
 
 <b>👥 Для участников</b>
 
-• Lumena — украинское сообщество. Чат предназначён для украинской аудитории.
+• Lumenora — международное сообщество. В чате рады участникам из разных стран.
 • Вход для пользователей, поддерживающих российскую агрессию, а также аккаунтов для провокаций — запрещён. Администрация вправе ограничить доступ таким пользователям.
 • Уважайте каждого участника. Оскорбления, унижения, травля, угрозы, дискриминация и разжигание конфликтов запрещены.
 • Запрещены политические споры, пропаганда, оправдание войны, распространение экстремистских идей и материалов.
@@ -10617,9 +10638,9 @@ DEFAULT_RULES = """🌙 <b>Правила сообщества Lumena</b>
 
 ⸻
 
-<b>✨ Главный принцип Lumena</b>
+<b>✨ Главный принцип Lumenora</b>
 
-Lumena — украинское сообщество для общения и новых знакомств в комфортной атмосфере. Соблюдайте правила, уважайте друг друга и помогайте поддерживать дружелюбное и безопасное пространство для всех. 🇺🇦"""
+Lumenora — международное сообщество для общения и новых знакомств в комфортной атмосфере. Соблюдайте правила, уважайте друг друга и помогайте поддерживать дружелюбное и безопасное пространство для всех. 🌍"""
 
 async def cmd_rules(msg: Message):
     r = chat_rules.get(msg.chat.id, DEFAULT_RULES)
@@ -10740,7 +10761,7 @@ def _announcement_keyboard(value: str) -> tuple[str, InlineKeyboardMarkup | None
         if url and url not in {"https://t.me/", "http://t.me/"}:
             specs.append((brand.btn_label(key), url))
     if LUMENA_SITE_URL:
-        specs.append(("🌐 Сайт Лумены", LUMENA_SITE_URL))
+        specs.append(("Сайт Lumenora", LUMENA_SITE_URL))
     specs.extend(custom_specs)
 
     unique_specs: list[tuple[str, str]] = []
@@ -10801,7 +10822,7 @@ async def cmd_announce(msg: Message, command: CommandObject = None):
 
     # ── Цель ─────────────────────────────────────────────────────
     cid = msg.chat.id
-    pub = _ank.get_pub_chat()
+    pub = MAIN_CHAT_ID
     target = pub if pub else cid
 
     clean_text, announce_kb = _announcement_keyboard(text)
@@ -11221,13 +11242,13 @@ async def cmd_updatesave(msg: Message):
     if _save_update_sent:
         return await msg.reply("ℹ️ Это обновление уже было опубликовано.")
 
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if not pub_chat:
-        return await msg.reply("❌ Паб-чат не настроен. Сначала используй /setpubchat в нужном чате.")
+        return await msg.reply("⚠️ Чат для публикации не настроен.")
 
     update_text = (
         f"{brand.hdr()}\n\n"
-        "<b>✨ Обновление Lumena</b>\n\n"
+        "<b>✨ Обновление Lumenora</b>\n\n"
         "<b>Исправлено сохранение данных бота.</b>\n\n"
         "Теперь надёжно сохраняются:\n"
         "• браки и разводы\n"
@@ -11235,7 +11256,7 @@ async def cmd_updatesave(msg: Message):
         "• баланс LMN, банк и экономика\n"
         "• репутация\n"
         "• роли пользователей\n"
-        "• анкеты и настройки чатов\n\n"
+        "• настройки чатов\n\n"
         "Данные сохраняются после обновлений и перезапусков бота.\n\n"
         f"{brand.div()}"
     )
@@ -11250,9 +11271,12 @@ async def cmd_updatesave(msg: Message):
     await msg.reply("✅ Обновление опубликовано в паб-чате. Повторно команда недоступна.")
 
 # ═══════════════════════════════════════════════════════
-# ЛУМЕНА АИ
+# LUMENORA AI
 # ═══════════════════════════════════════════════════════
-LUMENA_NAMES = ["лумена","lumena","лум","лумка"]
+LUMENA_NAMES = [
+    "lumenora", "люменора", "люменору", "люма",
+    "лумена", "lumena", "лум", "лумка",
+]
 # AI-доступ ограничен только основным founder и заместителем founder.
 LUMENA_AI_ALLOWED_IDS = frozenset({
     OWNER_ID,
@@ -11275,7 +11299,7 @@ def _lumena_command_catalog() -> str:
     # Часть slash-команд зарегистрирована напрямую декораторами aiogram и
     # поэтому не попадает в TEXT_COMMANDS.
     direct_commands = {
-        "/start", "/help", "/profile", "/анкета", "/анкеты", "/helplum",
+        "/start", "/help", "/profile", "/helplum",
         "/helpcancel", "/premium", "/premiumstock", "/shop", "/inventory",
         "/exchange", "/withdraw", "/ask", "/answer", "/poll", "/polls",
         "/info", "/level", "/top", "/report", "/settings",
@@ -11289,7 +11313,7 @@ def _lumena_command_catalog() -> str:
 
 
 def is_lumena_addressed(msg: Message) -> bool:
-    """Лумена реагирует только если:
+    """Lumenora реагирует только если:
     - личный чат
     - ответ на её сообщение
     - @упоминание бота
@@ -11306,9 +11330,9 @@ def is_lumena_addressed(msg: Message) -> bool:
         for entity in msg.entities:
             if entity.type == "mention":
                 mention = msg.text[entity.offset:entity.offset + entity.length].lower()
-                if "lumena" in mention or "лумен" in mention:
+                if "lumenora" in mention or "люменор" in mention or "лумен" in mention:
                     return True
-    # Только если ПЕРВОЕ слово — имя Лумены
+    # Только если ПЕРВОЕ слово — имя Lumenora
     text = (msg.text or "").strip().lower()
     first_word = re.split(r"[\s,!?.:]", text)[0]
     return first_word in LUMENA_NAMES
@@ -12446,19 +12470,13 @@ def _declared_geo_from_message(text: str) -> str | None:
 
 
 def _user_geo_label(uid: int) -> str | None:
-    """Ищет геоданные в явном указании, профиле и одобренной анкете."""
+    """Ищет геоданные в явном указании и профиле."""
     explicit = _geo_label_from_text(user_locations.get(uid))
     if explicit:
         return explicit
     profile = profiles.get(uid, {})
     for key in ("city", "country", "location", "place", "bio"):
         label = _geo_label_from_text(profile.get(key))
-        if label:
-            return label
-    approved = _ank.get_approved_data(uid)
-    answers = approved.get("answers", {}) if approved else {}
-    for key in ("district", "city", "country", "about"):
-        label = _geo_label_from_text(answers.get(key))
         if label:
             return label
     return None
@@ -12542,7 +12560,7 @@ async def cmd_chatstats(msg: Message):
         tg_cnt = await bot.get_chat_member_count(cid)
     except Exception:
         tg_cnt = len(all_members)
-    msgs_cnt  = sum(all_msgs.values())
+    tracked_msgs, historical_msgs, msgs_cnt = _message_counts_for_chats((cid, can))
     top_act   = sorted(all_msgs.items(), key=lambda x: x[1], reverse=True)[:3]
     marr_cnt  = len({
         frozenset([u, p])
@@ -12593,6 +12611,8 @@ async def cmd_chatstats(msg: Message):
         "<tr><th>Метрика</th><th>Значение</th></tr>"
         f"<tr><td>Сегодня</td><td>{msgs_today:,}</td></tr>"
         f"<tr><td>Всего</td><td>{msgs_cnt:,}</td></tr>"
+        f"<tr><td>Из них историческая база</td><td>{historical_msgs:,}</td></tr>"
+        f"<tr><td>Считалось ботом</td><td>{tracked_msgs:,}</td></tr>"
         "</table>"
         "<h2>👥 Участники</h2>"
         "<table>"
@@ -12638,20 +12658,47 @@ async def cmd_online(msg: Message):
     if not all_msgs:
         return await msg.reply("📊 Нет данных об активности")
     top   = sorted(all_msgs.items(), key=lambda x: x[1], reverse=True)[:15]
-    total = sum(all_msgs.values())
+    tracked_total, historical_total, total = _message_counts_for_chats((cid, can))
     medals = ["🥇", "🥈", "🥉"] + ["👤"] * 12
     rows = ""
     for i, (uid_t, cnt) in enumerate(top):
         nm  = html.escape(all_members.get(uid_t) or f"ID {uid_t}")
-        pct = cnt / total * 100 if total else 0
+        pct = cnt / tracked_total * 100 if tracked_total else 0
         rows += f"<tr><td>{medals[i]} {nm}</td><td>{cnt:,}</td><td>{pct:.0f}%</td></tr>"
     rich_html = (
         "<h1>📊 Топ активных участников</h1><hr>"
         "<table><tr><th>Участник</th><th>Сообщ.</th><th>%</th></tr>"
         f"{rows}</table>"
-        f"<p>💬 Всего сообщений: <b>{total:,}</b></p>"
+        f"<p>💬 Всего сообщений: <b>{total:,}</b>"
+        f" <i>(историческая база: {historical_total:,}; "
+        f"считано ботом: {tracked_total:,})</i></p>"
     )
     await msg.reply(rich_html, parse_mode="HTML")
+
+async def cmd_message_stats(msg: Message):
+    """Общий счётчик сообщений с исторической базой главного чата."""
+    if msg.chat.type == "private" and not is_owner(msg):
+        return await msg.reply("📊 Команда работает в групповых чатах")
+    cid = _command_chat_id(msg)
+    if cid is None:
+        return await msg.reply(
+            "❌ Главный чат ещё не связан. Запусти "
+            f"<code>/{FOUNDER_BIND_CHAT_COMMAND}</code> в главном чате.",
+            parse_mode="HTML",
+        )
+    can = econ_cid(cid)
+    tracked, historical, total = _message_counts_for_chats((cid, can))
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        "💬 <b>Сообщения чата</b>\n\n"
+        f"{brand.div()}\n"
+        f"📨 Всего за всё время: <b>{total:,}</b>\n"
+        f"🗃 Историческая база: <b>{historical:,}</b>\n"
+        f"🤖 Считано ботом после запуска счётчика: <b>{tracked:,}</b>\n\n"
+        "Новые сообщения автоматически прибавляются к общему итогу.\n"
+        f"{brand.div()}",
+        parse_mode="HTML",
+    )
 
 async def cmd_analytics(msg: Message):
     target_chat = _founder_main_chat_id(msg) if is_owner(msg) else None
@@ -12660,11 +12707,7 @@ async def cmd_analytics(msg: Message):
         can = econ_cid(cid)
         title = "Аналитика · главный чат"
         all_members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(can, {}).keys())
-        chat_msgs = sum(
-            user_messages.get(c, {}).get(u, 0)
-            for c in (cid, can)
-            for u in all_members
-        )
+        _, _, chat_msgs = _message_counts_for_chats((cid, can))
         chat_xp = sum(user_xp.get(u, 0) for u in all_members)
         chat_ach = sum(len(user_achievements.get(u, [])) for u in all_members)
         chat_lmn = sum(
@@ -12687,7 +12730,7 @@ async def cmd_analytics(msg: Message):
         title = f"Аналитика · {html.escape(msg.chat.title or 'чат')}"
         all_members = set(chat_members.get(cid, {}).keys()) | set(chat_members.get(can, {}).keys())
         # Только данные чата
-        chat_msgs   = sum(user_messages.get(c, {}).get(u, 0) for c in (cid, can) for u in all_members)
+        _, _, chat_msgs = _message_counts_for_chats((cid, can))
         chat_xp     = sum(user_xp.get(u, 0) for u in all_members)
         chat_ach    = sum(len(user_achievements.get(u, [])) for u in all_members)
         chat_lmn    = sum(lmn_balances.get(u, 0) + bank_balances.get(u, 0) for u in all_members)
@@ -12703,7 +12746,9 @@ async def cmd_analytics(msg: Message):
             parse_mode="HTML"
         )
     else:
-        total_msgs = sum(sum(m.values()) for m in user_messages.values())
+        _, _, total_msgs = _message_counts_for_chats(
+            (MAIN_CHAT_ID, *user_messages.keys())
+        )
         total_xp   = sum(user_xp.values())
         total_ach  = sum(len(v) for v in user_achievements.values())
         total_lmn  = sum(lmn_balances.values()) + sum(bank_balances.values())
@@ -12731,9 +12776,8 @@ async def cmd_growth(msg: Message):
         len({uid for cid in target_ids for uid in chat_members.get(cid, {})})
         if target_chat else len({uid for m in chat_members.values() for uid in m})
     )
-    total_msgs = (
-        sum(sum(user_messages.get(cid, {}).values()) for cid in target_ids)
-        if target_chat else sum(sum(m.values()) for m in user_messages.values())
+    _, _, total_msgs = _message_counts_for_chats(
+        target_ids if target_chat else (MAIN_CHAT_ID, *user_messages.keys())
     )
     total_xp   = sum(user_xp.values())
     total_games = sum(_games_played.values())
@@ -12810,9 +12854,14 @@ async def cb_owner(cb: CallbackQuery):
             parse_mode="HTML", reply_markup=back_kb
         )
     elif sec == "stats":
-        total_msgs = sum(sum(m.values()) for m in user_messages.values())
+        tracked_msgs, historical_msgs, total_msgs = _message_counts_for_chats(
+            (MAIN_CHAT_ID, *user_messages.keys())
+        )
         await cb.message.edit_text(
-            f"📊 <b>Статистика</b>\n\nСообщений (сессия): <b>{total_msgs:,}</b>\n"
+            f"📊 <b>Статистика</b>\n\n"
+            f"Сообщений всего: <b>{total_msgs:,}</b>\n"
+            f"Историческая база: <b>{historical_msgs:,}</b>\n"
+            f"Считано ботом: <b>{tracked_msgs:,}</b>\n"
             f"XP: <b>{sum(user_xp.values()):,}</b>\n"
             f"Достижений: <b>{sum(len(v) for v in user_achievements.values())}</b>\n"
             f"Рефералов: <b>{len(referrals)}</b>",
@@ -13000,11 +13049,11 @@ async def cmd_announce_v7(msg: Message):
     """Отправляет анонс обновления v7 в паб-чат (только фаундер)."""
     if not is_owner(msg):
         return await msg.reply("⛔ Только фаундер")
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if not pub_chat:
-        return await msg.reply("❌ pub_chat_id не установлен. Сначала /setpubchat")
+        return await msg.reply("⚠️ Чат для публикации не настроен.")
     text = (
-        "🌟 <b>LUMENA v7 — ПОЛНОЕ ОБНОВЛЕНИЕ!</b> 🌟\n\n"
+        "🌟 <b>LUMENORA v7 — ПОЛНОЕ ОБНОВЛЕНИЕ!</b> 🌟\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "📋 <b>Задания дня</b>\n"
         "• Выполни все 4 задания → <b>+1 000 LMN + 75 XP</b>!\n"
@@ -13035,8 +13084,8 @@ async def cmd_announce_v7(msg: Message):
         "• Снятие варна теперь пишется в лог модерации\n"
         "• Безопасность фаундера: проверка только по ID, не по username\n\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "— <b>Команда Lumena</b> 💙\n"
-        "#lumena #update #v7"
+        "— <b>Команда Lumenora</b> 💙\n"
+        "#lumenora #update #v7"
     )
     try:
         await bot.send_message(pub_chat, text, parse_mode="HTML")
@@ -13053,7 +13102,7 @@ async def cmd_announce_v6(msg: Message):
 
 async def _send_v6_announcement():
     global v6_announced
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if not pub_chat:
         return
     v6_text = (
@@ -13069,7 +13118,6 @@ async def _send_v6_announcement():
         f"• 🛡 Панель администратора (логи, жалобы, рейд, антиспам)\n"
         f"• 👑 Расширенная панель фаундера\n"
         f"• 📊 Детальная статистика чата\n"
-        f"• ✨ Новое оформление анкет\n"
         f"• 📖 Кнопка правил при приветствии\n\n"
         f"{brand.div()}\n"
         f"🤖 v{BOT_VERSION}"
@@ -13102,6 +13150,10 @@ _HELP_MAIN_KB = InlineKeyboardMarkup(inline_keyboard=[
         InlineKeyboardButton(text="🔗 Рефералы",       callback_data="help:ref"),
     ],
     [
+        InlineKeyboardButton(text="🎮 Игры",            callback_data="help:games"),
+        InlineKeyboardButton(text="🤖 ИИ Lumenora",     callback_data="help:ai"),
+    ],
+    [
         InlineKeyboardButton(text="✦ 💬 Наш чат ✦",  url="https://t.me/+_K2SJRYIhq9hYjFi"),
         InlineKeyboardButton(text="✦ 📢 Канал ✦",    url="https://t.me/lmnfff"),
     ],
@@ -13126,7 +13178,10 @@ async def cmd_help(msg: Message):
 
 
 _HELP_BACK_KB = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="help:menu")],
+    [
+        InlineKeyboardButton(text="Назад в разделы", callback_data="help:menu"),
+        InlineKeyboardButton(text="Главный экран", callback_data="nav:home"),
+    ],
     [
         InlineKeyboardButton(text="💬 Чат проекта", url="https://t.me/+_K2SJRYIhq9hYjFi"),
         InlineKeyboardButton(text="📢 Канал", url="https://t.me/lmnfff"),
@@ -13178,7 +13233,7 @@ _HELP_SECTIONS = {
         f"{brand.div()}\n"
         "💍 <b>Браки:</b>\n"
         "<code>брак</code> — предложение (ответом)\n"
-        "<code>брак</code> ответом на сообщение Lumena — сразу оформить виртуальный брак с ботом\n"
+        "<code>брак</code> ответом на сообщение Lumenora — сразу оформить виртуальный брак с ботом\n"
         "<code>развод</code> — расстаться\n"
         "<code>список браков</code> — все пары\n\n"
         "💘 <b>Совместимость:</b>\n"
@@ -13221,8 +13276,6 @@ _HELP_SECTIONS = {
         "✏️ <b>Настройки:</b>\n"
         "<code>сетбио [текст]</code> — описание профиля\n"
         "<code>сетзвание [текст]</code> — своё звание\n\n"
-        "💌 <b>Анкеты знакомств:</b>\n"
-        "<code>/анкета</code> — заполнить в личке с ботом\n\n"
         "🕶 <b>Анонимные вопросы:</b>\n"
         "<code>/ask @username вопрос</code> — отправить вопрос анонимно\n"
         "<code>/answer текст</code> — ответить анонимно на полученный вопрос\n\n"
@@ -13232,11 +13285,11 @@ _HELP_SECTIONS = {
     ),
     "ai": (
         f"{brand.hdr()}\n\n"
-        "🤖 ИИ Лумена\n\n"
+        "🤖 ИИ Lumenora\n\n"
         f"{brand.div()}\n"
         "💬 <b>Как обратиться в группе:</b>\n"
-        "• <code>Лумена, вопрос</code>\n"
-        "• <code>лумка</code> / <code>лум</code> — коротко\n"
+        "• <code>Lumenora, вопрос</code>\n"
+        "• <code>Люма</code> — короткое обращение\n"
         "• Ответь на любое моё сообщение\n\n"
         "📩 <b>В личных сообщениях:</b>\n"
         "Просто напиши — отвечаю на всё!\n\n"
@@ -13286,6 +13339,7 @@ _HELP_SECTIONS = {
         "📊 Статистика чата — V6\n\n"
         f"{brand.div()}\n"
         "<code>статчата</code> — детальная статистика\n"
+        "<code>сообщениячата</code> — общий счётчик сообщений с исторической базой\n"
         "<code>указатьместо Киев</code> — добавить себя в геостатистику\n"
         "<code>онлайн</code> — активные участники\n"
         "<code>аналитика</code> — данные системы\n"
@@ -13313,6 +13367,31 @@ _HELP_SECTIONS = {
         "• +1000 LMN тебе\n"
         "• +100 XP тебе\n\n"
         "💡 Поделись ссылкой с друзьями!\n\n"
+        f"{brand.div()}"
+    ),
+    "games": (
+        f"{brand.hdr()}\n\n"
+        "Игры и активности\n\n"
+        f"{brand.div()}\n"
+        "<code>монетка</code> — быстрый случайный выбор\n"
+        "<code>рулетка</code> — собери игроков и начни раунд\n"
+        "<code>виселица</code> — угадай слово\n"
+        "<code>блэкджек</code> — рискни LMN\n"
+        "<code>мины</code> — открой безопасные клетки\n"
+        "<code>игра</code> — открыть Котострой\n\n"
+        "Начни с любой команды — Lumenora подскажет, что делать дальше.\n\n"
+        f"{brand.div()}"
+    ),
+    "ai": (
+        f"{brand.hdr()}\n\n"
+        "ИИ Lumenora\n\n"
+        f"{brand.div()}\n"
+        "В личке просто напиши сообщение.\n"
+        "В группе обратись по имени или ответь на сообщение бота:\n\n"
+        "<code>Lumenora, подскажи идею</code>\n"
+        "<code>Lumenora, что меня ждёт сегодня?</code>\n\n"
+        "Lumenora помогает с текстами, идеями, вопросами, расчётами и "
+        "атмосферными ответами.\n\n"
         f"{brand.div()}"
     ),
 }
@@ -13344,6 +13423,27 @@ async def cb_help_nav(cb: CallbackQuery):
         )
     await cb.answer()
 
+
+@dp.callback_query(F.data == "nav:home")
+async def cb_nav_home(cb: CallbackQuery):
+    if not cb.message:
+        return await cb.answer()
+    if not is_verified(cb.from_user.id):
+        await cb.message.edit_text(
+            "Сначала пройди проверку, чтобы открыть Lumenora.",
+            reply_markup=_verification_keyboard(),
+        )
+        return await cb.answer()
+    name = html.escape(cb.from_user.first_name or "друг")
+    await cb.message.edit_text(
+        f"{brand.hdr()}\n\n"
+        f"✨ <b>Добро пожаловать в Lumenora, {name}!</b>\n\n"
+        "Выбери раздел — здесь собраны все основные возможности.",
+        parse_mode="HTML",
+        reply_markup=build_main_kb(cb.from_user.id),
+    )
+    await cb.answer()
+
 # ═══════════════════════════════════════════════════════
 # ПОДДЕРЖКА — ОБРАЩЕНИЕ К АДМИНИСТРАЦИИ
 # ═══════════════════════════════════════════════════════
@@ -13357,7 +13457,7 @@ async def cmd_support(msg: Message):
             parse_mode="Markdown"
         )
         return
-    mod_chat = _ank.get_mod_chat()
+    mod_chat = ADMIN_CHAT_ID
     if not mod_chat:
         await msg.reply(
             "⚠️ Чат администрации ещё не настроен. Обратитесь к владельцу бота."
@@ -13382,9 +13482,9 @@ async def cmd_helplum(msg: Message):
             parse_mode="HTML",
         )
     help_sessions.add(uid)
-    schedule_state_save("открытие канала Lumena Help")
+    schedule_state_save("открытие канала Lumenora Help")
     await msg.reply(
-        "📩 <b>Lumena Help</b>\n\n"
+        "📩 <b>Lumenora Help</b>\n\n"
         "Канал обращений открыт. Отправляй жалобы или вопросы следующим сообщением — "
         "они будут переданы ответственному сотруднику.\n\n"
         "Диалог не ограничен по количеству сообщений.\n"
@@ -13399,7 +13499,7 @@ async def cmd_helpcancel(msg: Message):
         return
     if msg.from_user.id in help_sessions:
         help_sessions.discard(msg.from_user.id)
-        schedule_state_save("закрытие канала Lumena Help")
+        schedule_state_save("закрытие канала Lumenora Help")
         await msg.reply("✅ Канал обращений закрыт. При необходимости снова используй /helplum.")
     else:
         await msg.reply("ℹ️ Активного обращения нет. Для связи используй /helplum.")
@@ -13414,12 +13514,7 @@ def _is_help_routed_message(msg: Message) -> bool:
     if msg.from_user.id == SUPPORT_AGENT_ID:
         reply = msg.reply_to_message
         return bool(reply and reply.message_id in help_forward_map)
-    # Активная анкета имеет приоритет над старой сессией /helplum:
-    # ответы на вопросы нельзя пересылать сотруднику поддержки.
-    return (
-        msg.from_user.id in help_sessions
-        and msg.from_user.id not in _ank._sessions
-    )
+    return msg.from_user.id in help_sessions
 
 
 @dp.message(F.func(_is_help_routed_message))
@@ -13439,7 +13534,7 @@ async def handle_helplum_message(msg: Message):
         tag = f"@{html.escape(user.username)}" if user.username else html.escape(user.full_name)
         await bot.send_message(
             SUPPORT_AGENT_ID,
-            f"📩 <b>Новое сообщение Lumena Help</b>\n\n"
+            f"📩 <b>Новое сообщение Lumenora Help</b>\n\n"
             f"👤 {tag}\n"
             f"Чтобы ответить, используй reply на это сообщение.",
             parse_mode="HTML",
@@ -13449,13 +13544,13 @@ async def handle_helplum_message(msg: Message):
         if len(help_forward_map) > 5000:
             for old_id in list(help_forward_map)[:1000]:
                 help_forward_map.pop(old_id, None)
-        schedule_state_save("сообщение Lumena Help")
+        schedule_state_save("сообщение Lumenora Help")
         await bot.send_message(
             user.id,
             "✅ Сообщение передано. Можешь продолжать диалог без ограничений.",
         )
     except Exception:
-        logging.exception("Ошибка маршрутизации Lumena Help для uid=%s", sender_id)
+        logging.exception("Ошибка маршрутизации Lumenora Help для uid=%s", sender_id)
         if sender_id != SUPPORT_AGENT_ID:
             await msg.reply("❌ Не удалось передать сообщение. Попробуй ещё раз.")
 
@@ -13660,7 +13755,7 @@ async def cmd_founder_poll(msg: Message, command: CommandObject = None):
 
     question = parts[0][:300]
     options = [option[:100] for option in parts[1:]]
-    target_chat = msg.chat.id if msg.chat.type != "private" else _ank.get_pub_chat()
+    target_chat = msg.chat.id if msg.chat.type != "private" else MAIN_CHAT_ID
     if not target_chat:
         return await msg.reply(
             "⚠️ Не найден чат для отправки. Создай опрос из группового чата "
@@ -13972,6 +14067,8 @@ TEXT_COMMANDS.update({
     "кто я": cmd_whois, "кто это": cmd_whois, "whois": cmd_whois, "досье": cmd_whois,
     "профиль": cmd_profile, "айди": cmd_myid, "инфочат": cmd_chatinfo,
     "статистика": cmd_botstats, "пинг": cmd_ping, "версия": cmd_version,
+    "сообщениячата": cmd_message_stats, "всесообщения": cmd_message_stats,
+    "messageschat": cmd_message_stats,
     "форсрестор": cmd_force_restore, "восстановитьданные": cmd_force_restore,
     "інфо": cmd_info, "инфо": cmd_info, "info": cmd_info,
     "сетбио": cmd_setbio, "сетзвание": cmd_settitle,
@@ -14031,6 +14128,8 @@ for slash_name, func in [
     ("whois", cmd_whois),
     ("profile", cmd_profile), ("myid", cmd_myid), ("chatinfo", cmd_chatinfo),
     ("ping", cmd_ping), ("version", cmd_version), ("botstats", cmd_botstats),
+    ("сообщениячата", cmd_message_stats), ("всесообщения", cmd_message_stats),
+    ("messageschat", cmd_message_stats),
     ("forcerestore", cmd_force_restore),
     ("setbio", cmd_setbio), ("settitle", cmd_settitle),
     # Правила (без декоратора)
@@ -14139,7 +14238,7 @@ async def _check_link_guard(msg: Message) -> bool:
         return False
 
     # ── Чат администрации — ссылки всегда разрешены ────────────
-    mod_chat = _ank.get_mod_chat()
+    mod_chat = ADMIN_CHAT_ID
     if mod_chat and msg.chat.id == mod_chat:
         return False
 
@@ -14227,6 +14326,15 @@ class PropagandaMiddleware(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
+        # This exact founder request must remain available even when a chat
+        # mode would otherwise stop ordinary messages before handlers run.
+        if isinstance(event, Message) and _is_aurora_launch_request(event):
+            try:
+                await event.reply(AURORA_LAUNCH_RESPONSE)
+            except Exception:
+                logging.exception("Не удалось ответить на founder-команду Aurora")
+            return
+
         # В ночном режиме обычные участники уже блокируются Telegram default
         # permissions. Сообщения админов/модераторов Telegram пропускает, поэтому
         # удаляем их здесь до любого бизнес-хендлера. Founder-команда управления
@@ -14251,6 +14359,21 @@ class PropagandaMiddleware(BaseMiddleware):
                 private_started=event.chat.type == "private",
             ):
                 schedule_state_save("реестр пользователей")
+            if (
+                event.chat.type == "private"
+                and not is_verified(event.from_user.id)
+                and not _is_start_message(event)
+            ):
+                name = html.escape(event.from_user.first_name or "друг")
+                await event.answer(
+                    f"👋 <b>Привет, {name}!</b>\n\n"
+                    "Сначала пройди короткую проверку — она защищает Lumenora "
+                    "от ботов и спама.\n\n"
+                    "После этого откроются все разделы и команды.",
+                    parse_mode="HTML",
+                    reply_markup=_verification_keyboard(),
+                )
+                return
         # Трекинг участников — здесь, чтобы ловить ВСЕХ кто пишет
         if (isinstance(event, Message)
                 and event.from_user
@@ -14362,235 +14485,15 @@ dp.message.outer_middleware(PropagandaMiddleware())
 # ═══════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════
-# АНКЕТИ — CALLBACKS МОДЕРАЦІЇ
+# АНОНИМНЫЕ ВОПРОСЫ — CALLBACKS
 # ═══════════════════════════════════════════════════════
-_ANKETA_MODERATOR_ROLES = (
-    "founder_deputy", "lead_admin", "co_admin", "admin", "moderator",
-)
 
 
-def _is_anketa_moderator_callback(cb: CallbackQuery) -> bool:
-    """Разрешает moderation callbacks только из настроенного мод-чата."""
-    if not cb.message or not cb.from_user:
-        return False
-    try:
-        mod_chat = int(_ank.get_mod_chat())
-    except (TypeError, ValueError):
-        return False
-    if cb.message.chat.id != mod_chat:
-        return False
-    return is_owner(cb) or has_role(cb.from_user.id, *_ANKETA_MODERATOR_ROLES)
 
 
-async def _delete_anketa_messages(chat_id: int | None, *message_ids) -> None:
-    """Удаляет связанные сообщения анкеты без дублей и без остановки сценария."""
-    if not chat_id:
-        return
-    seen: set[int] = set()
-    for raw_id in message_ids:
-        try:
-            message_id = int(raw_id)
-        except (TypeError, ValueError):
-            continue
-        if not message_id or message_id in seen:
-            continue
-        seen.add(message_id)
-        try:
-            await bot.delete_message(chat_id, message_id)
-        except Exception:
-            pass
 
 
-async def _publish_anketa_public(
-    uid: int,
-    answers: dict,
-    username: str,
-    full_name: str,
-    anketa_num: int | None = None,
-    is_premium: bool = False,
-) -> dict:
-    """Публикует анкету по единому pipeline и возвращает IDs всех сообщений."""
-    pub_chat = _ank.get_pub_chat()
-    result = {
-        "pub_chat_id": pub_chat,
-        "pub_msg_id": None,
-        "pub_control_msg_id": None,
-        "media_msg_ids": [],
-        "pub_ok": False,
-    }
-    if not pub_chat:
-        return result
 
-    media_items = answers.get("media", [])
-    if not media_items:
-        if answers.get("video_id"):
-            media_items = [{"type": "video", "file_id": answers["video_id"]}]
-        elif answers.get("photo_id"):
-            media_items = [{"type": "photo", "file_id": answers["photo_id"]}]
-    pub_text = _ank.fmt_pub_card(
-        answers,
-        username,
-        full_name,
-        is_premium=is_premium,
-    )
-    reaction_markup = _ank.reaction_kb(uid)
-
-    try:
-        n = len(media_items)
-        if n == 0:
-            sent_pub = await bot.send_message(
-                pub_chat,
-                pub_text,
-                parse_mode="HTML",
-                reply_markup=reaction_markup,
-            )
-            result["pub_msg_id"] = sent_pub.message_id
-        elif n == 1:
-            item = media_items[0]
-            if item["type"] == "photo":
-                sent_pub = await bot.send_photo(
-                    pub_chat,
-                    photo=item["file_id"],
-                    caption=pub_text,
-                    parse_mode="HTML",
-                    reply_markup=reaction_markup,
-                )
-            else:
-                sent_pub = await bot.send_video(
-                    pub_chat,
-                    video=item["file_id"],
-                    caption=pub_text,
-                    parse_mode="HTML",
-                    reply_markup=reaction_markup,
-                )
-            result["pub_msg_id"] = sent_pub.message_id
-        else:
-            media_ids = await _ank._send_media_group_to_chat(
-                bot,
-                pub_chat,
-                media_items,
-                caption=pub_text,
-                parse_mode="HTML",
-            )
-            control_msg = await bot.send_message(
-                pub_chat,
-                "💞 Реакции на анкету:",
-                parse_mode="HTML",
-                reply_markup=reaction_markup,
-                reply_to_message_id=media_ids[0] if media_ids else None,
-                allow_sending_without_reply=True,
-            )
-            result["media_msg_ids"] = media_ids
-            result["pub_msg_id"] = media_ids[0] if media_ids else control_msg.message_id
-            result["pub_control_msg_id"] = control_msg.message_id
-
-        if result["pub_msg_id"]:
-            try:
-                await bot.pin_chat_message(
-                    pub_chat,
-                    result["pub_msg_id"],
-                    disable_notification=True,
-                )
-            except Exception as pin_error:
-                print(
-                    f"⚠️ Не удалось закрепить анкету "
-                    f"{result['pub_msg_id']} в {pub_chat}: {pin_error}"
-                )
-        result["pub_ok"] = True
-    except Exception as error:
-        print(f"⚠️ pub_chat send error: {error}")
-    return result
-
-
-@dp.message(F.text.lower() == "код0908")
-@dp.message(F.text.lower() == "/код0908")
-async def cmd_reissue_anketa(msg: Message):
-    """Скрытая команда фаундера/заместителя для починки старых публикаций."""
-    if not is_owner(msg):
-        return
-    if not msg.reply_to_message:
-        return await msg.reply(
-            "↩️ Ответь командой <code>код0908</code> "
-            "на старое сообщение анкеты.",
-            parse_mode="HTML",
-        )
-
-    target_uid = _ank.get_uid_by_pub_msg(
-        msg.reply_to_message.message_id,
-        msg.chat.id,
-    )
-    if not target_uid:
-        # Старые записи могли быть сохранены до появления pub_chat_id.
-        target_uid = _ank.get_uid_by_pub_msg(
-            msg.reply_to_message.message_id,
-        )
-    if not target_uid:
-        # Старые модерационные карточки могли не сохранять message_id.
-        # В них всегда был напечатан Telegram ID автора.
-        reply_text = (
-            getattr(msg.reply_to_message, "text", None)
-            or getattr(msg.reply_to_message, "caption", None)
-            or ""
-        )
-        id_match = re.search(r"(?:🆔\s*)?ID\s*[:#]?\s*(\d{5,})", reply_text, re.IGNORECASE)
-        if id_match:
-            candidate_uid = int(id_match.group(1))
-            if _ank.get_approved_data(candidate_uid):
-                target_uid = candidate_uid
-    if not target_uid:
-        return await msg.reply(
-            "⚠️ Не удалось найти анкету в базе. "
-            "Ответь именно на старое фото, альбом или карточку анкеты."
-        )
-
-    old_data = _ank.get_approved_data(target_uid)
-    if not old_data:
-        return await msg.reply("⚠️ У этой анкеты нет сохранённой публикации.")
-
-    old_answers = old_data.get("answers") or {}
-    old_username = old_data.get("username") or ""
-    old_full_name = old_data.get("full_name") or str(target_uid)
-    old_number = old_data.get("anketa_num")
-
-    # Сначала создаём новую публикацию. Если Telegram не примет медиа,
-    # старая анкета останется на месте и данные не потеряются.
-    published = await _publish_anketa_public(
-        target_uid,
-        old_answers,
-        old_username,
-        old_full_name,
-        anketa_num=old_number,
-        is_premium=is_anketa_premium(target_uid, old_username),
-    )
-    if not published.get("pub_ok"):
-        return await msg.reply(
-            "❌ Не удалось перевыпустить анкету. Старая публикация сохранена."
-        )
-
-    old_pub_chat = old_data.get("pub_chat_id") or _ank.get_pub_chat()
-    await _delete_anketa_messages(
-        old_pub_chat,
-        old_data.get("pub_msg_id"),
-        old_data.get("pub_control_msg_id"),
-        *(old_data.get("media_msg_ids") or []),
-    )
-
-    _ank.set_approved(
-        target_uid,
-        old_answers,
-        old_username,
-        old_full_name,
-        pub_msg_id=published.get("pub_msg_id"),
-        pub_chat_id=published.get("pub_chat_id"),
-        anketa_num=old_number,
-        media_msg_ids=published.get("media_msg_ids"),
-        pub_control_msg_id=published.get("pub_control_msg_id"),
-    )
-    await msg.reply(
-        f"✅ Анкета <b>№{old_number or '—'}</b> перевыпущена.\n"
-        "Фото и карточка теперь связаны, старая публикация удалена.",
-        parse_mode="HTML",
-    )
 
 
 @dp.callback_query(F.data.startswith("anon_answer:"))
@@ -14682,1024 +14585,60 @@ async def cb_anon_ask_cancel(cb: CallbackQuery):
     await cb.answer()
 
 
-@dp.callback_query(F.data.startswith("ank_lang:"))
-async def cb_ank_lang(cb: CallbackQuery):
-    """Вибір мови анкети."""
-    if not cb.message or cb.message.chat.type != "private":
-        return await cb.answer()
-    await _ank.handle_lang_select(bot, cb)
 
 
-@dp.callback_query(F.data.startswith("ank_q:"))
-async def cb_ank_question_choice(cb: CallbackQuery):
-    """Обрабатывает вариант ответа, выбранный кнопкой анкеты."""
-    if not cb.message or cb.message.chat.type != "private":
-        return await cb.answer()
-    await _ank.handle_question_choice(bot, cb)
 
 
-@dp.callback_query(F.data.startswith("ank_media_done:"))
-async def cb_ank_media_done(cb: CallbackQuery):
-    """Юзер натиснув «Готово» — завершуємо збір медіа і відправляємо анкету."""
-    try:
-        parts = cb.data.split(":")
-        if len(parts) != 2:
-            raise ValueError
-        uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    if cb.from_user.id != uid:
-        return await cb.answer("Это не твоя анкета", show_alert=True)
-    session = _ank._sessions.get(uid)
-    if not session or session.get("step") != _ank.PHOTO_STEP_IDX:
-        return await cb.answer("Анкета не найдена или уже отправлена", show_alert=True)
-    session = _ank._sessions.pop(uid)
-    await _ank._finish_anketa(bot, uid, session)
-    await cb.answer("✅ Отправлено на модерацию!")
 
 
-@dp.callback_query(F.data.startswith("ank_media_skip:"))
-async def cb_ank_media_skip(cb: CallbackQuery):
-    """Юзер натиснув «Без медіа» — відправляємо анкету без фото/відео."""
-    try:
-        parts = cb.data.split(":")
-        if len(parts) != 2:
-            raise ValueError
-        uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    if cb.from_user.id != uid:
-        return await cb.answer("Это не твоя анкета", show_alert=True)
-    session = _ank._sessions.get(uid)
-    if not session or session.get("step") != _ank.PHOTO_STEP_IDX:
-        return await cb.answer("Анкета не найдена или уже отправлена", show_alert=True)
-    session = _ank._sessions.pop(uid)
-    session["media_items"] = []
-    await _ank._finish_anketa(bot, uid, session)
-    await cb.answer("⏭ Пропущено")
 
 
-@dp.callback_query(F.data.startswith("ank_ok:"))
-async def cb_ank_accept(cb: CallbackQuery):
-    if not _is_anketa_moderator_callback(cb):
-        return await cb.answer("⛔ Только модераторы анкеты", show_alert=True)
-    parts = cb.data.split(":")
-    if len(parts) != 2 or not parts[1]:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    app_id = parts[1]
-    # Забираем заявку атомарно до публикации: два модератора не смогут
-    # одновременно нажать «Принять» и создать дубликаты в паблике.
-    app = _ank._pending.pop(app_id, None)
-    if not app:
-        return await cb.answer("Заявка не найдена или уже обработана", show_alert=True)
-    mod_name = cb.from_user.full_name
-    uid = app["user_id"]
-
-    # 1. Публікуємо в паблік-чат, зберігаємо msg_id
-    pub_chat  = _ank.get_pub_chat()
-    pub_msg_id       = None
-    pub_control_msg_id = None
-    pub_media_msg_ids: list[int] = []   # IDs альбому (2+ медіа) для видалення
-    pub_ok    = False
-    media_items = app["answers"].get("media", [])
-    # backward compat: old single-media fields
-    if not media_items:
-        if app["answers"].get("video_id"):
-            media_items = [{"type": "video", "file_id": app["answers"]["video_id"]}]
-        elif app["answers"].get("photo_id"):
-            media_items = [{"type": "photo", "file_id": app["answers"]["photo_id"]}]
-    _vip = is_anketa_premium(uid, app.get("username", ""))
-    pub_text = _ank.fmt_pub_card(app["answers"], app["username"], app["full_name"],
-                                  is_premium=_vip)
-    _rkb = _ank.reaction_kb(uid)  # клавіатура реакцій
-    if pub_chat:
-        try:
-            n = len(media_items)
-            if n == 0:
-                sent_pub = await bot.send_message(
-                    pub_chat, pub_text, parse_mode="HTML",
-                    reply_markup=_rkb,
-                )
-            elif n == 1:
-                item = media_items[0]
-                if item["type"] == "photo":
-                    sent_pub = await bot.send_photo(
-                        pub_chat, photo=item["file_id"],
-                        caption=pub_text, parse_mode="HTML",
-                        reply_markup=_rkb,
-                    )
-                else:
-                    sent_pub = await bot.send_video(
-                        pub_chat, video=item["file_id"],
-                        caption=pub_text, parse_mode="HTML",
-                        reply_markup=_rkb,
-                    )
-            else:
-                # 2–10 медіа: карточка является подписью первого элемента
-                # альбома, а реакции — отдельным reply-сообщением.
-                _media_ids = await _ank._send_media_group_to_chat(
-                    bot,
-                    pub_chat,
-                    media_items,
-                    caption=pub_text,
-                    parse_mode="HTML",
-                )
-                sent_pub = await bot.send_message(
-                    pub_chat,
-                    "💞 Реакции на анкету:",
-                    parse_mode="HTML",
-                    reply_markup=_rkb,
-                    reply_to_message_id=_media_ids[0] if _media_ids else None,
-                    allow_sending_without_reply=True,
-                )
-                pub_media_msg_ids = _media_ids  # сохраняем для будущего удаления
-                pub_control_msg_id = sent_pub.message_id
-                pub_msg_id = _media_ids[0] if _media_ids else sent_pub.message_id
-            if pub_msg_id is None:
-                pub_msg_id = sent_pub.message_id
-            pub_ok = True
-            # Публікуємо анкету й одразу закріплюємо саме картку з реакціями.
-            # Помилка прав Telegram не повинна скасовувати схвалення анкети:
-            # у такому випадку вона лишається опублікованою, а причина потрапляє
-            # в лог Railway.
-            try:
-                await bot.pin_chat_message(
-                    pub_chat,
-                    pub_msg_id,
-                    disable_notification=True,
-                )
-            except Exception as pin_error:
-                print(f"⚠️ Не удалось закрепить анкету {pub_msg_id} в {pub_chat}: {pin_error}")
-        except Exception as e:
-            print(f"⚠️ pub_chat send error: {e}")
-
-    # 2. Зберігаємо статус approved (з номером анкети і IDs медіа для видалення)
-    _ank.set_approved(uid, app["answers"], app["username"], app["full_name"],
-                      pub_msg_id=pub_msg_id, pub_chat_id=pub_chat,
-                      anketa_num=app.get("anketa_num"),
-                      media_msg_ids=pub_media_msg_ids,
-                      pub_control_msg_id=pub_control_msg_id)
-
-    # 3. Уведомление в мод-чат об одобрении
-    anketa_num = app.get("anketa_num", "")
-    num_txt    = f" №{anketa_num}" if anketa_num else ""
-    mod_chat   = _ank.get_mod_chat()
-    mod_tag    = f"@{cb.from_user.username}" if cb.from_user.username else mod_name
-    owner_uname = f"@{app['username']}" if app.get("username") else "—"
-    if mod_chat:
-        try:
-            await bot.send_message(
-                mod_chat,
-                f"{brand.chk()} <b>Анкета принята</b>\n\n"
-                f"📋 Номер: <b>№{anketa_num or '—'}</b>\n"
-                f"👤 Владелец: <b>{html.escape(app['full_name'])}</b> ({html.escape(owner_uname)})\n"
-                f"👮 Принял: {html.escape(mod_tag)}\n"
-                + (f"🔗 Опубликовано в паблике\n" if pub_ok else f"{brand.e('warn')} Чат публикаций не настроен\n")
-                + f"\n{brand.div()}",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
-
-    # 4. Повідомляємо автора з новою клавіатурою
-    pub_note   = "\n\nТвоя анкета опубликована в чате знакомств! 🎉" if pub_ok else ""
-    try:
-        await _send_custom(
-            uid, "anketa_approve",
-            f"{brand.hdr()}\n\n"
-            f"{brand.chk()} <b>Твоя анкета{html.escape(num_txt)} одобрена!</b>"
-            f"{html.escape(pub_note)}\n\n"
-            "Теперь можешь просмотреть или изменить её — нажми кнопку ниже 💌",
-            reply_markup=_anketa_kb(uid)
-        )
-    except Exception:
-        pass
-
-    # 5. Обновляем карточку модерации
-    try:
-        old_text = cb.message.text or cb.message.caption or ""
-        new_text = (old_text + f"\n\n{brand.chk()} <b>ПРИНЯТО</b> — {html.escape(mod_name)}"
-                    + (" | опубликовано" if pub_ok else f" | {brand.e('warn')} чат публикаций не настроен"))
-        if app.get("media_count") == 1 and (cb.message.photo or cb.message.video):
-            await cb.message.delete()
-        elif cb.message.photo or cb.message.video:
-            await cb.message.edit_caption(new_text, parse_mode="HTML", reply_markup=None)
-        else:
-            await cb.message.edit_text(new_text, parse_mode="HTML", reply_markup=None)
-    except Exception:
-        pass
-
-    # Для альбомов удаляем все исходные медиа после решения модератора.
-    # Карточка с кнопками уже заменена статусом выше и остаётся как журнал.
-    for _mid in (app.get("media_msg_ids") or []):
-        try:
-            await bot.delete_message(app["mod_chat_id"], _mid)
-        except Exception:
-            pass
-
-    await cb.answer("✅ Принято и опубликовано!" if pub_ok else "✅ Принято", show_alert=True)
 
 
-@dp.callback_query(F.data.startswith("ank_no:"))
-async def cb_ank_reject(cb: CallbackQuery):
-    if not _is_anketa_moderator_callback(cb):
-        return await cb.answer("⛔ Только модераторы анкеты", show_alert=True)
-    parts = cb.data.split(":")
-    if len(parts) != 2 or not parts[1]:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    app_id = parts[1]
-    app = _ank._pending.pop(app_id, None)
-    if not app:
-        return await cb.answer("Заявка не найдена или уже обработана", show_alert=True)
-    mod_name = cb.from_user.full_name
-    uid = app["user_id"]
-
-    _ank.set_rejected(uid)
-
-    try:
-        await _send_custom(
-            uid, "anketa_reject",
-            f"{brand.hdr()}\n\n"
-            f"{brand.e('cross')} <b>К сожалению, твоя анкета отклонена.</b>\n\n"
-            "Можешь исправить и подать снова — нажми кнопку ниже.",
-            reply_markup=_anketa_kb(uid)
-        )
-    except Exception:
-        pass
-    try:
-        old_text = cb.message.text or cb.message.caption or ""
-        new_text = old_text + f"\n\n❌ <b>ОТКЛОНЕНО</b> — {html.escape(mod_name)}"
-        if app.get("media_count") == 1 and (cb.message.photo or cb.message.video):
-            await cb.message.delete()
-        elif cb.message.photo or cb.message.video:
-            await cb.message.edit_caption(new_text, parse_mode="HTML", reply_markup=None)
-        else:
-            await cb.message.edit_text(new_text, parse_mode="HTML", reply_markup=None)
-    except Exception:
-        pass
-
-    # Отклонённая заявка тоже не должна оставлять альбом в мод-чате.
-    for _mid in (app.get("media_msg_ids") or []):
-        try:
-            await bot.delete_message(app["mod_chat_id"], _mid)
-        except Exception:
-            pass
-
-    await cb.answer("❌ Отклонено", show_alert=True)
 
 
-# ─── Реакції ❤️ / 👎 на публічних анкетах ───
-async def _send_anketa_private_preview(
-    recipient_uid: int,
-    owner_uid: int,
-    intro_html: str = "",
-    reply_markup=None,
-) -> bool:
-    """Приватно показывает одобренную анкету другому участнику."""
-    data = _ank.get_approved_data(owner_uid)
-    if not data:
-        return False
-
-    if intro_html:
-        await bot.send_message(recipient_uid, intro_html, parse_mode="HTML")
-
-    answers = data.get("answers") or {}
-    card_text = _ank.fmt_pub_card(
-        answers,
-        data.get("username", ""),
-        data.get("full_name", ""),
-        is_premium=is_anketa_premium(owner_uid, data.get("username", "")),
-    )
-    media_items = answers.get("media", [])
-    if not media_items:
-        if answers.get("video_id"):
-            media_items = [{"type": "video", "file_id": answers["video_id"]}]
-        elif answers.get("photo_id"):
-            media_items = [{"type": "photo", "file_id": answers["photo_id"]}]
-
-    if not media_items:
-        await bot.send_message(
-            recipient_uid,
-            card_text,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-        )
-    elif len(media_items) == 1:
-        item = media_items[0]
-        if item["type"] == "photo":
-            await bot.send_photo(
-                recipient_uid,
-                photo=item["file_id"],
-                caption=card_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-        else:
-            await bot.send_video(
-                recipient_uid,
-                video=item["file_id"],
-                caption=card_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-            )
-    else:
-        media_ids = await _ank._send_media_group_to_chat(
-            bot,
-            recipient_uid,
-            media_items,
-            caption=card_text,
-            parse_mode="HTML",
-        )
-        await bot.send_message(
-            recipient_uid,
-            "💞 Действия:",
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-            reply_to_message_id=media_ids[0] if media_ids else None,
-            allow_sending_without_reply=True,
-        )
-    return True
 
 
-async def _send_anketa_feed_card(
-    recipient_uid: int,
-    owner_uid: int | None = None,
-    index: int | None = None,
-) -> bool:
-    """Отправляет одну карточку из личной ленты анкет."""
-    position = _ank.feed_position(recipient_uid, owner_uid)
-    if not position:
-        await bot.send_message(
-            recipient_uid,
-            _ank.feed_empty_text(),
-            parse_mode="HTML",
-            reply_markup=_ank.feed_empty_kb(),
-        )
-        return False
-
-    card_index, total = position
-    owner_uid = _ank.feed_owner(recipient_uid, card_index)
-    data = _ank.get_approved_data(owner_uid) if owner_uid else None
-    if not data:
-        await bot.send_message(
-            recipient_uid,
-            _ank.feed_empty_text(),
-            parse_mode="HTML",
-            reply_markup=_ank.feed_empty_kb(),
-        )
-        return False
-
-    answers = data.get("answers") or {}
-    data_username = data.get("username", "")
-    data_full_name = data.get("full_name", "")
-    premium = is_anketa_premium(owner_uid, data_username)
-    card_text = (
-        f"{brand.hdr()}\n\n"
-        f"💌 <b>Анкета {card_index + 1}/{total}</b>\n\n"
-        f"{_ank.fmt_pub_card(answers, data_username, data_full_name, is_premium=premium)}"
-    )
-    markup = _ank.feed_kb(owner_uid, card_index, total)
-    media_items = answers.get("media", [])
-    if not media_items:
-        if answers.get("video_id"):
-            media_items = [{"type": "video", "file_id": answers["video_id"]}]
-        elif answers.get("photo_id"):
-            media_items = [{"type": "photo", "file_id": answers["photo_id"]}]
-
-    if not media_items:
-        await bot.send_message(recipient_uid, card_text, parse_mode="HTML", reply_markup=markup)
-    elif len(media_items) == 1:
-        item = media_items[0]
-        if item["type"] == "photo":
-            await bot.send_photo(
-                recipient_uid, photo=item["file_id"], caption=card_text,
-                parse_mode="HTML", reply_markup=markup,
-            )
-        else:
-            await bot.send_video(
-                recipient_uid, video=item["file_id"], caption=card_text,
-                parse_mode="HTML", reply_markup=markup,
-            )
-    else:
-        media_ids = await _ank._send_media_group_to_chat(
-            bot, recipient_uid, media_items, caption=card_text, parse_mode="HTML",
-        )
-        await bot.send_message(
-            recipient_uid, "💞 Действия с анкетой:", parse_mode="HTML",
-            reply_markup=markup,
-            reply_to_message_id=media_ids[0] if media_ids else None,
-            allow_sending_without_reply=True,
-        )
-    return True
 
 
-@dp.message(Command("анкеты", "profiles", "знакомства"))
-async def cmd_browse_anketas(msg: Message):
-    """Открывает интерактивную ленту опубликованных анкет."""
-    if msg.chat.type != "private":
-        return await msg.reply(
-            "💌 Ленту анкет можно открыть только в личке с ботом: /анкеты",
-        )
-    if not is_verified(msg.from_user.id):
-        return await msg.reply("🔒 Сначала пройди верификацию, затем открой /анкеты.")
-    _ank.set_feed_cursor(msg.from_user.id, 0)
-    await _send_anketa_feed_card(msg.from_user.id)
 
 
-@dp.callback_query(F.data.startswith("ank_feed:"))
-async def cb_ank_feed(cb: CallbackQuery):
-    """Листание, лайки, подробности и жалобы в личной ленте."""
-    if cb.message.chat.type != "private":
-        return await cb.answer("Лента доступна только в личных сообщениях", show_alert=True)
-    if not is_verified(cb.from_user.id):
-        return await cb.answer("🔒 Сначала пройди верификацию", show_alert=True)
-    if cb.data == "ank_feed:open":
-        _ank.set_feed_cursor(cb.from_user.id, 0)
-        await _send_anketa_feed_card(cb.from_user.id)
-        return await cb.answer()
-    if cb.data == "ank_feed:reset":
-        _ank.reset_feed_seen(cb.from_user.id)
-        await _send_anketa_feed_card(cb.from_user.id)
-        return await cb.answer("Лента начата сначала")
-    if cb.data == "ank_feed:create":
-        status = _ank.get_user_status(cb.from_user.id)
-        if status == "approved":
-            return await cb.answer(
-                "У тебя уже есть анкета — открой «Моя анкета»",
-                show_alert=True,
-            )
-        if status == "pending":
-            return await cb.answer("⏳ Твоя анкета уже на проверке", show_alert=True)
-        await _start_anketa_for_user(cb.from_user)
-        return await cb.answer()
-    parts = cb.data.split(":")
-    if len(parts) != 4:
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-    action = parts[1]
-    try:
-        owner_uid, index = int(parts[2]), int(parts[3])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная карточка", show_alert=True)
-    viewer_uid = cb.from_user.id
-    if owner_uid not in _ank.feed_uids(viewer_uid):
-        return await cb.answer("Анкета больше недоступна", show_alert=True)
-
-    if action == "position":
-        return await cb.answer("Выбери «Лайк» или «Пропустить»", show_alert=False)
-
-    if action in {"like", "pass", "next"}:
-        uids = _ank.feed_uids(viewer_uid)
-        try:
-            current_index = uids.index(owner_uid)
-        except ValueError:
-            return await cb.answer("Анкета уже обработана", show_alert=True)
-
-        if action == "like":
-            reactor = cb.from_user
-            is_heart, is_new = _ank.record_reaction(
-                owner_uid,
-                viewer_uid,
-                reactor.full_name,
-                reactor.username or "",
-                "h",
-            )
-            if is_new:
-                try:
-                    await bot.send_message(
-                        owner_uid,
-                        "❤️ Твою анкету лайкнули! Нажми кнопку ниже, чтобы посмотреть реакцию.",
-                        reply_markup=_ank.make_mutual_kb(viewer_uid, owner_uid),
-                    )
-                except Exception:
-                    pass
-        _ank.mark_feed_seen(viewer_uid, owner_uid)
-        remaining = _ank.feed_uids(viewer_uid)
-        if remaining:
-            next_owner = next(
-                (
-                    candidate
-                    for candidate in uids[current_index + 1:] + uids[:current_index]
-                    if candidate in remaining
-                ),
-                remaining[0],
-            )
-            _ank.set_feed_cursor(viewer_uid, remaining.index(next_owner))
-            await _send_anketa_feed_card(viewer_uid, owner_uid=next_owner)
-        else:
-            await _send_anketa_feed_card(viewer_uid)
-        if action == "like":
-            return await cb.answer("❤️ Лайк поставлен!" if is_new else "❤️")
-        if action == "pass":
-            return await cb.answer("👎 Пропущено")
-        return await cb.answer()
-
-    if action == "detail":
-        await _send_anketa_private_preview(
-            viewer_uid,
-            owner_uid,
-            intro_html="👤 <b>Подробная информация об анкете:</b>",
-            reply_markup=_ank.feed_kb(owner_uid, index, len(_ank.feed_uids(viewer_uid))),
-        )
-        return await cb.answer("Подробности открыты")
-
-    if action == "report":
-        report_chat = _ank.get_pub_chat() or 0
-        reports_db.setdefault(report_chat, []).append({
-            "report_id": uuid.uuid4().hex[:12],
-            "from_uid": viewer_uid,
-            "target_uid": owner_uid,
-            "reason": "Жалоба на анкету из интерактивной ленты",
-            "ts": now_kyiv().strftime("%Y-%m-%d %H:%M"),
-            "status": "open",
-        })
-        reports_db[report_chat] = reports_db[report_chat][-100:]
-        schedule_state_save("жалоба на анкету из ленты")
-        return await cb.answer("🚩 Жалоба передана администрации", show_alert=True)
-
-    return await cb.answer("Неизвестное действие", show_alert=True)
 
 
-@dp.callback_query(F.data.startswith("ank_r:"))
-async def cb_ank_react(cb: CallbackQuery):
-    """Обробляє натискання ❤️ або 👎 під анкетою в паблік-чаті."""
-    parts = cb.data.split(":")          # ["ank_r", "h"/"d", owner_uid]
-    if len(parts) != 3 or parts[1] not in {"h", "d"}:
-        return await cb.answer("Некорректная реакция", show_alert=True)
-    try:
-        owner_uid = int(parts[2])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная реакция", show_alert=True)
-    rtype = parts[1]
-
-    reactor     = cb.from_user
-    reactor_uid = reactor.id
-
-    # Власник не може лайкати сам себе
-    if reactor_uid == owner_uid:
-        return await cb.answer("Це твоя власна анкета 😊", show_alert=True)
-
-    is_heart, is_new_heart = _ank.record_reaction(
-        owner_uid, reactor_uid,
-        reactor.full_name, reactor.username or ""
-    , rtype)
-
-    # Оновлюємо кнопки під постом
-    try:
-        await cb.message.edit_reply_markup(reply_markup=_ank.reaction_kb(owner_uid))
-    except Exception:
-        pass
-
-    # Уведомляем владельца если новый ❤️
-    if is_new_heart:
-        try:
-            await bot.send_message(
-                owner_uid,
-                "❤️ *Кому-то понравилась твоя анкета!*\n\n"
-                "_Нажми кнопку чтобы ответить взаимностью и узнать кто это_ 👇",
-                parse_mode="Markdown",
-                reply_markup=_ank.make_mutual_kb(reactor_uid, owner_uid)
-            )
-        except Exception:
-            pass
-        await cb.answer("❤️ Лайк поставлен!", show_alert=False)
-    elif not is_heart:
-        await cb.answer("👎", show_alert=False)
-    else:
-        await cb.answer("Лайк убран", show_alert=False)
 
 
-@dp.callback_query(F.data.startswith("ank_likers:"))
-async def cb_ank_likers(cb: CallbackQuery):
-    """Приватный список пользователей, поставивших лайк владельцу анкеты."""
-    parts = cb.data.split(":")
-    if len(parts) != 2:
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-    try:
-        owner_uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-    if cb.from_user.id != owner_uid:
-        return await cb.answer("Это не твой список лайков", show_alert=True)
-
-    hearts = _ank.get_hearts(owner_uid)
-    if not hearts:
-        return await cb.answer("Пока никто не поставил лайк", show_alert=True)
-
-    lines = ["❤️ <b>Кто лайкнул твою анкету</b>\n"]
-    for reactor_uid, info in hearts.items():
-        info = info or {}
-        name = html.escape(str(info.get("name") or f"ID {reactor_uid}"))
-        lines.append(f"• <a href=\"tg://user?id={reactor_uid}\">{name}</a>")
-    if cb.message:
-        await cb.message.answer(
-            "\n".join(lines) + "\n\nВыбери человека, чтобы открыть его анкету:",
-            parse_mode="HTML",
-            reply_markup=_ank.make_likers_kb(owner_uid),
-        )
-    await cb.answer("Список лайков открыт")
 
 
-@dp.callback_query(F.data.startswith("ank_liker:"))
-async def cb_ank_liker_view(cb: CallbackQuery):
-    """Показывает владельцу приватную анкету конкретного лайкнувшего."""
-    parts = cb.data.split(":")
-    if len(parts) != 3:
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-    try:
-        reactor_uid, owner_uid = int(parts[1]), int(parts[2])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-    if cb.from_user.id != owner_uid:
-        return await cb.answer("Это не твой список лайков", show_alert=True)
-
-    info = _ank.get_hearts(owner_uid).get(reactor_uid)
-    if not info:
-        return await cb.answer("Этот лайк уже убран", show_alert=True)
-    reactor_data = _ank.get_approved_data(reactor_uid)
-    if not reactor_data:
-        return await cb.answer(
-            "Анкета этого пользователя больше недоступна",
-            show_alert=True,
-        )
-
-    reactor_name = html.escape(
-        str(reactor_data.get("full_name") or info.get("name") or reactor_uid)
-    )
-    ok = await _send_anketa_private_preview(
-        owner_uid,
-        reactor_uid,
-        intro_html=(
-            "👀 <b>Анкета пользователя, который поставил лайк:</b>\n"
-            f"<a href=\"tg://user?id={reactor_uid}\">{reactor_name}</a>"
-        ),
-        reply_markup=_ank.make_liker_view_kb(reactor_uid, owner_uid),
-    )
-    await cb.answer("Анкета открыта" if ok else "Анкета недоступна")
 
 
 # ─── Взаємність: власник хоче дізнатись хто лайкнув ───
-@dp.callback_query(F.data.startswith("ank_mutual:"))
-async def cb_ank_mutual(cb: CallbackQuery):
-    """Власник натискає 'Відповісти взаємністю' — бот розкриває ім'я лайкера."""
-    parts = cb.data.split(":")          # ["ank_mutual", reactor_uid, owner_uid]
-    if len(parts) != 3:
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-    try:
-        reactor_uid, owner_uid = int(parts[1]), int(parts[2])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка", show_alert=True)
-
-    if cb.from_user.id != owner_uid:
-        return await cb.answer("Это не твоя анкета", show_alert=True)
-
-    # Проверяем актуален ли лайк
-    hearts = _ank.get_hearts(owner_uid)
-    info   = hearts.get(reactor_uid)
-    if not info:
-        await cb.message.edit_reply_markup(reply_markup=None)
-        return await cb.answer("Этот человек уже убрал лайк 😔", show_alert=True)
-
-    reactor_name = str(info.get("name") or reactor_uid)
-    reactor_user = str(info.get("username") or "")
-    tag = f"@{reactor_user}" if reactor_user else reactor_name
-    reactor_link = (
-        f"<a href=\"tg://user?id={reactor_uid}\">"
-        f"{html.escape(reactor_name)}</a>"
-    )
-
-    # Показываем владельцу кто это и открываем анкету лайкнувшего.
-    await cb.message.edit_reply_markup(reply_markup=None)
-    await cb.message.answer(
-        f"💞 <b>Взаимная симпатия!</b>\n\n"
-        f"Тебя лайкнул(а): {reactor_link}\n"
-        f"Telegram: {html.escape(tag)}\n\n"
-        "Ниже открываю анкету этого человека.",
-        parse_mode="HTML",
-    )
-    try:
-        await _send_anketa_private_preview(owner_uid, reactor_uid)
-    except Exception as preview_error:
-        logging.warning("⚠️ Не удалось показать анкету лайкнувшего: %s", preview_error)
-
-    # Уведомляем лайкера и открываем ему анкету ответившего.
-    owner_data = _ank.get_approved_data(owner_uid)
-    owner_name = owner_data["answers"].get("name", "автор анкеты") if owner_data else "автор анкеты"
-    owner_link = (
-        f"<a href=\"tg://user?id={owner_uid}\">"
-        f"{html.escape(str(owner_name))}</a>"
-    )
-    try:
-        await bot.send_message(
-            reactor_uid,
-            f"💞 <b>Взаимная симпатия!</b>\n\n"
-            f"{owner_link} ответил(а) на твой лайк.\n"
-            "Ниже открываю его/её анкету.",
-            parse_mode="HTML",
-        )
-        await _send_anketa_private_preview(reactor_uid, owner_uid)
-    except Exception:
-        pass
-
-    await cb.answer("💞 Взаимно!", show_alert=True)
 
 
-@dp.callback_query(F.data.startswith("ank_cm:"))
-async def cb_ank_mod_comment(cb: CallbackQuery):
-    if not _is_anketa_moderator_callback(cb):
-        return await cb.answer("⛔ Только модераторы анкеты", show_alert=True)
-    parts = cb.data.split(":")
-    if len(parts) != 2 or not parts[1]:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    app_id = parts[1]
-    app = _ank._pending.get(app_id)
-    if not app:
-        return await cb.answer("Заявка не найдена", show_alert=True)
-    _ank._mod_commenting[cb.from_user.id] = app_id
-    await cb.answer("Напишите правки следующим сообщением в этом чате", show_alert=True)
-    await cb.message.reply(
-        f"✏️ {cb.from_user.mention_html()}, напишите правки для "
-        f"<b>{app['full_name']}</b> — следующее сообщение уйдёт автору:",
-        parse_mode="HTML"
-    )
 
 
-# ─── Кнопки юзера: видалити / редагувати свою анкету ───
-@dp.callback_query(F.data.startswith("ank_start:"))
-async def cb_ank_start_private(cb: CallbackQuery):
-    parts = cb.data.split(":")
-    if len(parts) != 2:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    try:
-        uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    if cb.from_user.id != uid:
-        return await cb.answer("Это не для тебя", show_alert=True)
-    if not is_verified(uid):
-        return await cb.answer("🔒 Сначала пройди верификацию", show_alert=True)
-    if _ank.get_user_status(uid) == "pending":
-        return await cb.answer("⏳ Анкета уже на проверке", show_alert=True)
-    if _ank.get_user_status(uid) == "approved":
-        return await cb.answer(
-            "У тебя уже есть анкета — открой «Моя анкета» для редактирования",
-            show_alert=True,
-        )
-    await _start_anketa_for_user(cb.from_user)
-    await cb.answer()
+# ─── Зарезервировано под будущие пользовательские кнопки ───
 
 
-@dp.callback_query(F.data.startswith("ank_mycard:"))
-async def cb_ank_mycard_private(cb: CallbackQuery):
-    parts = cb.data.split(":")
-    if len(parts) != 2:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    try:
-        uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    if cb.from_user.id != uid:
-        return await cb.answer("Это не твоя анкета", show_alert=True)
-    status = _ank.get_user_status(uid)
-    if status == "approved":
-        data = _ank.get_approved_data(uid)
-        if data:
-            _vip2 = is_anketa_premium(uid, data.get("username", ""))
-            card_text   = _ank.fmt_my_card(data["answers"], data["username"], data["full_name"],
-                                            is_premium=_vip2)
-            media_items = data["answers"].get("media", [])
-            # backward compat — old single-media fields
-            if not media_items:
-                if data["answers"].get("video_id"):
-                    media_items = [{"type": "video", "file_id": data["answers"]["video_id"]}]
-                elif data["answers"].get("photo_id"):
-                    media_items = [{"type": "photo", "file_id": data["answers"]["photo_id"]}]
-            n = len(media_items)
-            if n == 0:
-                await bot.send_message(uid, card_text, parse_mode="HTML",
-                                       reply_markup=_ank.make_my_anketa_kb(uid))
-            elif n == 1:
-                item = media_items[0]
-                if item["type"] == "photo":
-                    await bot.send_photo(uid, photo=item["file_id"], caption=card_text,
-                                         parse_mode="HTML", reply_markup=_ank.make_my_anketa_kb(uid))
-                else:
-                    await bot.send_video(uid, video=item["file_id"], caption=card_text,
-                                         parse_mode="HTML", reply_markup=_ank.make_my_anketa_kb(uid))
-            else:
-                # 2–10 медіа: карточка является подписью первого элемента
-                # альбома, управление — отдельным reply-сообщением.
-                _my_media_ids = await _ank._send_media_group_to_chat(
-                    bot,
-                    uid,
-                    media_items,
-                    caption=card_text,
-                    parse_mode="HTML",
-                )
-                await bot.send_message(
-                    uid,
-                    "⚙️ Управление анкетой:",
-                    parse_mode="HTML",
-                    reply_markup=_ank.make_my_anketa_kb(uid),
-                    reply_to_message_id=_my_media_ids[0] if _my_media_ids else None,
-                    allow_sending_without_reply=True,
-                )
-        else:
-            await bot.send_message(uid, "Анкета не найдена.", reply_markup=_anketa_kb(uid))
-    elif status == "pending":
-        await bot.send_message(
-            uid,
-            "⏳ <b>Твоя анкета сейчас на проверке.</b>\n\n"
-            "Если хочешь отменить её и заполнить новую, нажми кнопку ниже.",
-            parse_mode="HTML",
-            reply_markup=_ank.make_pending_anketa_kb(uid),
-        )
-        await cb.answer()
-        return
-    elif status == "rejected":
-        await bot.send_message(uid, "❌ Анкета отклонена. Заполни новую 👇",
-                               reply_markup=_anketa_kb(uid))
-    else:
-        await bot.send_message(uid, "У тебя ещё нет анкеты. Заполни! 💌",
-                               reply_markup=_anketa_kb(uid))
-    await cb.answer()
 
 
-@dp.callback_query(F.data.startswith("ank_del:"))
-async def cb_ank_delete(cb: CallbackQuery):
-    parts = cb.data.split(":")
-    if len(parts) != 2:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    try:
-        uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    if cb.from_user.id != uid:
-        return await cb.answer("Это не твоя анкета", show_alert=True)
-
-    data = _ank.delete_user_anketa(uid)
-
-    # Удаляем карточку из чата модерации, если заявка была ещё pending.
-    if data and data.get("mod_chat_id"):
-        await _delete_anketa_messages(
-            data["mod_chat_id"],
-            data.get("mod_msg_id"),
-            *(data.get("media_msg_ids") or []),
-        )
-    else:
-        # Удаляем опубликованную карточку (текст + медиа-альбом).
-        pub_chat = data.get("pub_chat_id") if data else None
-        pub_chat = pub_chat or _ank.get_pub_chat()
-        if pub_chat and data:
-            await _delete_anketa_messages(
-                pub_chat,
-                data.get("pub_msg_id"),
-                data.get("pub_control_msg_id"),
-                *(data.get("media_msg_ids") or []),
-            )
-
-    await cb.message.edit_reply_markup(reply_markup=None)
-    await _send_custom(
-        uid, "anketa_delete",
-        f"🗑 <b>Твоя анкета удалена.</b>\n\nХочешь подать новую — нажми кнопку ниже.",
-        reply_markup=_ank.make_new_anketa_kb(uid)
-    )
-    await cb.answer("Анкета удалена", show_alert=True)
 
 
-@dp.callback_query(F.data.startswith("ank_edit:"))
-async def cb_ank_user_edit(cb: CallbackQuery):
-    parts = cb.data.split(":")
-    if len(parts) != 2:
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    try:
-        uid = int(parts[1])
-    except (TypeError, ValueError):
-        return await cb.answer("Некорректная кнопка анкеты", show_alert=True)
-    if cb.from_user.id != uid:
-        return await cb.answer("Это не твоя анкета", show_alert=True)
-
-    # Удаляем старую публикацию (текст + медіа-альбом)
-    data = _ank.delete_user_anketa(uid)
-    pub_chat = (data.get("pub_chat_id") if data else None) or _ank.get_pub_chat()
-    if pub_chat and data:
-        await _delete_anketa_messages(
-            pub_chat,
-            data.get("pub_msg_id"),
-            data.get("pub_control_msg_id"),
-            *(data.get("media_msg_ids") or []),
-        )
-
-    await cb.message.edit_reply_markup(reply_markup=None)
-    _ank._sessions[uid] = {
-        "step": -1, "answers": {},
-        "username": cb.from_user.username or "",
-        "full_name": cb.from_user.full_name,
-        "lang": None,
-    }
-    await bot.send_message(
-        uid,
-        "💌 *Анкета знакомств*\n\nВыберите язык:",
-        parse_mode="Markdown",
-        reply_markup=_ank._lang_kb()
-    )
-    await cb.answer()
 
 
 # ═══════════════════════════════════════════════════════
-# АНКЕТИ — КОМАНДИ
+# КОМАНДЫ БОТА
 # ═══════════════════════════════════════════════════════
 
-def _anketa_kb(uid: int | None = None) -> ReplyKeyboardMarkup:
-    """Постоянная навигация по анкетам в личном чате."""
-    status = _ank.get_user_status(uid) if uid else None
-    if status == "approved":
-        rows = [
-            [
-                KeyboardButton(text="📋 Моя анкета ✅"),
-                KeyboardButton(text="💌 Смотреть анкеты"),
-            ],
-            [KeyboardButton(text="✏️ Редактировать анкету")],
-            [KeyboardButton(text="📖 Все команды")],
-        ]
-        placeholder = "Открыть свою анкету или ленту"
-    elif status == "pending":
-        rows = [
-            [
-                KeyboardButton(text="⏳ Анкета на проверке"),
-                KeyboardButton(text="💌 Смотреть анкеты"),
-            ],
-            [KeyboardButton(text="📖 Все команды")],
-        ]
-        placeholder = "Открыть ленту анкет"
-    else:
-        rows = [
-            [
-                KeyboardButton(text="💌 Моя анкета"),
-                KeyboardButton(text="💌 Смотреть анкеты"),
-            ],
-            [KeyboardButton(text="📖 Все команды")],
-        ]
-        placeholder = "Создать анкету или открыть ленту"
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder=placeholder,
-    )
 
 
-async def _start_anketa_for_user(user) -> None:
-    """Запускает анкету из inline-кнопки, где cb.message принадлежит боту."""
-    uid = user.id
-    help_sessions.discard(uid)
-    support_sessions.pop(uid, None)
-    if uid in _ank._sessions:
-        await bot.send_message(
-            uid,
-            "📋 Ты уже заполняешь анкету. Продолжай с текущего вопроса.",
-            reply_markup=_ank._lang_kb(),
-        )
-        return
-    _ank._sessions[uid] = {
-        "step": -1,
-        "answers": {},
-        "username": user.username or "",
-        "full_name": user.full_name,
-        "lang": None,
-        "media_items": [],
-    }
-    await bot.send_message(
-        uid,
-        f"{brand.hdr()}\n\n"
-        f"{brand.acc()} <b>Анкета знакомств</b>\n\n"
-        "Выберите язык:",
-        parse_mode="HTML",
-        reply_markup=_ank._lang_kb(),
-    )
 
 
 _START_TEXT = (
-    "✨ <b>Привет, {name}!</b>\n\n"
-    "Я — <b>Лумена</b>, умный Telegram-бот нового поколения.\n\n"
-    "══════════════════════════\n\n"
-    "◆ <b>История создания</b>\n\n"
-    "В 2026 году разработчик Hydra запустил проект с простой задачей: "
-    "собрать всё нужное для Telegram-сообщества в одном месте — "
-    "модерацию, экономику, общение и развлечения. Так появилась Лумена.\n\n"
-    "Проект развивается без громких заявлений — просто работает "
-    "и становится лучше с каждым обновлением.\n\n"
-    "══════════════════════════\n\n"
-    "🖤 <b>Что умею:</b>\n\n"
-    "◾ База знаний 1000+ фактов — отвечаю мгновенно\n"
-    "◾ Поиск в интернете и Wikipedia\n"
-    "◾ Погода, курсы валют, математика, переводы\n"
-    "◾ Браки, отношения, анкеты знакомств\n"
-    "◾ Предсказания и игровые режимы\n"
-    "◾ Экономика чата — монеты LMN и рабочие активности\n"
-    "◾ Полная модерация чата\n\n"
-    "══════════════════════════\n\n"
-    "📋 Анкета знакомств — <code>/анкета</code>\n"
-    "💌 Смотреть анкеты — <code>/анкеты</code>"
+    "✨ <b>Добро пожаловать в Lumenora, {name}!</b>\n\n"
+    "Твой личный мир в Telegram: живое общение, игры, отношения, "
+    "предсказания и экономика сообщества.\n\n"
+    "Выбери раздел ниже — Lumenora проведёт тебя дальше.\n\n"
+    "<i>Можно нажимать кнопки или писать команды обычным текстом.</i>"
 )
 
 def build_main_kb(uid: int | None = None) -> InlineKeyboardMarkup:
@@ -15717,39 +14656,20 @@ def build_main_kb(uid: int | None = None) -> InlineKeyboardMarkup:
     rows = []
     if row1:
         rows.append(row1)
-    if uid and _ank.get_user_status(uid) == "approved":
-        rows.append([
-            InlineKeyboardButton(
-                text="📋 Моя анкета",
-                callback_data=f"ank_mycard:{uid}",
-            ),
-            InlineKeyboardButton(
-                text="💌 Смотреть анкеты",
-                callback_data="ank_feed:open",
-            ),
-        ])
-    elif uid and _ank.get_user_status(uid) == "pending":
-        rows.append([
-            InlineKeyboardButton(
-                text="⏳ Анкета на проверке",
-                callback_data=f"ank_mycard:{uid}",
-            ),
-            InlineKeyboardButton(
-                text="💌 Смотреть анкеты",
-                callback_data="ank_feed:open",
-            ),
-        ])
-    else:
-        rows.append([
-            InlineKeyboardButton(
-                text="📝 Создать анкету",
-                callback_data=f"ank_start:{uid}" if uid else "ank_feed:create",
-            ),
-            InlineKeyboardButton(
-                text="💌 Смотреть анкеты",
-                callback_data="ank_feed:open",
-            ),
-        ])
+    rows.extend([
+        [
+            InlineKeyboardButton(text="Профиль", callback_data="help:profile"),
+            InlineKeyboardButton(text="Экономика", callback_data="help:eco"),
+        ],
+        [
+            InlineKeyboardButton(text="Отношения", callback_data="help:social"),
+            InlineKeyboardButton(text="Магия и Таро", callback_data="help:fortune"),
+        ],
+        [
+            InlineKeyboardButton(text="Игры", callback_data="help:games"),
+            InlineKeyboardButton(text="ИИ Lumenora", callback_data="help:ai"),
+        ],
+    ])
     if GAME_WEBAPP_URL:
         rows.append([
             InlineKeyboardButton(
@@ -15760,7 +14680,7 @@ def build_main_kb(uid: int | None = None) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text=help_label, callback_data="help:menu")])
     # Ссылка на сайт
     if LUMENA_SITE_URL:
-        rows.append([InlineKeyboardButton(text="🌐 Сайт Лумены", url=LUMENA_SITE_URL)])
+        rows.append([InlineKeyboardButton(text="Сайт Lumenora", url=LUMENA_SITE_URL)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -15772,7 +14692,7 @@ async def cmd_game(msg: Message):
         )
         return
     await msg.answer(
-        "🏗 <b>Лумка: Котострой</b>\n\n"
+        "🏗 <b>Lumenora: Котострой</b>\n\n"
         "Открой город, выполни первое дело и забери свои игровые LMN.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
@@ -15827,51 +14747,19 @@ async def cmd_start_private(msg: Message, command: CommandObject = None):
         except (ValueError, IndexError):
             pass
 
-    # Deep-link из публичной кнопки «Создать анкету» должен сразу запускать
-    # тот же flow, что и ручная команда /анкета.
-    if (command.args or "").strip().lower() in {"anketa", "анкета"}:
-        return await cmd_anketa(msg)
-
     if is_verified(uid):
         kb = build_main_kb(uid)
-        # Фаундеру добавляем кнопку редактора
         if is_owner(msg):
-            kb = InlineKeyboardMarkup(inline_keyboard=
-                kb.inline_keyboard +
-                [[InlineKeyboardButton(text="🛠 Редактор", callback_data="editor:menu")]]
-            )
-        await _answer_custom(
-            msg, "anketa_home",
-            f"{brand.hdr()}\n\n"
-            f"✨ <b>Привет, {name}!</b>\n\n"
-            f"{brand.acc()} <b>Анкеты знакомств</b>\n\n"
-            "Создай свою анкету, дождись проверки и знакомься "
-            "с людьми из сообщества.\n\n"
-            "Основная навигация — кнопки ниже. Команды по-прежнему доступны "
-            "вручную через /help и slash-ввод.",
-            name=raw_name,
-            reply_markup=kb,
-        )
-        await msg.answer(
-            "👇 <b>Навигация по анкетам</b>\n\n"
-            "Выбирай действие кнопками — команды остаются доступны отдельно.",
-            parse_mode="HTML",
-            reply_markup=_anketa_kb(uid),
-        )
-        return
+            kb = InlineKeyboardMarkup(inline_keyboard=kb.inline_keyboard + [[InlineKeyboardButton(text="🛠 Редактор", callback_data="editor:menu")]])
+        return await _answer_custom(msg, "start_text", f"{brand.hdr()}\n\n✨ <b>Привет, {name}!</b>", name=raw_name, reply_markup=kb)
 
     # Новый пользователь — сначала верификация
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=brand.btn_label("verify_start"),
-            callback_data="verify:go",
-        )]
-    ])
+    kb = _verification_keyboard()
     await _answer_custom(
         msg, "start_unverified",
         f"👋 <b>Привет, {name}!</b>\n\n"
-        "Для доступа к боту нужно пройти быструю верификацию.\n"
-        "Это займёт несколько секунд 👇",
+        "Lumenora открывает доступ только реальным людям.\n"
+        "Реши один короткий пример — это займёт несколько секунд.",
         name=raw_name,
         reply_markup=kb,
     )
@@ -15883,12 +14771,28 @@ async def cb_verify_go(cb: CallbackQuery):
     if is_verified(uid):
         await cb.answer("Ты уже верифицирован ✅", show_alert=False)
         return
+    now_ts = datetime.now(UTC).timestamp()
+    locked_until = _captcha_locked_until.get(uid, 0.0)
+    if locked_until > now_ts:
+        remaining = max(1, int(locked_until - now_ts))
+        await cb.answer(
+            f"Слишком много ошибок. Повтори через {remaining} сек.",
+            show_alert=True,
+        )
+        return
+    _captcha_locked_until.pop(uid, None)
     question, correct = _gen_captcha()
-    _captcha_pending[uid] = correct
-    kb = _captcha_keyboard(uid, correct)
+    token = uuid.uuid4().hex[:8]
+    _captcha_pending[uid] = {
+        "answer": correct,
+        "created_at": now_ts,
+        "attempts": 0,
+        "token": token,
+    }
+    kb = _captcha_keyboard(uid, correct, token)
     await _edit_custom(
         cb.message, "verify_prompt",
-        f"🔐 <b>Верификация</b>\n\n"
+        f"🔐 <b>Проверка человека</b>\n\n"
         f"Реши пример:\n\n"
         f"<b>  {question}</b>\n\n"
         f"<i>Выбери правильный ответ ниже 👇</i>",
@@ -15901,11 +14805,12 @@ async def cb_verify_go(cb: CallbackQuery):
 async def cb_captcha_ans(cb: CallbackQuery):
     uid = cb.from_user.id
     parts = cb.data.split(":")
-    if len(parts) != 3:
+    if len(parts) != 4:
         return await cb.answer("Ошибка данных", show_alert=True)
     try:
         target_uid = int(parts[1])
-        chosen     = int(parts[2])
+        token      = parts[2]
+        chosen     = int(parts[3])
     except ValueError:
         return await cb.answer("Ошибка данных", show_alert=True)
 
@@ -15913,8 +14818,8 @@ async def cb_captcha_ans(cb: CallbackQuery):
     if uid != target_uid:
         return await cb.answer("Это не твоя капча 👀", show_alert=True)
 
-    correct = _captcha_pending.get(uid)
-    if correct is None:
+    challenge = _captcha_pending.get(uid)
+    if challenge is None:
         # Капча устарела (бот перезапустился)
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="🔄 Получить новый пример", callback_data="verify:go")
@@ -15925,12 +14830,50 @@ async def cb_captcha_ans(cb: CallbackQuery):
             reply_markup=kb,
         )
         return await cb.answer()
+    if challenge.get("token") != token:
+        return await cb.answer("Эта кнопка уже устарела. Получи новый пример.", show_alert=True)
 
+    if (
+        datetime.now(UTC).timestamp() - float(challenge.get("created_at", 0))
+        > CAPTCHA_TTL_SECONDS
+    ):
+        _captcha_pending.pop(uid, None)
+        await _edit_custom(
+            cb.message,
+            "verify_expired",
+            "⏳ <b>Проверка истекла.</b>\n\nНажми кнопку, чтобы получить новый пример.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text="🔄 Новый пример",
+                    callback_data="verify:go",
+                )
+            ]]),
+        )
+        return await cb.answer("Проверка истекла", show_alert=True)
+
+    correct = int(challenge["answer"])
     if chosen != correct:
         # Неправильный ответ — сразу новый пример
+        attempts = int(challenge.get("attempts", 0)) + 1
+        if attempts >= CAPTCHA_MAX_ATTEMPTS:
+            _captcha_pending.pop(uid, None)
+            _captcha_locked_until[uid] = datetime.now(UTC).timestamp() + CAPTCHA_LOCK_SECONDS
+            await _edit_custom(
+                cb.message,
+                "verify_locked",
+                "⛔ <b>Слишком много ошибок.</b>\n\n"
+                "Проверка временно заблокирована на 1 минуту.",
+            )
+            return await cb.answer("Проверка временно заблокирована", show_alert=True)
         question, new_correct = _gen_captcha()
-        _captcha_pending[uid] = new_correct
-        kb = _captcha_keyboard(uid, new_correct)
+        new_token = uuid.uuid4().hex[:8]
+        _captcha_pending[uid] = {
+            "answer": new_correct,
+            "created_at": datetime.now(UTC).timestamp(),
+            "attempts": attempts,
+            "token": new_token,
+        }
+        kb = _captcha_keyboard(uid, new_correct, new_token)
         await _edit_custom(
             cb.message, "verify_wrong",
             f"❌ <b>Неверно!</b> Попробуй ещё раз.\n\n"
@@ -15948,12 +14891,12 @@ async def cb_captcha_ans(cb: CallbackQuery):
     _verified_users.add(uid)
     save_data()
 
-    site_line = (f"\n\n🌐 <a href=\"{LUMENA_SITE_URL}\">Официальный сайт Лумены</a> — все функции и правила"
+    site_line = (f"\n\n🌐 <a href=\"{LUMENA_SITE_URL}\">Официальный сайт Lumenora</a> — все функции и правила"
                  if LUMENA_SITE_URL else "")
     await _edit_custom(
         cb.message, "verify_done",
-        f"✅ <b>Верификация пройдена!</b>\n\n"
-        f"Добро пожаловать, {name}! Все функции Лумены теперь доступны.{site_line}",
+        f"✅ <b>Проверка пройдена!</b>\n\n"
+        f"Добро пожаловать, {name}! Все функции Lumenora теперь доступны.{site_line}",
         name=raw_name,
     )
     await _answer_custom(
@@ -15965,108 +14908,19 @@ async def cb_captcha_ans(cb: CallbackQuery):
     await cb.answer("✅ Правильно!", show_alert=False)
 
 
-@dp.message(Command("анкета", "anketa"))
-async def cmd_anketa(msg: Message):
-    if msg.chat.type != "private":
-        return await _answer_custom(
-            msg, "anketa_private_only",
-            "💌 Анкету нужно заполнять в личных сообщениях с ботом!\n"
-            "👉 Напиши мне в личку: @LumenarAi_Bot",
-        )
-    if not is_verified(msg.from_user.id):
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=_btn_text("verify_btn", "✅ Пройти верификацию"),
-                callback_data="verify:go",
-            )]
-        ])
-        return await _answer_custom(
-            msg, "anketa_no_verify",
-            "🔒 Сначала пройди верификацию — нажми кнопку ниже.",
-            reply_markup=kb,
-        )
-    # Новый сценарий анкеты должен закрыть незавершённое обращение
-    # в поддержку, иначе свободный ответ может уйти администратору.
-    help_sessions.discard(msg.from_user.id)
-    support_sessions.pop(msg.from_user.id, None)
-    await _ank.start_anketa(bot, msg, force=True)
 
 
-# Поддерживаем также ввод «анкета» без слеша — это используется кнопками
 # обычной reply-клавиатуры и не мешает специализированному Command-фильтру.
-TEXT_COMMANDS.update({
-    "анкета": cmd_anketa,
-    "anketa": cmd_anketa,
-    "анкеты": cmd_browse_anketas,
-    "знакомства": cmd_browse_anketas,
-})
 
 
-@dp.message(Command("premium", "vip", "купить_премиум"))
-async def cmd_buy_premium(msg: Message):
-    """Покупка VIP-анкеты за 300 Stars."""
-    uid = msg.from_user.id
-    uname = (msg.from_user.username or "").lower()
-    if is_anketa_premium(uid, uname):
-        await msg.reply(
-            "👑 *У тебя уже есть VIP-статус!*\n\n"
-            "Твоя анкета будет опубликована как VIP-ANKETA с приоритетом.",
-            parse_mode="Markdown"
-        )
-        return
-    await bot.send_invoice(
-        chat_id=uid,
-        title="👑 VIP-ANKETA",
-        description=(
-            "VIP-статус для твоей анкеты:\n"
-            "• Оформление 👑 VIP-ANKETA\n"
-            "• Приоритетная публикация\n"
-            "• Без ограничений по времени"
-        ),
-        payload="premium_anketa",
-        currency="XTR",
-        prices=[LabeledPrice(label="VIP-анкета", amount=ANKETA_PREMIUM_STARS)],
-    )
 
 
-@dp.pre_checkout_query()
-async def on_pre_checkout(query):
-    await query.answer(ok=True)
 
 
-@dp.message(F.successful_payment)
-async def on_successful_payment(msg: Message):
-    if msg.successful_payment.invoice_payload == "premium_anketa":
-        uid = msg.from_user.id
-        _premium_users.add(uid)
-        save_data()
-        await _send_custom(
-            msg.from_user.id, "vip_activated",
-            f"{brand.hdr()}\n\n"
-            f"{brand.crown()} <b>VIP-статус активирован!</b>\n\n"
-            "Твоя следующая анкета будет опубликована как <b>VIP-ANKETA</b> с приоритетом!\n\n"
-            f"{brand.div()}"
-        )
-
-
-@dp.message(Command("givepremium", "дать_премиум"))
-async def cmd_give_premium(msg: Message, command: CommandObject):
-    if not await is_admin(msg):
-        return
-    target = await get_user(msg, command)
-    if not target:
-        return await msg.reply("Ответь на сообщение или укажи ID/username.")
-    _premium_users.add(target.id)
-    save_data()
-    tag = f"@{target.username}" if target.username else target.full_name
-    await msg.reply(
-        f"👑 *VIP выдан!*\n\n{tag} теперь имеет VIP-статус анкеты.",
-        parse_mode="Markdown"
-    )
 
 
 @dp.message(Command("відмова", "отмена", "cancel"))
-async def cmd_cancel_ank(msg: Message):
+async def cmd_cancel(msg: Message):
     if msg.chat.type == "private":
         uid = msg.from_user.id
         # Сбрасываем все временные личные диалоги, чтобы зависшая сессия
@@ -16095,33 +14949,11 @@ async def cmd_cancel_ank(msg: Message):
         if had_ephemeral_session:
             schedule_state_save("отмена временного диалога")
             return await msg.reply("❌ Временный диалог отменён.")
-        await _ank.cancel_anketa(msg)
+        await msg.reply("ℹ️ Активных временных диалогов нет.")
 
 
-@dp.message(Command("setmodchat", "setmod"))
-async def cmd_setmodchat(msg: Message):
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только фаундер")
-    _ank.set_mod_chat(msg.chat.id)
-    _ank.save_anketa_settings()
-    await msg.reply(
-        f"✅ <b>Чат модерации анкет установлен!</b>\n"
-        f"Сюда будут поступать анкеты на проверку.",
-        parse_mode="HTML"
-    )
 
 
-@dp.message(Command("setpubchat", "setpub"))
-async def cmd_setpubchat(msg: Message):
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только фаундер")
-    _ank.set_pub_chat(msg.chat.id)
-    _ank.save_anketa_settings()
-    await msg.reply(
-        f"✅ <b>Чат публикаций анкет установлен!</b>\n"
-        f"Сюда будут публиковаться одобренные анкеты.",
-        parse_mode="HTML"
-    )
 
 
 @dp.message(Command("setadminchat", "setadmin"))
@@ -16136,8 +14968,6 @@ async def cmd_setadminchat(msg: Message, command: CommandObject = None):
         )
     raw_args = (command.args if command else "") or ""
     link = raw_args.strip().split()[0] if raw_args.strip().startswith("http") else OBSERVER_CHAT_INVITE_LINK
-    _ank.set_mod_chat(msg.chat.id)
-    _ank.set_observer_chat_link(link)
     staff_team_chats.add(msg.chat.id)
     await save_state_now("привязка админ-чата к главному")
     await msg.reply(
@@ -16149,18 +14979,6 @@ async def cmd_setadminchat(msg: Message, command: CommandObject = None):
     )
 
 
-@dp.message(Command("resetpubchat"))
-async def cmd_resetpubchat(msg: Message):
-    """Скидає чат публікацій анкет."""
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только фаундер")
-    _ank.set_pub_chat(None)
-    _ank.save_anketa_settings()
-    await msg.reply(
-        "🔄 <b>Чат публикаций анкет сброшен.</b>\n\n"
-        "Теперь выполни <code>/setpubchat</code> в нужном чате.",
-        parse_mode="HTML"
-    )
 
 
 @dp.message(Command("setemoji"))
@@ -16227,7 +15045,6 @@ async def handle_emoji_extract(msg: Message):
     """
     if not is_owner(msg):
         return
-    if _ank.is_on_media_step(msg.from_user.id):
         return
     entities = msg.entities or []
     found = [(msg.text[e.offset: e.offset + e.length], e.custom_emoji_id)
@@ -16363,7 +15180,7 @@ async def cmd_edittext(msg: Message):
     done   = sum(1 for _, keys in _EDITOR_TEXT_CATEGORIES for k in keys if k in custom)
 
     await msg.answer(
-        f"✏️ <b>Редактор текстов Лумены</b>\n\n"
+        f"✏️ <b>Редактор текстов Lumenora</b>\n\n"
         f"📊 Изменено: <b>{done}</b> из <b>{total}</b> строк\n"
         f"📂 Категорий: <b>{len(_EDITOR_TEXT_CATEGORIES)}</b>\n\n"
         "Выбери категорию — внутри каждой постраничный список.\n"
@@ -16466,13 +15283,6 @@ _EDITOR_TEXT_CATEGORIES = [
     ("🏠 Главный экран",    ["start_text", "start_unverified"]),
     ("✅ Верификация",       ["verify_btn", "verify_prompt", "verify_confirm_btn", "verify_done"]),
     ("👋 Приветствие",       ["welcome_msg", "welcome_btn"]),
-    ("📝 Анкета — флоу",    ["anketa_start", "anketa_cancel", "anketa_confirm",
-                              "anketa_duplicate", "anketa_cancel_none",
-                              "anketa_private_only", "anketa_no_verify", "step_accepted",
-                              "anketa_no_mod", "anketa_media_prompt",
-                              "anketa_media_added", "anketa_media_done"]),
-    ("🛡 Модерация анкет",  ["anketa_approve", "anketa_reject", "anketa_delete",
-                              "mod_comment", "revoke_notify"]),
     ("👑 VIP & Поддержка",  ["vip_activated", "support_prompt", "support_sent"]),
     ("💰 Экономика",         ["balance", "work", "work_cooldown",
                               "fish", "fish_cooldown",
@@ -16674,7 +15484,7 @@ async def _send_editor_menu(msg):
     """Отправляет главное меню редактора (используется из нескольких мест)."""
     await msg.answer(
         f"{brand.hdr()}\n\n"
-        "🛠 <b>Настройки Лумены</b>\n\n"
+        "🛠 <b>Настройки Lumenora</b>\n\n"
         "Выбери раздел:\n"
         "✏️ <b>Тексты</b> — все фразы и сообщения бота\n"
         "🔘 <b>Кнопки</b> — названия и ссылки кнопок\n"
@@ -16807,7 +15617,7 @@ async def cb_editor_menu(cb: CallbackQuery):
         return await cb.answer("⛔", show_alert=True)
     await cb.message.edit_text(
         f"{brand.hdr()}\n\n"
-        "🛠 <b>Настройки Лумены</b>\n\n"
+        "🛠 <b>Настройки Lumenora</b>\n\n"
         "Выбери раздел:\n"
         "✏️ <b>Тексты</b> — все фразы и сообщения бота\n"
         "🔘 <b>Кнопки</b> — названия и ссылки кнопок\n"
@@ -17098,7 +15908,7 @@ async def cb_editor_style_rich_demo(cb: CallbackQuery):
         top_name = f"ID {top_uid}" if top_uid else "—"
 
         rich_html = (
-            "<h1>✨ Lumena — Rich-отчёт</h1>"
+            "<h1>✨ Lumenora — Rich-отчёт</h1>"
             "<p>Живая сводка по экономике и сообществу, собранная через "
             "<b>Bot API 10.1 Rich Messages</b>.</p>"
             "<hr>"
@@ -17395,7 +16205,7 @@ async def cmd_antilink(msg: Message, command: CommandObject):
         return await msg.reply("⛔ Только администраторы")
     args = (command.args or "").strip().lower()
     cid  = msg.chat.id
-    mod_chat = _ank.get_mod_chat()
+    mod_chat = ADMIN_CHAT_ID
 
     if args in ("on", "вкл", "включить", "enable"):
         _link_guard[cid] = True
@@ -17528,6 +16338,9 @@ TEXT_COMMANDS.update({
     "лидерборд":     cmd_leaderboard,
     # Статистика чата
     "статчата":      cmd_chatstats,
+    "сообщениячата": cmd_message_stats,
+    "всесообщения":  cmd_message_stats,
+    "messageschat":  cmd_message_stats,
     "указатьместо":  cmd_set_location,
     "моягеография":  cmd_set_location,
     "онлайн":        cmd_online,
@@ -17554,8 +16367,6 @@ TEXT_COMMANDS.update({
     # Забрать LMN (фаундер)
     "взять":         cmd_take,         "take":         cmd_take,
     # Настройки чата (фаундер)
-    "сетмодчат":     cmd_setmodchat,   "setmodchat":   cmd_setmodchat,
-    "сетпубчат":     cmd_setpubchat,   "setpubchat":   cmd_setpubchat,
     "сетэмодзи":     cmd_setemoji,     "setemoji":     cmd_setemoji,
     "сетемодзипак":  cmd_setemojipack, "setemojipack": cmd_setemojipack,
 })
@@ -17567,9 +16378,9 @@ async def cmd_sendlaunch(msg: Message):
     if not is_owner(msg):
         return await msg.reply("⛔ Только фаундер")
 
-    pub_chat = _ank.get_pub_chat()
+    pub_chat = MAIN_CHAT_ID
     if not pub_chat:
-        return await msg.reply("❌ pub_chat_id не встановлено. Спочатку запусти /setpubchat")
+        return await msg.reply("⚠️ Чат для публикации не настроен.")
 
     # Collect all admins/mods to mention (skip founder)
     mentions: list[str] = []
@@ -17590,7 +16401,7 @@ async def cmd_sendlaunch(msg: Message):
     site_line = f"\n🌐 Официальный сайт: {LUMENA_SITE_URL}" if LUMENA_SITE_URL else ""
 
     text = (
-        "⚡️ <b>ВНИМАНИЕ КОМАНДЕ LUMENA</b> ⚡️\n\n"
+        "⚡️ <b>ВНИМАНИЕ КОМАНДЕ LUMENORA</b> ⚡️\n\n"
         "Администраторы и модераторы — будьте готовы!\n\n"
         "🚀 <b>Запуск проекта в 20:00 по Киеву</b>\n\n"
         "📋 Что нужно сделать:\n"
@@ -17602,7 +16413,7 @@ async def cmd_sendlaunch(msg: Message):
         f"{site_line}\n"
         "🤖 Бот: @LumenarAi_Bot\n\n"
         "Слава Украине! 🇺🇦\n\n"
-        "— <i>Автоматическое сообщение системы LUMENA</i>"
+        "— <i>Автоматическое сообщение системы LUMENORA</i>"
     )
     if mention_line:
         text += f"\n\n{mention_line}"
@@ -17639,7 +16450,7 @@ async def cmd_aistatus(msg: Message):
 
     await msg.reply(
         f"{brand.hdr()}\n\n"
-        f"<b>🤖 Статус AI Лумени</b>\n"
+        f"<b>🤖 Статус AI Lumenora</b>\n"
         f"{brand.div()}\n"
         f"{status_icon} {status_text}\n"
         f"📡 Источник: {source}\n"
@@ -17650,7 +16461,7 @@ async def cmd_aistatus(msg: Message):
     )
 @dp.message(Command("setsiteurl"))
 async def cmd_setsiteurl(msg: Message):
-    """Встановлює URL офіційного сайту Лумени (відображається в меню та привітаннях)."""
+    """Встановлює URL офіційного сайту Lumenora (відображається в меню та привітаннях)."""
     global LUMENA_SITE_URL
     if not is_owner(msg):
         return await msg.reply("⛔ Только фаундер")
@@ -17665,30 +16476,7 @@ async def cmd_setsiteurl(msg: Message):
     LUMENA_SITE_URL = parts[1].strip()
     await msg.reply(
         f"✅ <b>URL сайта обновлён!</b>\n🌐 <a href=\"{LUMENA_SITE_URL}\">{LUMENA_SITE_URL}</a>\n\n"
-        "Кнопка «🌐 Сайт Лумены» теперь ведёт на новый адрес.",
-        parse_mode="HTML"
-    )
-
-
-@dp.message(Command("setchatlink"))
-async def cmd_setchatlink(msg: Message):
-    """Встановлює посилання на головний чат (для кнопки НАШ ЧАТ в анкетах)."""
-    if not is_owner(msg):
-        return await msg.reply("⛔ Только фаундер")
-    parts = (msg.text or "").split(maxsplit=1)
-    if len(parts) < 2 or not parts[1].strip().startswith("http"):
-        return await msg.reply(
-            "ℹ️ Укажи ссылку на чат:\n"
-            "<code>/setchatlink https://t.me/+...</code>",
-            parse_mode="HTML"
-        )
-    link = parts[1].strip()
-    _ank.set_chat_link(link)
-    _ank.save_anketa_settings()
-    await msg.reply(
-        f"✅ <b>Ссылка на чат сохранена!</b>\n"
-        f"🔗 {link}\n\n"
-        f"Теперь кнопка «⭐ НАШ ЧАТ» появится под каждой анкетой.",
+        "Кнопка «Сайт Lumenora» теперь ведёт на новый адрес.",
         parse_mode="HTML"
     )
 
@@ -17696,7 +16484,6 @@ async def cmd_setchatlink(msg: Message):
 # Регистрируем команды настройки чата (определены после основного блока TEXT_COMMANDS)
 TEXT_COMMANDS.update({
     "сетсайтурл": cmd_setsiteurl, "setsiteurl": cmd_setsiteurl,
-    "сетчатлинк": cmd_setchatlink, "setchatlink": cmd_setchatlink,
     "админчат": cmd_setadminchat, "связатьадминчат": cmd_setadminchat,
     "setadminchat": cmd_setadminchat,
     "ночнойрежим": cmd_night_mode, "nightmode": cmd_night_mode,
@@ -17934,7 +16721,6 @@ async def cmd_founder_extra(msg: Message, command=None):
         return await msg.reply(
             f"👥 <b>Пользователи</b>\n\n"
             f"Известно ID: <b>{len(ids)}</b>\n"
-            f"Анкет: <b>{len(_ank_users) if '_ank_users' in globals() else 0}</b>\n"
             f"VIP: <b>{len(_premium_users)}</b>\n"
             f"Верифицировано: <b>{len(_verified_users)}</b>",
             parse_mode="HTML",
@@ -18058,7 +16844,7 @@ async def cmd_founder_extra(msg: Message, command=None):
     if word == "фподдержка":
         return await msg.reply(
             f"🆘 <b>Поддержка</b>\n\nАктивных обращений: <b>{len(support_sessions)}</b>\n"
-            f"Мод-чат: <code>{_ank.get_mod_chat() or 'не задан'}</code>",
+            f"Мод-чат: <code>{ADMIN_CHAT_ID}</code>",
             parse_mode="HTML",
         )
 
@@ -18300,14 +17086,14 @@ async def cmd_founder_extra(msg: Message, command=None):
     if word == "фчат":
         if not args.startswith("http"):
             return await msg.reply("Формат: <code>/фчат https://t.me/...</code>", parse_mode="HTML")
-        _ank.set_chat_link(args.split()[0])
-        _ank.save_anketa_settings()
+        global MAIN_CHAT_INVITE_LINK
+        MAIN_CHAT_INVITE_LINK = args.split()[0]
         return await msg.reply("✅ Ссылка на чат обновлена.")
 
     if word == "фуведомление":
         if not args:
             return await msg.reply("Формат: <code>/фуведомление текст</code>", parse_mode="HTML")
-        destination = chat_id if msg.chat.type != "private" else (_ank.get_pub_chat() or chat_id)
+        destination = chat_id if msg.chat.type != "private" else MAIN_CHAT_ID
         await bot.send_message(destination, f"📢 <b>Сообщение фаундера</b>\n\n{html.escape(args)}",
                                parse_mode="HTML")
         return await msg.reply("✅ Уведомление отправлено.")
@@ -18349,7 +17135,6 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "редактирование текстов, кнопок и брендового оформления",
         "настройки сайта, главного чата и модерационного чата",
         "антиспам, антилинк, whitelist и рейд-режим",
-        "работа с пользователями, анкетами и анонимными диалогами",
         "сохранение, диагностика и просмотр состояния бота",
     ]
     owner_commands = [
@@ -18357,7 +17142,6 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "/forceban", "/forcemute", "/разбанвсех",
         "/медалька", "/опрос", "/give", "/взять",
         "/сетвип", "/снятьвип", "/сетлевел",
-        "/юзеринфо", "/овнер", "/setmodchat", "/setpubchat",
         "/setadminchat",
         "/setemoji", "/setemojipack", "/sendlaunch",
         "/setsiteurl", "/setchatlink", "/ownerclaim",
@@ -18375,8 +17159,8 @@ async def cmd_founder_secret_console(msg: Message, command=None):
         "🔐 <b>Founder console</b>\n\n"
         "Доступ подтверждён для founder-equivalent пользователя.\n"
         f"Скрытая команда: <code>/{FOUNDER_SECRET_COMMAND}</code>\n\n"
-        f"💬 Чат общения: <code>{_ank.get_pub_chat() or 'не связан'}</code>\n"
-        f"👁 Чат наблюдения: <code>{_ank.get_observer_chat() or 'не связан'}</code>\n\n"
+        f"💬 Чат общения: <code>{MAIN_CHAT_ID}</code>\n"
+        f"👁 Чат администрации: <code>{ADMIN_CHAT_ID}</code>\n\n"
         f"🛡 <b>Группы прав ({len(rights)})</b>\n"
         + "\n".join(f"• {right}" for right in rights)
         + f"\n\n👑 <b>Founder-команды ({len(owner_commands)})</b>\n"
@@ -18398,7 +17182,8 @@ async def cmd_founder_secret_console(msg: Message, command=None):
 
 
 async def cmd_founder_bind_main_chat(msg: Message, command=None):
-    """Связывает текущую группу с главным чатом общения Лумены."""
+    """Связывает текущую группу с главным чатом общения Lumenora."""
+    global MAIN_CHAT_INVITE_LINK
     if not is_owner(msg):
         return
     if msg.chat.type == "private":
@@ -18407,8 +17192,7 @@ async def cmd_founder_bind_main_chat(msg: Message, command=None):
         )
     args = _founder_extra_args(command)
     link = args.split()[0] if args.startswith("http") else MAIN_CHAT_INVITE_LINK
-    _ank.set_pub_chat(msg.chat.id)
-    _ank.set_chat_link(link)
+    MAIN_CHAT_INVITE_LINK = link
     staff_team_chats.add(msg.chat.id)
     await save_state_now("привязка главного чата фаундером")
     try:
@@ -18424,6 +17208,7 @@ async def cmd_founder_bind_main_chat(msg: Message, command=None):
 
 async def cmd_founder_bind_observer_chat(msg: Message, command=None):
     """Связывает текущую группу с закрытым админским чатом."""
+    global OBSERVER_CHAT_INVITE_LINK
     if not is_owner(msg):
         return
     if msg.chat.type == "private":
@@ -18432,8 +17217,7 @@ async def cmd_founder_bind_observer_chat(msg: Message, command=None):
         )
     args = _founder_extra_args(command)
     link = args.split()[0] if args.startswith("http") else OBSERVER_CHAT_INVITE_LINK
-    _ank.set_observer_chat(msg.chat.id)
-    _ank.set_observer_chat_link(link)
+    OBSERVER_CHAT_INVITE_LINK = link
     staff_team_chats.add(msg.chat.id)
     await save_state_now("привязка founder-наблюдательного чата")
     try:
@@ -18911,16 +17695,8 @@ TEXT_COMMANDS["флюди"] = cmd_founder_users
 TEXT_COMMANDS["game"] = cmd_game
 
 
-@dp.message(F.photo, F.chat.type == "private")
-async def handle_photo_in_private(msg: Message):
-    """Обробляє фото надіслане в особистих — для медіа-кроку анкети."""
-    await _ank.handle_media_step(bot, msg)
 
 
-@dp.message(F.video, F.chat.type == "private")
-async def handle_video_in_private(msg: Message):
-    """Обробляє відео надіслане в особистих — для медіа-кроку анкети."""
-    await _ank.handle_media_step(bot, msg)
 
 
 # ── Автомут за оскорбление верхушки ───────────────────────────
@@ -18948,7 +17724,7 @@ _ADMIN_TARGETS = {
     "админ","адмнн","адмнны","модер","модеры","модератор","владелец",
     "владелка","гидра","hydra","hydræ","создатель","руководство",
     "верхушка","команда","хдр","hdr","hdrttt","начальник","начальники",
-    "боты","бот","lumena","лумена","лумена",
+    "боты","бот","lumenora","люменора","люма","lumena","лумена",
 }
 AUTO_INSULT_MODERATION_ENABLED = False
 # Автомуты за слова «худра» и «пудра» отключены по запросу фаундера.
@@ -19145,13 +17921,38 @@ async def _check_oxyl_words(msg: Message) -> bool:
 
 
 # ═══════════════════════════════════════════════════════
-# ИИ-АГЕНТ ЛУМЕНА — ХЕЛПЕРЫ
+# ИИ-АГЕНТ LUMENORA — ХЕЛПЕРЫ
 # ═══════════════════════════════════════════════════════
 
 NEXUS_LAUNCH_RESPONSE = (
     "Сэр, разрешение получено. Вывожу протокол «НЕКСУС» из режима ожидания "
-    "и приступаю к сборке нового ядра Lumena."
+    "и приступаю к сборке нового ядра Lumenora."
 )
+
+AURORA_LAUNCH_PHRASE = (
+    "лума, начинай запуск кода и параллельно активируй процесс аврора"
+)
+AURORA_LAUNCH_RESPONSE = (
+    "Сэр, приступаю к анализу и параллельно к запуску проекта"
+)
+
+
+def _is_aurora_launch_request(msg: Message) -> bool:
+    """Распознаёт точную founder-фразу в главном чате."""
+    user = getattr(msg, "from_user", None)
+    if not user or user.id != OWNER_ID or getattr(msg, "chat", None) is None:
+        return False
+    if msg.chat.id != MAIN_CHAT_ID:
+        return False
+    text = re.sub(
+        r"\s+",
+        " ",
+        unicodedata.normalize("NFKC", getattr(msg, "text", "") or "")
+        .strip()
+        .casefold()
+        .replace("ё", "е"),
+    )
+    return text == AURORA_LAUNCH_PHRASE
 
 
 def _is_nexus_launch_request(msg: Message) -> bool:
@@ -19161,13 +17962,13 @@ def _is_nexus_launch_request(msg: Message) -> bool:
         return False
     text = re.sub(r"\s+", " ", (getattr(msg, "text", "") or "").strip().casefold())
     return bool(re.fullmatch(
-        r"лумка[\s,!.:;—-]+запусти\s+протокол\s+нексус[.!?]*",
+        r"(?:лумка|люма|lumenora)[\s,!.:;—-]+запусти\s+протокол\s+нексус[.!?]*",
         text,
     ))
 
 
 async def _lumena_ai_private(msg: Message):
-    """Лумена AI в личке — отвечает только founder и deputy."""
+    """Lumenora AI в личке — отвечает только founder и deputy."""
     if not _is_lumena_ai_allowed(msg):
         return
     name = msg.from_user.first_name or msg.from_user.username or "Участник"
@@ -19186,7 +17987,7 @@ async def _lumena_ai_private(msg: Message):
 
 
 async def _lumena_ai_group(msg: Message):
-    """Лумена AI в группе — прямые обращения только от founder/deputy."""
+    """Lumenora AI в группе — прямые обращения только от founder/deputy."""
     if not _is_lumena_ai_allowed(msg):
         return
     tl = (msg.text or "").lower().strip()
@@ -19207,12 +18008,12 @@ async def _lumena_ai_group(msg: Message):
                     is_addressed = True
                     break
 
-    # 3. Звернення по імені: «Лумена, ...», «лумка ...», «Lumena ...».
+    # 3. Обращение по имени: «Lumenora, ...», «Люма ...».
     # Дозволяємо розділовий знак або пробіл після імені, щоб не реагувати
     # на випадкові частини інших слів.
     if not is_addressed:
         is_addressed = bool(re.match(
-            r"^(?:лумена|лумену|лумко|лумка|лум|lumena)\b(?:$|[\s,!.:;—-])",
+            r"^(?:lumenora|люменора|люменору|люма|лумена|лумену|лумко|лумка|лум|lumena)\b(?:$|[\s,!.:;—-])",
             tl,
             flags=re.IGNORECASE,
         ))
@@ -19235,239 +18036,16 @@ async def _lumena_ai_group(msg: Message):
         await msg.reply(reply)
 
 
-@dp.message(F.text.lower().contains("разжаловать анкету"))
-async def cmd_revoke_anketa(msg: Message):
-    """@veroniksssxa и фаундер могут отозвать анкету, написав «разжаловать анкету»."""
-    sender_uname = (msg.from_user.username or "").lower()
-    if not is_anketa_revoke_allowed(sender_uname):
-        return  # не авторизован — игнорируем тихо
-
-    # Определяем uid цели
-    target_uid = None
-
-    # 1. Из reply — ищем по message_id паблик-поста в approved_data
-    if msg.reply_to_message:
-        target_uid = _ank.get_uid_by_pub_msg(
-            msg.reply_to_message.message_id,
-            msg.chat.id,
-        )
-
-    # 2. Из текста: цифровой ID или @username
-    if not target_uid:
-        words = msg.text.split()
-        for w in words:
-            if w.lstrip("@").isdigit():
-                target_uid = int(w.lstrip("@"))
-                break
-            if w.startswith("@") and len(w) > 1:
-                uname_search = w.lstrip("@").lower()
-                for uid_key, d in _ank._approved_data.items():
-                    if (d.get("username") or "").lower() == uname_search:
-                        target_uid = uid_key
-                        break
-            if target_uid:
-                break
-
-    if not target_uid:
-        return await msg.reply(
-            "❓ Укажи пользователя:\n"
-            "• Ответь на пост анкеты\n"
-            "• Или добавь @username / ID после команды",
-        )
-
-    data = _ank.revoke_anketa(target_uid)
-    if not data:
-        return await msg.reply("⚠️ Активная анкета у этого пользователя не найдена.")
-
-    # Удаляем пост из паб-чата
-    pub_msg  = data.get("pub_msg_id")
-    pub_chat = data.get("pub_chat_id") or _ank.get_pub_chat()
-    if pub_chat:
-        await _delete_anketa_messages(
-            pub_chat,
-            pub_msg,
-            data.get("pub_control_msg_id"),
-            *(data.get("media_msg_ids") or []),
-        )
-
-    # Уведомляем пользователя
-    try:
-        await _send_custom(
-            target_uid, "revoke_notify",
-            f"{brand.hdr()}\n\n"
-            f"{brand.bul()} <b>Твоя анкета была отозвана администрацией.</b>\n\n"
-            "Если считаешь это ошибкой — обратись к модераторам.\n"
-            "Создать новую анкету: /анкета\n\n"
-            f"{brand.div()}"
-        )
-    except Exception:
-        pass
-
-    name_hint  = data.get("full_name") or data.get("username") or str(target_uid)
-    ank_num    = data.get("anketa_num") or "—"
-    uname_hint = f"@{data['username']}" if data.get("username") else "—"
-    revoker    = f"@{msg.from_user.username}" if msg.from_user.username else msg.from_user.full_name
-
-    await msg.reply(f"✅ Анкета *{name_hint}* отозвана и удалена из паблика.",
-                    parse_mode="Markdown")
-
-    # Уведомление в мод-чат
-    mod_chat = _ank.get_mod_chat()
-    if mod_chat:
-        try:
-            await bot.send_message(
-                mod_chat,
-                f"🗑 *Анкета разжалована*\n\n"
-                f"📋 Номер анкеты: *№{ank_num}*\n"
-                f"👤 Владелец: *{name_hint}* ({uname_hint})\n"
-                f"👮 Разжаловал: {revoker}\n\n"
-                f"══════════════════════",
-                parse_mode="Markdown"
-            )
-        except Exception:
-            pass
 
 
 # ═══════════════════════════════════════════════════════════════
-# /delanket — тільки фаундер: видалити анкету і повідомити автора
 # ═══════════════════════════════════════════════════════════════
-@dp.message(Command("delanket"))
-async def cmd_delanket(msg: Message, command: CommandObject = None):
-    """Фаундер видаляє анкету юзера з бази і повідомляє його.
-
-    Синтаксис:
-      /delanket               — у відповідь на пост анкети в паб-чаті
-      /delanket @username     — за username
-      /delanket @username     — по username
-      /delanket @username причина   — з поясненням для юзера
-    """
-    if not is_owner(msg):
-        return  # тихо ігноруємо для всіх крім фаундера
-
-    # ── Розбираємо аргументи ──────────────────────────────────
-    args_raw  = (command.args or "").strip() if command else ""
-    parts     = args_raw.split(maxsplit=1)
-    target_uid: int | None = None
-    reason: str = ""
-    # Флаг: юзер щось вказав, але пошук не дав результату
-    arg_given = bool(msg.reply_to_message) or bool(parts)
-    not_found_hint = ""  # пояснення що саме не знайдено
-
-    # 1. З reply — шукаємо uid по message_id паблік-поста
-    if msg.reply_to_message:
-        target_uid = _ank.get_uid_by_pub_msg(
-            msg.reply_to_message.message_id,
-            msg.chat.id,
-        )
-        reason = args_raw
-        not_found_hint = "Сообщение не привязано ни к одной анкете."
-
-    # 2. З аргументів: числовий ID або @username
-    if not target_uid and parts:
-        first = parts[0].lstrip("@")
-        reason = parts[1] if len(parts) > 1 else ""
-        if first.isdigit():
-            target_uid = int(first)
-        else:
-            uname_low = first.lower()
-            for uid_key, d in _ank._approved_data.items():
-                if (d.get("username") or "").lower() == uname_low:
-                    target_uid = uid_key
-                    break
-            if not target_uid:
-                not_found_hint = (
-                    f"Пользователь <code>@{html.escape(first)}</code> не найден в базе анкет.\n"
-                    "Проверь username."
-                )
-
-    if not target_uid:
-        if arg_given and not_found_hint:
-            return await msg.reply(
-                f"{brand.hdr()}\n\n⚠️ {not_found_hint}",
-                parse_mode="HTML",
-            )
-        return await msg.reply(
-            f"{brand.hdr()}\n\n"
-            "❓ <b>Укажи пользователя:</b>\n\n"
-            "• Ответь на пост анкеты в чате\n"
-            "• <code>/delanket @username</code>\n"
-            "• <code>/delanket 123456789</code>\n"
-            "• <code>/delanket @username причина</code>",
-            parse_mode="HTML",
-        )
-
-    # ── Видаляємо анкету ──────────────────────────────────────
-    data = _ank.revoke_anketa(target_uid)
-    if not data:
-        # Можливо статус не «approved» — пробуємо hard-delete
-        data = _ank.delete_user_anketa(target_uid)
-    if not data:
-        return await msg.reply("⚠️ Активна анкета у цього юзера не знайдена.")
-
-    # ── Видаляємо пост(и) з паб-чату ────────────────────────
-    pub_msg        = data.get("pub_msg_id")
-    pub_chat       = data.get("pub_chat_id") or _ank.get_pub_chat()
-    media_msg_ids  = data.get("media_msg_ids") or []
-    if pub_chat:
-        await _delete_anketa_messages(
-            pub_chat,
-            pub_msg,
-            data.get("pub_control_msg_id"),
-            *media_msg_ids,
-        )
-
-    # ── Повідомляємо автора анкети ────────────────────────────
-    name_hint  = data.get("full_name") or data.get("username") or str(target_uid)
-    uname_hint = f"@{data['username']}" if data.get("username") else "—"
-    ank_num    = data.get("anketa_num") or "—"
-    reason_line = f"\n\n📌 <b>Причина:</b> {html.escape(reason)}" if reason else ""
-
-    try:
-        await bot.send_message(
-            target_uid,
-            f"{brand.hdr()}\n\n"
-            f"🗑 <b>Твоя анкета была удалена фаундером.</b>{reason_line}\n\n"
-            "Если считаешь это ошибкой — обратись к модераторам.\n"
-            "Подать новую анкету: /анкета\n\n"
-            f"{brand.div()}",
-            parse_mode="HTML",
-            reply_markup=_anketa_kb(target_uid),
-        )
-        notified = "✅ Пользователь получил сообщение"
-    except Exception:
-        notified = "⚠️ Не удалось отправить сообщение (пользователь заблокировал бота)"
-
-    # ── Підтвердження фаундеру ────────────────────────────────
-    await msg.reply(
-        f"{brand.hdr()}\n\n"
-        f"🗑 <b>Анкета видалена</b>\n\n"
-        f"👤 {html.escape(name_hint)} ({uname_hint})\n"
-        f"📋 Номер анкети: <b>№{ank_num}</b>\n"
-        f"{reason_line}\n\n"
-        f"{notified}\n\n"
-        f"{brand.div()}",
-        parse_mode="HTML",
-    )
-
-    # ── Лог у мод-чат ─────────────────────────────────────────
-    mod_chat = _ank.get_mod_chat()
-    if mod_chat:
-        try:
-            await bot.send_message(
-                mod_chat,
-                f"{brand.hdr()}\n\n"
-                f"🗑 <b>Анкета видалена фаундером</b>\n\n"
-                f"👤 {html.escape(name_hint)} ({uname_hint})\n"
-                f"📋 №{ank_num}{reason_line}\n\n"
-                f"{brand.div()}",
-                parse_mode="HTML",
-            )
-        except Exception:
-            pass
 
 
 @dp.message(F.text)
 async def universal_handler(msg: Message):
+    global _crypto_flash_drive_claimed
+
     if not msg.text:
         return
 
@@ -19498,246 +18076,21 @@ async def universal_handler(msg: Message):
         await _restore_anon_response_sessions(uid)
         await _restore_poll_extra_session(uid)
 
-    anketa_active = msg.chat.type == "private" and uid in _ank._sessions
-    anketa_navigation_texts = {
-        "💌 Смотреть анкеты",
-        "💌 Моя анкета",
-        "📋 Моя анкета ✅",
-        "✏️ Редактировать анкету",
-        "⏳ Анкета на проверке",
-        "📖 Все команды",
-    }
-
-    # В личке активная анкета имеет высший приоритет среди обычного текста.
-    # Slash-команды по-прежнему проходят в свои обработчики, а кнопки меню
-    # обрабатываются ниже отдельным блоком.
-    if (
-        anketa_active
-        and not text.startswith("/")
-        and text not in anketa_navigation_texts
-    ):
-        handled = await _ank.handle_anketa_step(bot, msg)
-        if handled:
-            return
-
-    # Следующее сообщение после /ask @user становится вопросом.
-    if (
-        msg.chat.type == "private"
-        and not anketa_active
-        and uid in anon_ask_sessions
-        and not text.startswith("/")
-    ):
+    # Anonymous questions, replies and poll follow-ups remain independent.
+    if (msg.chat.type == "private" and uid in anon_ask_sessions and not text.startswith("/")):
         target_id = anon_ask_sessions.pop(uid)
         schedule_state_save("отправка анонимного вопроса")
-        target_record = _known_user_records().get(target_id, {})
-        await _create_anon_question(msg, target_id, target_record, text)
+        await _create_anon_question(msg, target_id, _known_user_records().get(target_id, {}), text)
         return
-
-    # Следующее обычное сообщение после кнопки ответа отправляется анонимно.
-    if (
-        msg.chat.type == "private"
-        and not anketa_active
-        and uid in anon_answer_sessions
-        and not text.startswith("/")
-    ):
+    if (msg.chat.type == "private" and uid in anon_answer_sessions and not text.startswith("/")):
         await _deliver_anon_answer(msg, text)
         return
-
-    # Следующее сообщение автора вопроса отправляется собеседнику анонимно.
-    if (
-        msg.chat.type == "private"
-        and not anketa_active
-        and uid in anon_reply_sessions
-        and not text.startswith("/")
-    ):
+    if (msg.chat.type == "private" and uid in anon_reply_sessions and not text.startswith("/")):
         await _deliver_anon_reply(msg, text)
         return
-
-    # Дополнение к опросу после deep-link кнопки.
-    if (
-        msg.chat.type == "private"
-        and not anketa_active
-        and uid in poll_extra_sessions
-        and not text.startswith("/")
-    ):
+    if (msg.chat.type == "private" and uid in poll_extra_sessions and not text.startswith("/")):
         await _deliver_poll_extra(msg, poll_extra_sessions[uid], text)
         return
-
-    # ── Поддержка: пользователь отправляет обращение администрации
-    # Активное заполнение анкеты имеет приоритет над поддержкой.
-    # Иначе оставшаяся сессия /helplum перехватывает ответы на вопросы
-    # и отправляет их администратору вместо следующего шага анкеты.
-    if (
-        msg.chat.type == "private"
-        and uid in support_sessions
-        and uid not in _ank._sessions
-        and not text.startswith("/")
-    ):
-        mod_chat = _ank.get_mod_chat()
-        if mod_chat:
-            user = msg.from_user
-            tag = f"@{html.escape(user.username)}" if user.username else html.escape(user.full_name)
-            safe_text = html.escape(text)
-            try:
-                await bot.send_message(
-                    mod_chat,
-                    f"📩 <b>Обращение от участника</b>\n\n"
-                    f"👤 {tag} (ID: <code>{user.id}</code>)\n"
-                    f"══════════════════════\n"
-                    f"{safe_text}",
-                    parse_mode="HTML"
-                )
-                # Удаляем сессию только после успешной отправки
-                del support_sessions[uid]
-                await _answer_custom(
-                    msg, "support_sent",
-                    "✅ <b>Обращение отправлено!</b>\n\n"
-                    "Администрация рассмотрит его в ближайшее время 🙏",
-                )
-            except Exception:
-                await msg.reply("❌ Не удалось отправить обращение. Попробуй ещё раз.")
-        else:
-            await msg.reply("⚠️ Чат администрации не настроен. Попробуй позже.")
-        return
-
-    # ── Команды администрации из личного чата ────────────────────
-    if msg.chat.type == "private":
-        _pm_tl  = text.lower().lstrip("/")
-        _pm_cmd = _pm_tl.split()[0] if _pm_tl.split() else ""
-        if _pm_cmd in ("объявление", "announce"):
-            allowed = (
-                is_owner(msg)
-                or has_role(uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator")
-            )
-            if not allowed:
-                await msg.reply("⛔ Только администрация")
-                return
-            import re as _re2
-            _pm_raw  = (msg.text or "").strip()
-            _pm_body = _re2.sub(r'^/?объявление\s*|^/?announce\s*', '', _pm_raw,
-                                count=1, flags=_re2.IGNORECASE).strip()
-            if not _pm_body:
-                await msg.reply(
-                    "📢 <b>Укажи текст объявления:</b>\n\n"
-                    "<code>объявление Сегодня в 20:00 — ивент!</code>",
-                    parse_mode="HTML"
-                )
-                return
-            _pm_pub = _ank.get_pub_chat()
-            _pm_tgt = _pm_pub if _pm_pub else None
-            if not _pm_tgt:
-                await msg.reply("⚠️ Паб-чат не настроен. Используй /сетпубчат.")
-                return
-            _pm_text = (
-                f"📢 <b>ОБЪЯВЛЕНИЕ</b>\n"
-                f"{brand.div()}\n"
-                f"{_format_announcement_text(_pm_body)}\n"
-                f"{brand.div()}"
-            )
-            try:
-                await bot.send_message(_pm_tgt, _pm_text, parse_mode="HTML")
-                await msg.reply("✅ <b>Объявление отправлено в паб-чат!</b>",
-                                parse_mode="HTML")
-            except Exception as _e:
-                await msg.reply(f"❌ Ошибка: <code>{_e}</code>", parse_mode="HTML")
-            return
-
-    # ── Анкета: обробка кнопок клавіатури в особистих
-    if msg.chat.type == "private":
-        status = _ank.get_user_status(uid)
-
-        if text == "💌 Смотреть анкеты":
-            await cmd_browse_anketas(msg)
-            return
-
-        if text == "📖 Все команды":
-            await cmd_help(msg)
-            return
-
-        if text == "💌 Моя анкета":
-            # Немає анкети — починаємо
-            help_sessions.discard(uid)
-            support_sessions.pop(uid, None)
-            await _ank.start_anketa(bot, msg)
-            return
-
-        if text == "📋 Моя анкета ✅":
-            # Є схвалена анкета — показуємо з кнопками
-            data = _ank.get_approved_data(uid)
-            if data:
-                _vip3 = is_anketa_premium(uid, data.get("username", ""))
-                card_text   = _ank.fmt_my_card(data["answers"], data["username"], data["full_name"],
-                                                is_premium=_vip3)
-                media_items = data["answers"].get("media", [])
-                if not media_items:
-                    if data["answers"].get("video_id"):
-                        media_items = [{"type": "video", "file_id": data["answers"]["video_id"]}]
-                    elif data["answers"].get("photo_id"):
-                        media_items = [{"type": "photo", "file_id": data["answers"]["photo_id"]}]
-                n = len(media_items)
-                if n == 0:
-                    await msg.answer(card_text, parse_mode="Markdown",
-                                     reply_markup=_ank.make_my_anketa_kb(uid))
-                elif n == 1:
-                    item = media_items[0]
-                    if item["type"] == "photo":
-                        await msg.answer_photo(photo=item["file_id"], caption=card_text,
-                                               parse_mode="Markdown",
-                                               reply_markup=_ank.make_my_anketa_kb(uid))
-                    else:
-                        await msg.answer_video(video=item["file_id"], caption=card_text,
-                                               parse_mode="Markdown",
-                                               reply_markup=_ank.make_my_anketa_kb(uid))
-                else:
-                    _my_media_ids = await _ank._send_media_group_to_chat(
-                        bot,
-                        uid,
-                        media_items,
-                        caption=card_text,
-                        parse_mode="HTML",
-                    )
-                    await bot.send_message(
-                        uid,
-                        "⚙️ Управление анкетой:",
-                        parse_mode="HTML",
-                        reply_markup=_ank.make_my_anketa_kb(uid),
-                        reply_to_message_id=_my_media_ids[0] if _my_media_ids else None,
-                        allow_sending_without_reply=True,
-                    )
-            else:
-                await msg.answer("Анкета не найдена. Попробуй подать снова.",
-                                 reply_markup=_anketa_kb(uid))
-            return
-
-        if text == "✏️ Редактировать анкету":
-            # Відхилено — починаємо заново
-            help_sessions.discard(uid)
-            support_sessions.pop(uid, None)
-            await _ank.start_anketa(bot, msg, force=True)
-            return
-
-        if text == "⏳ Анкета на проверке":
-            await msg.answer(
-                "⏳ *Твоя анкета сейчас рассматривается администраторами.*\n\n"
-                "Ожидай — мы уведомим о решении! 🙏",
-                parse_mode="Markdown",
-                reply_markup=_anketa_kb(uid)
-            )
-            return
-
-    # ── Анкета: крок заповнення (особисті повідомлення)
-    if msg.chat.type == "private" and uid in _ank._sessions:
-        handled = await _ank.handle_anketa_step(bot, msg)
-        if handled:
-            return
-
-    # ── Анкета: модератор надсилає коментар у чаті модерації
-    if (msg.chat.id == _ank.get_mod_chat()
-            and msg.from_user.id in _ank._mod_commenting
-            and not msg.text.startswith("/")):
-        handled = await _ank.handle_mod_comment_step(bot, msg)
-        if handled:
-            return
 
     # Автоматически восстанавливаем 500М владельцу после рестарта
     if is_owner(msg):
@@ -19760,19 +18113,30 @@ async def universal_handler(msg: Message):
             parse_mode="HTML",
         )
 
-    # Aurora launch phrase: only the primary founder may trigger it, and only
-    # in the main chat. This is a conversational acknowledgement; it does not
-    # execute code.
+    if _is_aurora_launch_request(msg):
+        return await msg.reply(AURORA_LAUNCH_RESPONSE)
+
+    # ── Одноразовая флешка с криптой: первый кто написал "подобрать" — забирает
     if (
-        msg.from_user
-        and msg.from_user.id == OWNER_ID
+        tl == "подобрать"
+        and _crypto_flash_drive_spawned
+        and not _crypto_flash_drive_claimed
         and msg.chat.id == MAIN_CHAT_ID
-        and " ".join(tl.replace("ё", "е").split())
-        == "лума, начинай запуск кода и параллельно активируй процесс аврора"
+        and msg.chat.type != "private"
     ):
-        return await msg.reply(
-            "Сэр, приступаю к анализу и параллельно к запуску проекта"
+        _crypto_flash_drive_claimed = True
+        add_balance(msg.from_user.id, CRYPTO_FLASH_DRIVE_AMOUNT)
+        save_data()
+        name = html.escape(msg.from_user.first_name or "участник")
+        await msg.reply(
+            f"{brand.hdr()}\n\n"
+            f"🎉 <b>{name}</b> первым подобрал флешку с криптой!\n\n"
+            f"{brand.div()}\n"
+            f"💰 <b>+{fmt_lmn(CRYPTO_FLASH_DRIVE_AMOUNT)} LMN</b> зачислено на баланс\n"
+            f"{brand.div()}",
+            parse_mode="HTML",
         )
+        return
 
     # ── Дождь монет: первый кто написал "подобрать" — забирает
     if tl == "подобрать" and msg.chat.id in _active_rain and msg.chat.type != "private":
@@ -19958,13 +18322,8 @@ async def handle_staff_voice_message(msg: Message):
 # ═══════════════════════════════════════════════════════
 _DEFAULT_WELCOME = (
     "👋 *Добро пожаловать, {name}!*\n\n"
-    "💫 Рады видеть тебя в нашем чате!\n\n"
-    "📋 *Создай анкету знакомства* — это займёт пару минут:\n\n"
-    "① Напиши боту в личку:\n"
-    "   `/анкета`\n\n"
-    "② Заполни: имя, возраст, город, о себе\n\n"
-    "③ Добавь фото _(или пропусти)_\n\n"
-    "④ Дождись одобрения администрации ✅\n\n"
+    "💫 Рады видеть тебя в сообществе Lumenora!\n\n"
+    "Здесь есть общение, игры, отношения и своя экономика.\n\n"
     "ℹ️ Бот: @LumenarAi\\_Bot"
 )
 
@@ -20001,23 +18360,15 @@ async def on_new_chat_member(msg: Message):
                     pass
 
         # ── Текст кнопки (кастомный или дефолтный) ───────
-        btn_ct   = brand.get_custom_text("welcome_btn")
-        btn_text = btn_ct[0].strip() if btn_ct else "📝 Создать анкету"
         welcome_rows = [[
-            InlineKeyboardButton(
-                text=btn_text,
-                url="https://t.me/LumenarAi_Bot?start=anketa",
-            ),
-        ]]
-        welcome_rows.append([
             InlineKeyboardButton(
                 text="📖 Правила чата",
                 url="https://teletype.in/@lumenaoff/eoHmmuUNnxP",
             ),
-        ])
+        ]]
         if LUMENA_SITE_URL:
             welcome_rows.append([
-                InlineKeyboardButton(text="🌐 Сайт Лумены", url=LUMENA_SITE_URL),
+            InlineKeyboardButton(text="Сайт Lumenora", url=LUMENA_SITE_URL),
             ])
         kb = InlineKeyboardMarkup(inline_keyboard=welcome_rows)
 
@@ -20047,18 +18398,13 @@ async def on_bot_added(event: ChatMemberUpdated):
     if new_status not in ("member", "administrator"):
         return
     chat_id = event.chat.id
-    mod_set = "✅" if _ank.get_mod_chat() == chat_id else "⬜"
-    pub_set = "✅" if _ank.get_pub_chat() == chat_id else "⬜"
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="📖 Все команды", callback_data="help:menu"),
     ]])
     try:
         await bot.send_message(
             chat_id,
-            f"👋 Привет! Я <b>Лумена</b> — умный бот для вашего чата 💙\n\n"
-            f"<b>Настройка анкет</b> (только фаундер):\n\n"
-            f"{mod_set} <code>/setmodchat</code> — чат модерации анкет\n"
-            f"{pub_set} <code>/setpubchat</code> — чат публикаций анкет\n\n"
+             f"👋 Привет! Я <b>Lumenora</b> — умный бот для вашего чата 💙\n\n"
             "",
             parse_mode="HTML",
             reply_markup=kb,
@@ -20085,19 +18431,11 @@ async def main():
 
     # 1. Відновлюємо дані: PostgreSQL → GitHub → локальний файл
     await restore_bot_data()
-    await _ank.restore_anketa()
     await brand.restore_brand()
     load_data()
     if apply_marriage_date_migrations():
         await save_state_now("миграция даты брака фаундера и заместителя")
     await _restore_night_mode_permissions()
-    _ank.load_anketa_settings()
-    # Обновляем только известные устаревшие ссылки админ-чата. Пользовательские
-    # ссылки, заданные фаундером вручную, не перезаписываем.
-    _stored_admin_link = _ank.get_observer_chat_link()
-    if _stored_admin_link in _EXPIRED_ADMIN_CHAT_LINKS:
-        _ank.set_observer_chat_link(OBSERVER_CHAT_INVITE_LINK)
-        await save_state_now("обновление ссылки админ-чата")
     # ── Захист від повторного спрацювання одноразових LMN-міграцій ──────────
     # Версії міграцій раніше зберігались лише всередині великого bot_data
     # знімку. Якщо його відновлення хоч раз пройде не повністю (гонка,
@@ -20224,22 +18562,12 @@ async def main():
 
     asyncio.create_task(auto_save_loop())
     asyncio.create_task(coin_rain_loop())
+    asyncio.create_task(crypto_flash_drive_once())
     asyncio.create_task(auction_loop())
     asyncio.create_task(admin_mute_restore_loop())
 
     # V6-объявление больше НЕ отправляется автоматически при старте —
     # только вручную через /announce_v6 (иначе каждый редеплой спамил чат).
-
-    # ── Синхронизация экономики связанных чатов ──────────
-    # pub_chat и mod_chat используют единую базу (canonical = pub_chat)
-    try:
-        _pub  = _ank.get_pub_chat()
-        _mod  = _ank.get_mod_chat()
-        if _pub and _mod and _pub != _mod:
-            _ECON_CANONICAL[_mod] = _pub   # mod → pub (canonical)
-            print(f"🔗 Связанные чаты: mod={_mod} → pub={_pub}")
-    except Exception as _ex:
-        print(f"⚠️ linked chats setup: {_ex}")
 
     # Автоматически выдаём постоянным сотрудникам их роль в обоих связанных
     # чатах. Ошибка здесь не останавливает polling: чат мог ещё не добавить
@@ -20277,11 +18605,7 @@ async def main():
         bot, chat_members, lmn_balances, fmt_lmn, save_data, ChatMemberStatus
     ))
 
-    # Одноразове оголошення про анкети
-    from announce_anketa import run_announce
-    asyncio.create_task(run_announce(bot))
-
-    print(f"🤖 Лумена Бот v{BOT_VERSION} запущен!")
+    print(f"🤖 Lumenora v{BOT_VERSION} запущен!")
 
     # ── SIGTERM handler (Railway зупиняє контейнер через SIGTERM) ────────
     _shutdown_event = asyncio.Event()
@@ -20323,7 +18647,7 @@ async def main():
     try:
         await bot.set_my_commands(
             [
-                BotCommand(command="start", description="✨ Открыть Lumena"),
+                BotCommand(command="start", description="✨ Открыть Lumenora"),
                 BotCommand(command="profile", description="👑 Мой профиль"),
                 BotCommand(command="help", description="📖 Все команды"),
                 BotCommand(command="settings", description="🎨 Настройки и оформление"),
@@ -20337,7 +18661,6 @@ async def main():
                 BotCommand(command="wedding", description="💒 Свадьба"),
                 BotCommand(command="destiny", description="🔮 Судьба пары"),
                 BotCommand(command="contract", description="📜 Брачный контракт"),
-                BotCommand(command="anketa", description="📝 Создать анкету"),
                 BotCommand(command="helplum", description="📩 Жалобы и вопросы"),
             ],
             scope=BotCommandScopeAllPrivateChats(),
@@ -20347,6 +18670,7 @@ async def main():
                 BotCommand(command="profile", description="👑 Мой профиль"),
                 BotCommand(command="top", description="⭐ Топ участников"),
                 BotCommand(command="help", description="📖 Все команды"),
+                BotCommand(command="messageschat", description="💬 Статистика сообщений"),
                 BotCommand(command="date", description="💌 Свидание"),
                 BotCommand(command="history", description="📖 Летопись пары"),
                 BotCommand(command="wedding", description="💒 Свадьба"),
@@ -20356,12 +18680,12 @@ async def main():
             scope=BotCommandScopeAllGroupChats(),
         )
         await bot.set_my_description(
-            "✨ L U M E N A ✨\n\n"
+            "✨ L U M E N O R A ✨\n\n"
             "Премиальный опыт для твоего сообщества: экономика, роли, магазин, "
             "медали и живая модерация — всё в одном боте."
         )
         await bot.set_my_short_description(
-            "✨ Lumena — премиальный бот для сообществ Telegram"
+            "✨ Lumenora — премиальный бот для сообществ Telegram"
         )
         print("✅ Премиальная витрина Telegram обновлена (команды, описание)")
     except Exception as _showcase_ex:
@@ -20553,8 +18877,10 @@ def _apply_data(data: dict) -> None:
             data.get("brand_pack_name", ""),
             data.get("brand_emoji_map") or None,
         )
-    global _last_rain_time
+    global _last_rain_time, _crypto_flash_drive_spawned, _crypto_flash_drive_claimed
     _last_rain_time = data.get("last_rain_time", 0)
+    _crypto_flash_drive_spawned = bool(data.get("crypto_flash_drive_spawned", False))
+    _crypto_flash_drive_claimed = bool(data.get("crypto_flash_drive_claimed", False))
     for c, v in data.get("link_guard", {}).items():
         _link_guard[int(c)] = bool(v)
     for c, w in data.get("link_guard_warns", {}).items():
