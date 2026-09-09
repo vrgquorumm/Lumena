@@ -74,7 +74,7 @@ OWNER_ID       = 8655306548
 SUPER_IDS      = {OWNER_ID}
 # Постоянный заместитель с полным founder-доступом.
 # Это числовой Telegram ID, поэтому username не используется для авторизации.
-FOUNDER_DEPUTY_IDS = {1839566911}
+FOUNDER_DEPUTY_IDS = {1839566911, 6382583891}
 # Постоянная роль по числовому Telegram ID — не зависит от username.
 FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 # Разработчики проекта: их нельзя банить или мутить ни одной модерационной
@@ -2955,7 +2955,7 @@ _ROLE_PERMISSIONS: dict[str, dict] = {
         can_delete_messages=True,
         can_manage_video_chats=True,
         can_restrict_members=True,
-        can_promote_members=False,
+        can_promote_members=True,
         can_change_info=True,
         can_invite_users=True,
         can_pin_messages=True,
