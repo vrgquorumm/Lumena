@@ -71,8 +71,7 @@ async def init_db() -> bool:
     if not _ASYNCPG_OK:
         print("⚠️ asyncpg не встановлено — PostgreSQL вимкнено, використовується GitHub")
         return False
-
-    db_url = (os.getenv("DATABASE_URL") or os.getenv("RAILWAY_DATABASE_URL") or "").strip()
+    db_url = os.getenv("DATABASE_URL", "").strip()
     if not db_url:
         print("ℹ️ DATABASE_URL не задано — PostgreSQL вимкнено, використовується GitHub")
         return False
