@@ -458,7 +458,7 @@ _FOUNDER_DEPUTY_ID = 1839566911
 FOUNDER_DEPUTY_MARRIAGE_PAIR = (
     f"{min(OWNER_ID, _FOUNDER_DEPUTY_ID)}_{max(OWNER_ID, _FOUNDER_DEPUTY_ID)}"
 )
-FOUNDER_DEPUTY_MARRIAGE_DATE = "0100-08-25 BCE"
+FOUNDER_DEPUTY_MARRIAGE_DATE = "DURATION:300000000000:10"
 FOUNDER_DEPUTY_MARRIAGE_CHAT_IDS = {-1004292802981, -1004401287309}
 MARRIAGE_DATE_MIGRATION_VERSION = 4
 marriage_date_migration_version = 0
@@ -2414,6 +2414,13 @@ def _marriage_duration_from_value(
 ) -> str:
     """Считает срок и для обычной даты, и для даты до нашей эры."""
     raw = str(raw_value or "").strip()
+    if raw.upper().startswith("DURATION:"):
+        _, years_text, days_text = raw.split(":", 2)
+        years = int(years_text)
+        days = int(days_text)
+        return f"{years:,}".replace(",", " ") + " лет" + (
+            f" {days} дн." if days else ""
+        )
     if raw.upper().endswith(" BCE"):
         value = raw[:-4].strip()
         year_text, month_text, day_text = value.split("-", 2)
