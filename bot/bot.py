@@ -453,12 +453,12 @@ marriage_dates: dict[str, str] = {}  # "min_uid_max_uid" → ISO date свадь
 marriage_rpg_pairs: dict[str, dict] = {}
 marriage_wedding_sessions: dict[str, dict] = {}
 MARRIAGE_RPG_VERSION = 2
-# Одноразовая миграция брака фаундера и постоянного заместителя.
-_FOUNDER_DEPUTY_ID = next(iter(FOUNDER_DEPUTY_IDS))
+# Одноразовая миграция брака фаундера и @Not_persons.
+_FOUNDER_DEPUTY_ID = 1839566911
 FOUNDER_DEPUTY_MARRIAGE_PAIR = (
     f"{min(OWNER_ID, _FOUNDER_DEPUTY_ID)}_{max(OWNER_ID, _FOUNDER_DEPUTY_ID)}"
 )
-FOUNDER_DEPUTY_MARRIAGE_DATE = "2026-08-07"
+FOUNDER_DEPUTY_MARRIAGE_DATE = "0100-08-25 BCE"
 FOUNDER_DEPUTY_MARRIAGE_CHAT_IDS = {-1004292802981, -1004401287309}
 MARRIAGE_DATE_MIGRATION_VERSION = 4
 marriage_date_migration_version = 0
@@ -2408,6 +2408,34 @@ def _marriage_duration(start: date, end: date | None = None) -> str:
         parts.append(f"{days} дн.")
     return " ".join(parts)
 
+
+def _marriage_duration_from_value(
+    raw_value: str, end: date | None = None
+) -> str:
+    """Считает срок и для обычной даты, и для даты до нашей эры."""
+    raw = str(raw_value or "").strip()
+    if raw.upper().endswith(" BCE"):
+        value = raw[:-4].strip()
+        year_text, month_text, day_text = value.split("-", 2)
+        bce_year = int(year_text)
+        month = int(month_text)
+        day = int(day_text)
+        end = end or today_kyiv()
+        years = end.year + bce_year - 1
+        anniversary = date(end.year, month, day)
+        if anniversary > end:
+            years -= 1
+            anniversary = date(end.year - 1, month, day)
+        days = (end - anniversary).days
+        if years % 10 == 1 and years % 100 != 11:
+            year_word = "год"
+        elif years % 10 in (2, 3, 4) and years % 100 not in (12, 13, 14):
+            year_word = "года"
+        else:
+            year_word = "лет"
+        return f"{years} {year_word}" + (f" {days} дн." if days else "")
+    return _marriage_duration(date.fromisoformat(raw), end)
+
 def apply_marriage_date_migrations() -> bool:
     """Однократно восстанавливает брак founder-пары и его согласованную дату."""
     global marriage_date_migration_version
@@ -2423,7 +2451,7 @@ def apply_marriage_date_migrations() -> bool:
     return True
 
 def _marriage_days_str(uid1: int, uid2: int | None) -> str:
-    """Возвращает строку вида ' · 3 мес. 10 дн. вместе 💑'."""
+    """Возвращает срок брака в годах и днях."""
     if not uid2:
         return ""
     pair_key = f"{min(uid1, uid2)}_{max(uid1, uid2)}"
@@ -2431,7 +2459,7 @@ def _marriage_days_str(uid1: int, uid2: int | None) -> str:
         marriage_dates[pair_key] = today_kyiv().isoformat()
         schedule_state_save("инициализация даты брака")
     try:
-        duration = _marriage_duration(date.fromisoformat(marriage_dates[pair_key]))
+        duration = _marriage_duration_from_value(marriage_dates[pair_key])
         return f" · {duration} вместе 💑"
     except Exception:
         return ""
@@ -5881,8 +5909,7 @@ async def cmd_marriages(msg: Message):
                 marriage_dates[pair_key] = today_kyiv().isoformat()
                 schedule_state_save("инициализация даты брака")
             try:
-                wed = date.fromisoformat(marriage_dates[pair_key])
-                days_str = _marriage_duration(wed)
+                days_str = _marriage_duration_from_value(marriage_dates[pair_key])
             except Exception:
                 days_str = "—"
             _, rpg_record = _rpg_ensure_pair(msg.chat.id, u1, u2, n1, n2)
