@@ -85,7 +85,7 @@ PROTECTED_DEVELOPER_IDS = {8318351777}
 # Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
 REVOKED_FOUNDER_ACCESS_IDS: set[int] = {
     8663692155,
-    1839566911,  # @Not_persons — founder-deputy access revoked
+    1839566911,  # @Not_persons — founder-deputy access revoked; runtime guard
 }
 FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
