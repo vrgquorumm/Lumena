@@ -80,6 +80,13 @@ FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 # Разработчики проекта: их нельзя банить или мутить ни одной модерационной
 # командой, включая force-команды и автоматические санкции.
 PROTECTED_DEVELOPER_IDS = {8318351777}
+# Founder-equivalent пользователи также не могут быть замучены ни вручную,
+# ни автоматической модерацией.
+MUTE_PROTECTED_IDS = frozenset({
+    OWNER_ID,
+    *FOUNDER_DEPUTY_IDS,
+    *PROTECTED_DEVELOPER_IDS,
+})
 # ID, которым основной фаундер явно отозвал founder-equivalent доступ.
 # Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
 REVOKED_FOUNDER_ACCESS_IDS: set[int] = {
@@ -1526,6 +1533,19 @@ def get_role(uid: int) -> str | None:
     return ROLES.get(uid)
 
 
+def _is_mute_protected(uid: int) -> bool:
+    return int(uid) in MUTE_PROTECTED_IDS
+
+
+def _mute_protection_message(uid: int) -> str:
+    uid = int(uid)
+    if uid in FOUNDER_DEPUTY_IDS:
+        return "🛡️ Нельзя мутить заместителя фаундера."
+    if uid == OWNER_ID:
+        return "⛔ Нельзя замутить фаундера."
+    return "🛡️ Нельзя мутить защищённого пользователя."
+
+
 def _role_sync_chat_ids(current_chat_id: int | None = None) -> list[int]:
     """Уникальные чаты, где Telegram-права роли должны совпадать.
 
@@ -2604,6 +2624,8 @@ async def _mute_or_soft_mute(
     until: datetime,
 ) -> tuple[bool, bool, str]:
     """Мутит обычного участника или включает soft-mute для администратора."""
+    if _is_mute_protected(user_id):
+        return False, False, _mute_protection_message(user_id)
     try:
         member = await bot.get_chat_member(chat_id, user_id)
         if member.status == ChatMemberStatus.CREATOR:
@@ -3649,13 +3671,8 @@ async def cmd_mute(msg: Message, command: CommandObject):
         "<code>!мут 7д оскорбления</code>\n"
         "<code>!мут навсегда</code>",
         parse_mode="HTML")
-    if user.id == OWNER_ID:
-        return await msg.reply("⛔ Нельзя замутить фаундера")
-    if user.id in PROTECTED_DEVELOPER_IDS:
-        return await msg.reply(
-            "🛡️ Нельзя мутить разработчика.",
-            parse_mode="HTML",
-        )
+    if _is_mute_protected(user.id):
+        return await msg.reply(_mute_protection_message(user.id), parse_mode="HTML")
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя замутить себя")
     # Кастомные мутеры могут мутить только своих целей
@@ -3702,13 +3719,8 @@ async def cmd_mute1(msg: Message, command: CommandObject):
             "ℹ️ Ответь на сообщение пользователя.\n"
             "Пример: <code>!мут1</code> — мут на 1 минуту",
             parse_mode="HTML")
-    if user.id == OWNER_ID:
-        return await msg.reply("⛔ Нельзя замутить фаундера")
-    if user.id in PROTECTED_DEVELOPER_IDS:
-        return await msg.reply(
-            "🛡️ Нельзя мутить разработчика.",
-            parse_mode="HTML",
-        )
+    if _is_mute_protected(user.id):
+        return await msg.reply(_mute_protection_message(user.id), parse_mode="HTML")
     if user.id == msg.from_user.id:
         return await msg.reply("⛔ Нельзя замутить себя")
     if _caller_is_custom and not await is_admin(msg):
@@ -3827,11 +3839,8 @@ async def cmd_forcemute(msg: Message, command: CommandObject):
     if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
     user = await get_user(msg, command)
     if not user: return await msg.reply("Ответь на сообщение")
-    if user.id in PROTECTED_DEVELOPER_IDS:
-        return await msg.reply(
-            "🛡️ Нельзя мутить разработчика.",
-            parse_mode="HTML",
-        )
+    if _is_mute_protected(user.id):
+        return await msg.reply(_mute_protection_message(user.id), parse_mode="HTML")
     delta, reason = parse_time_and_reason(command.args or "")
     until = now_kyiv() + delta
     dur_str  = _fmt_duration(delta)
@@ -6062,7 +6071,7 @@ async def on_chat_member_update(event: ChatMemberUpdated):
     """
     member = event.new_chat_member
     user = getattr(member, "user", None)
-    if not user or user.id not in PROTECTED_DEVELOPER_IDS:
+    if not user or not _is_mute_protected(user.id):
         return
     if event.chat.type not in ("group", "supergroup"):
         return
@@ -6073,9 +6082,14 @@ async def on_chat_member_update(event: ChatMemberUpdated):
     # можно безопасно назначить полный набор founder-прав.
     if new_status in ("member", "administrator"):
         try:
+            restore_role = (
+                "founder_deputy"
+                if user.id in FOUNDER_DEPUTY_IDS
+                else "lead_admin"
+            )
             restored, _title_ok, restore_error = await _promote_in_chat(
                 user.id,
-                "lead_admin",
+                restore_role,
                 event.chat.id,
             )
             if restored:
@@ -6128,10 +6142,18 @@ async def on_chat_member_update(event: ChatMemberUpdated):
             user.id,
             permissions=_unmuted_permissions(),
         )
+        if user.id in {OWNER_ID, *FOUNDER_DEPUTY_IDS}:
+            restore_role = (
+                "founder_deputy"
+                if user.id in FOUNDER_DEPUTY_IDS
+                else "lead_admin"
+            )
+            await _promote_in_chat(user.id, restore_role, event.chat.id)
         await bot.send_message(
             event.chat.id,
             "🛡️ <b>Защита разработчика сработала.</b>\n\n"
-            "Бан и мут разработчиков запрещены и были автоматически отменены.\n"
+            "Бан и мут защищённых founder-equivalent пользователей запрещены "
+            "и были автоматически отменены.\n"
             "Данные разработчика скрыты.",
             parse_mode="HTML",
         )
@@ -12347,6 +12369,11 @@ async def cb_report_action(cb: CallbackQuery):
         await cb.message.edit_reply_markup(reply_markup=None)
         await cb.answer("✅ Жалоба закрыта")
     elif action == "mute":
+        if _is_mute_protected(target_uid):
+            return await cb.answer(
+                _mute_protection_message(target_uid),
+                show_alert=True,
+            )
         try:
             until = datetime.now(UTC) + timedelta(hours=1)
             await bot.restrict_chat_member(
@@ -14284,6 +14311,8 @@ async def _check_link_guard(msg: Message) -> bool:
 
     # ── Администрация в любом чате — разрешены ─────────────────
     uid = msg.from_user.id
+    if _is_mute_protected(uid):
+        return False
     if has_role(uid, "founder_deputy", "lead_admin", "co_admin", "admin", "moderator") or is_owner(msg):
         return False
     try:
@@ -17909,7 +17938,7 @@ async def _check_oxyl_words(msg: Message) -> bool:
         return False
 
     uid = msg.from_user.id
-    if uid in {OWNER_ID, *FOUNDER_DEPUTY_IDS, *PROTECTED_DEVELOPER_IDS}:
+    if _is_mute_protected(uid):
         return False
 
     try:
@@ -18379,7 +18408,7 @@ async def on_new_chat_member(msg: Message):
         # V6: рейд-мод — мутируем новых участников на 10 минут
         if raid_mode.get(msg.chat.id):
             # Не мутируем фаундера и Telegram-администраторов чата
-            _skip_raid = user.id == OWNER_ID
+            _skip_raid = _is_mute_protected(user.id)
             if not _skip_raid:
                 try:
                     _cm = await bot.get_chat_member(msg.chat.id, user.id)
