@@ -131,6 +131,8 @@ FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
 # Глобальный выключатель мутов. /unmute остаётся доступной,
 # чтобы можно было снять уже существующее ограничение.
 MUTE_ACTIONS_ENABLED = False
+STICKER_BURST_LIMIT = 7
+STICKER_BURST_WINDOW_SECONDS = 30
 # Основной набор и дополнительные тематические паки, которые смешиваются
 # в единую тему при старте.
 PRIMARY_EMOJI_PACK = "blackred1_by_TgEmojiBot"
@@ -521,6 +523,7 @@ _last_rain_time: float = 0.0
 CRYPTO_FLASH_DRIVE_AMOUNT = 70_000_000_000
 _crypto_flash_drive_spawned: bool = False
 _crypto_flash_drive_claimed: bool = False
+_sticker_bursts: dict[int, dict[str, float | int]] = {}
 
 _link_guard:       dict[int, bool]        = {}
 pending_notifications: list[dict] = []  # [{chat_id, text, parse_mode}] — одноразовые сообщения при старте
@@ -18126,6 +18129,55 @@ async def _lumena_ai_group(msg: Message):
 
 # ═══════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════
+
+
+@dp.message(F.sticker)
+async def handle_sticker_burst(msg: Message):
+    """Оставляет до семи стикеров в короткой серии, остальные удаляет."""
+    if (
+        msg.chat.type not in ("group", "supergroup")
+        or not msg.from_user
+        or msg.from_user.is_bot
+    ):
+        return
+
+    uid = msg.from_user.id
+    if is_owner(msg) or has_role(
+        uid,
+        "founder_deputy",
+        "lead_admin",
+        "co_admin",
+        "admin",
+        "moderator",
+    ):
+        return
+    try:
+        member = await bot.get_chat_member(msg.chat.id, uid)
+        if member.status in ("creator", "administrator"):
+            return
+    except Exception:
+        # Лимит должен работать даже если Telegram временно не дал
+        # информацию о статусе участника.
+        pass
+
+    now_ts = datetime.now(UTC).timestamp()
+    burst = _sticker_bursts.setdefault(msg.chat.id, {"count": 0, "last_ts": 0.0})
+    if now_ts - float(burst.get("last_ts", 0.0)) > STICKER_BURST_WINDOW_SECONDS:
+        burst["count"] = 0
+    burst["count"] = int(burst.get("count", 0)) + 1
+    burst["last_ts"] = now_ts
+
+    if int(burst["count"]) <= STICKER_BURST_LIMIT:
+        return
+
+    try:
+        await msg.delete()
+    except Exception:
+        logging.debug(
+            "Не удалось удалить стикер сверх лимита: chat=%s message=%s",
+            msg.chat.id,
+            msg.message_id,
+        )
 
 
 @dp.message(F.text)
