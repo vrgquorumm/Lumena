@@ -132,7 +132,7 @@ FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
 # чтобы можно было снять уже существующее ограничение.
 MUTE_ACTIONS_ENABLED = False
 STICKER_BURST_LIMIT = 7
-STICKER_BURST_WINDOW_SECONDS = 30
+STICKER_BURST_WINDOW_SECONDS = 5
 # Основной набор и дополнительные тематические паки, которые смешиваются
 # в единую тему при старте.
 PRIMARY_EMOJI_PACK = "blackred1_by_TgEmojiBot"
@@ -18140,25 +18140,6 @@ async def handle_sticker_burst(msg: Message):
         or msg.from_user.is_bot
     ):
         return
-
-    uid = msg.from_user.id
-    if is_owner(msg) or has_role(
-        uid,
-        "founder_deputy",
-        "lead_admin",
-        "co_admin",
-        "admin",
-        "moderator",
-    ):
-        return
-    try:
-        member = await bot.get_chat_member(msg.chat.id, uid)
-        if member.status in ("creator", "administrator"):
-            return
-    except Exception:
-        # Лимит должен работать даже если Telegram временно не дал
-        # информацию о статусе участника.
-        pass
 
     now_ts = datetime.now(UTC).timestamp()
     burst = _sticker_bursts.setdefault(msg.chat.id, {"count": 0, "last_ts": 0.0})
