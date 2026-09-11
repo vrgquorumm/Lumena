@@ -131,8 +131,7 @@ FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
 # Глобальный выключатель мутов. /unmute остаётся доступной,
 # чтобы можно было снять уже существующее ограничение.
 MUTE_ACTIONS_ENABLED = False
-STICKER_BURST_LIMIT = 7
-STICKER_BURST_WINDOW_SECONDS = 3
+STICKER_BURST_LIMIT = 4
 # Основной набор и дополнительные тематические паки, которые смешиваются
 # в единую тему при старте.
 PRIMARY_EMOJI_PACK = "blackred1_by_TgEmojiBot"
@@ -523,7 +522,7 @@ _last_rain_time: float = 0.0
 CRYPTO_FLASH_DRIVE_AMOUNT = 70_000_000_000
 _crypto_flash_drive_spawned: bool = False
 _crypto_flash_drive_claimed: bool = False
-_sticker_bursts: dict[int, dict[str, float | int]] = {}
+_sticker_bursts: dict[int, int] = {}
 
 _link_guard:       dict[int, bool]        = {}
 pending_notifications: list[dict] = []  # [{chat_id, text, parse_mode}] — одноразовые сообщения при старте
@@ -14413,6 +14412,14 @@ class PropagandaMiddleware(BaseMiddleware):
         event: Message,
         data: dict[str, Any],
     ) -> Any:
+        # Серия стикеров заканчивается любым не-стикерным сообщением.
+        if (
+            isinstance(event, Message)
+            and event.chat.type in ("group", "supergroup")
+            and not event.sticker
+        ):
+            _sticker_bursts.pop(event.chat.id, None)
+
         # This exact founder request must remain available even when a chat
         # mode would otherwise stop ordinary messages before handlers run.
         if isinstance(event, Message) and _is_aurora_launch_request(event):
@@ -18133,7 +18140,7 @@ async def _lumena_ai_group(msg: Message):
 
 @dp.message(F.sticker)
 async def handle_sticker_burst(msg: Message):
-    """Оставляет до семи стикеров в короткой серии, остальные удаляет."""
+    """Оставляет до четырёх стикеров подряд, остальные удаляет."""
     if (
         msg.chat.type not in ("group", "supergroup")
         or not msg.from_user
@@ -18141,14 +18148,10 @@ async def handle_sticker_burst(msg: Message):
     ):
         return
 
-    now_ts = datetime.now(UTC).timestamp()
-    burst = _sticker_bursts.setdefault(msg.chat.id, {"count": 0, "last_ts": 0.0})
-    if now_ts - float(burst.get("last_ts", 0.0)) > STICKER_BURST_WINDOW_SECONDS:
-        burst["count"] = 0
-    burst["count"] = int(burst.get("count", 0)) + 1
-    burst["last_ts"] = now_ts
+    burst_count = _sticker_bursts.get(msg.chat.id, 0) + 1
+    _sticker_bursts[msg.chat.id] = burst_count
 
-    if int(burst["count"]) <= STICKER_BURST_LIMIT:
+    if burst_count <= STICKER_BURST_LIMIT:
         return
 
     try:
