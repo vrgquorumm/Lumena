@@ -132,7 +132,7 @@ FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
 # чтобы можно было снять уже существующее ограничение.
 MUTE_ACTIONS_ENABLED = False
 STICKER_BURST_LIMIT = 7
-STICKER_BURST_WINDOW_SECONDS = 5
+STICKER_BURST_WINDOW_SECONDS = 3
 # Основной набор и дополнительные тематические паки, которые смешиваются
 # в единую тему при старте.
 PRIMARY_EMOJI_PACK = "blackred1_by_TgEmojiBot"
