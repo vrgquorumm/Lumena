@@ -128,6 +128,9 @@ LMN_GLOBAL_ZERO_VERSION = 2  # ручное обнуление кошелько�
 OWNER_AUTO_CREDIT_ENABLED = False  # после общего сброса фаундеру не начисляются монеты автоматически
 FOUNDER_GRANT_VERSION = 1
 FOUNDER_GRANT_AMOUNT = 1_000_000_000_000_000_000_000
+# Временный выключатель ручных команд мута. /unmute остаётся доступной,
+# чтобы можно было снять уже существующее ограничение.
+MUTE_COMMANDS_ENABLED = False
 # Основной набор и дополнительные тематические паки, которые смешиваются
 # в единую тему при старте.
 PRIMARY_EMOJI_PACK = "blackred1_by_TgEmojiBot"
@@ -3656,6 +3659,8 @@ async def cmd_roles(msg: Message, command=None):
 
 @dp.message(Command("mute"))
 async def cmd_mute(msg: Message, command: CommandObject):
+    if not MUTE_COMMANDS_ENABLED:
+        return await msg.reply("⏸️ Команды мута временно отключены.")
     _caller_is_custom = is_custom_muter(msg)
     if not await is_admin(msg) and not _caller_is_custom:
         return await msg.reply("⛔ Только админы")
@@ -3707,6 +3712,8 @@ async def cmd_mute(msg: Message, command: CommandObject):
 @dp.message(Command("mute1", "мут1"))
 async def cmd_mute1(msg: Message, command: CommandObject):
     """Мут на 1 минуту — кастомные мутеры могут применять только к _MUTE_TARGETS."""
+    if not MUTE_COMMANDS_ENABLED:
+        return await msg.reply("⏸️ Команды мута временно отключены.")
     _caller_is_custom = is_custom_muter(msg)
     if not await is_admin(msg) and not _caller_is_custom:
         return await msg.reply("⛔ Только админы")
@@ -3834,6 +3841,8 @@ async def cmd_forceban(msg: Message, command: CommandObject):
 
 @dp.message(Command("forcemute"))
 async def cmd_forcemute(msg: Message, command: CommandObject):
+    if not MUTE_COMMANDS_ENABLED:
+        return await msg.reply("⏸️ Команды мута временно отключены.")
     if not is_owner(msg): return await msg.reply("⛔ Только @hdrttttttt")
     chat_id = _command_chat_id(msg)
     if chat_id is None: return await msg.reply("❌ Главный чат ещё не связан.")
