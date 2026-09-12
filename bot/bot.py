@@ -360,91 +360,55 @@ async def _rich_patched_call(self, method, request_timeout=None):
             )
             if themed_text != method.text:
                 method = method.model_copy(update={"text": themed_text})
-        # Rich Message остаётся основным оформлением. Для custom emoji с
-        # безопасным однокодпоинтным fallback это работает, а при отказе
-        # Telegram ниже включается обычный HTML fallback.
-        if brand.has_pack() and isinstance(method, SendMessage):
-            html_text = _to_rich_html(
-                method.text, method.entities, method.parse_mode
-            )
-            if html_text:
-                fallback_method = method.model_copy(update={
-                    "text": brand.downgrade_rich_html(html_text),
-                    "entities": None,
-                    "parse_mode": "HTML",
-                })
-                rich_method = SendRichMessage(
-                    chat_id=method.chat_id,
-                    rich_message=InputRichMessage(html=html_text),
-                    business_connection_id=method.business_connection_id,
-                    message_thread_id=method.message_thread_id,
-                    direct_messages_topic_id=method.direct_messages_topic_id,
-                    disable_notification=_no_default(method.disable_notification),
-                    protect_content=_no_default(method.protect_content),
-                    allow_paid_broadcast=_no_default(method.allow_paid_broadcast),
-                    message_effect_id=method.message_effect_id,
-                    suggested_post_parameters=method.suggested_post_parameters,
-                    reply_parameters=method.reply_parameters,
-                    reply_markup=method.reply_markup,
-                )
-                return await _call_rich_with_fallback(
-                    self, rich_method, fallback_method, request_timeout
-                )
-        if brand.has_pack() and isinstance(method, EditMessageText) and not method.rich_message:
-            html_text = _to_rich_html(
-                method.text, method.entities, method.parse_mode
-            )
-            if html_text:
-                fallback_method = method.model_copy(update={
-                    "text": brand.downgrade_rich_html(html_text),
-                    "entities": None,
-                    "parse_mode": "HTML",
-                })
-                rich_method = method.model_copy(update={
-                    "rich_message": InputRichMessage(html=html_text),
-                    "text": None,
-                    "entities": None,
-                    "parse_mode": None,
-                })
-                return await _call_rich_with_fallback(
-                    self, rich_method, fallback_method, request_timeout
-                )
+        # Не отправляем Rich Messages: h1-h3, hr и другие Rich-элементы
+        # визуально увеличивают сообщения в клиентах Telegram. Все исходящие
+        # ответы приводим к обычному компактному HTML.
         if isinstance(method, SendRichMessage):
             rich_message = method.rich_message
             rich_html = getattr(rich_message, "html", None)
-            themed_html = brand.decorate_message_html(rich_html)
-            if themed_html != rich_html:
-                method = method.model_copy(update={
-                    "rich_message": rich_message.model_copy(
-                        update={"html": themed_html}
-                    )
-                })
+            compact_html = brand.downgrade_rich_html(
+                brand.decorate_message_html(rich_html),
+                strip_custom_emoji=True,
+            )
+            method = SendMessage(
+                chat_id=method.chat_id,
+                text=compact_html or "",
+                parse_mode="HTML",
+                business_connection_id=method.business_connection_id,
+                message_thread_id=method.message_thread_id,
+                direct_messages_topic_id=method.direct_messages_topic_id,
+                disable_notification=_no_default(method.disable_notification),
+                protect_content=_no_default(method.protect_content),
+                allow_paid_broadcast=_no_default(method.allow_paid_broadcast),
+                message_effect_id=method.message_effect_id,
+                suggested_post_parameters=method.suggested_post_parameters,
+                reply_parameters=method.reply_parameters,
+                reply_markup=method.reply_markup,
+            )
         if isinstance(method, SendMessage):
             html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
             if html_text:
-                rich_method = SendRichMessage(
-                    chat_id=method.chat_id,
-                    rich_message=InputRichMessage(html=html_text),
-                    business_connection_id=method.business_connection_id,
-                    message_thread_id=method.message_thread_id,
-                    direct_messages_topic_id=method.direct_messages_topic_id,
-                    disable_notification=_no_default(method.disable_notification),
-                    protect_content=_no_default(method.protect_content),
-                    allow_paid_broadcast=_no_default(method.allow_paid_broadcast),
-                    message_effect_id=method.message_effect_id,
-                    suggested_post_parameters=method.suggested_post_parameters,
-                    reply_parameters=method.reply_parameters,
-                    reply_markup=method.reply_markup,
-                )
-                return await _orig_bot_call(self, rich_method, request_timeout)
-        elif isinstance(method, EditMessageText) and not method.rich_message:
-            html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
+                method = method.model_copy(update={
+                    "text": brand.downgrade_rich_html(
+                        html_text,
+                        strip_custom_emoji=True,
+                    ),
+                    "entities": None,
+                    "parse_mode": "HTML",
+                })
+        elif isinstance(method, EditMessageText):
+            rich_html = getattr(getattr(method, "rich_message", None), "html", None)
+            source_text = rich_html if rich_html is not None else method.text
+            html_text = _to_rich_html(source_text, method.entities, method.parse_mode)
             if html_text:
                 method = method.model_copy(update={
-                    "rich_message": InputRichMessage(html=html_text),
-                    "text": None,
+                    "text": brand.downgrade_rich_html(
+                        html_text,
+                        strip_custom_emoji=True,
+                    ),
                     "entities": None,
-                    "parse_mode": None,
+                    "parse_mode": "HTML",
+                    "rich_message": None,
                 })
     except Exception as ex:
         print(f"⚠️ rich-message перехват не удался, отправляю как обычно: {ex}")
