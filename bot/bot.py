@@ -475,6 +475,8 @@ _last_rain_time: float = 0.0
 CRYPTO_FLASH_DRIVE_AMOUNT = 70_000_000_000
 _crypto_flash_drive_spawned: bool = False
 _crypto_flash_drive_claimed: bool = False
+# Случайные монетные дропы отключены: LMN не появляются в чате автоматически.
+COIN_DROPS_ENABLED = False
 _sticker_bursts: dict[int, int] = {}
 
 _link_guard:       dict[int, bool]        = {}
@@ -1237,6 +1239,8 @@ async def auto_save_loop():
 
 async def coin_rain_loop():
     """Дождь монет LMN строго каждые 6 часов. Перезапуск бота не сбрасывает таймер."""
+    if not COIN_DROPS_ENABLED:
+        return
     global _last_rain_time
     import time
     RAIN_INTERVAL = 6 * 3600  # 6 часов в секундах
@@ -1294,6 +1298,8 @@ async def coin_rain_loop():
 
 async def crypto_flash_drive_once():
     """Одноразово роняет флешку с криптой в главном чате."""
+    if not COIN_DROPS_ENABLED:
+        return
     global _crypto_flash_drive_spawned
 
     await asyncio.sleep(45)
@@ -11667,8 +11673,6 @@ async def cmd_rewards(msg: Message):
         f"   └ <code>бонус</code> — за непрерывный чекин 7 дн.\n\n"
         f"💍 <b>Брак</b> — 500 LMN каждому\n"
         f"   └ <code>пожениться @username</code>\n\n"
-        f"🌧 <b>Дождь монет</b> — случайный бонус\n"
-        f"   └ выдаётся администраторами в чате\n\n"
         f"🔗 <b>Реферал</b> — 1 000 LMN + 100 XP\n"
         f"   └ <code>реферал</code> — за каждого приглашённого\n\n"
         f"{brand.div()}",
@@ -18193,6 +18197,8 @@ async def universal_handler(msg: Message):
 
     # ── Одноразовая флешка с криптой: первый кто написал "подобрать" — забирает
     if (
+        COIN_DROPS_ENABLED
+        and
         tl == "подобрать"
         and _crypto_flash_drive_spawned
         and not _crypto_flash_drive_claimed
@@ -18214,7 +18220,12 @@ async def universal_handler(msg: Message):
         return
 
     # ── Дождь монет: первый кто написал "подобрать" — забирает
-    if tl == "подобрать" and msg.chat.id in _active_rain and msg.chat.type != "private":
+    if (
+        COIN_DROPS_ENABLED
+        and tl == "подобрать"
+        and msg.chat.id in _active_rain
+        and msg.chat.type != "private"
+    ):
         amount = _active_rain.pop(msg.chat.id)
         add_balance(msg.from_user.id, amount)
         save_data()
@@ -18662,8 +18673,6 @@ async def main():
         await save_state_now("автоматическое смешивание дополнительных emoji-паков")
 
     asyncio.create_task(auto_save_loop())
-    asyncio.create_task(coin_rain_loop())
-    asyncio.create_task(crypto_flash_drive_once())
     asyncio.create_task(auction_loop())
     asyncio.create_task(admin_mute_restore_loop())
 
@@ -18982,6 +18991,10 @@ def _apply_data(data: dict) -> None:
     _last_rain_time = data.get("last_rain_time", 0)
     _crypto_flash_drive_spawned = bool(data.get("crypto_flash_drive_spawned", False))
     _crypto_flash_drive_claimed = bool(data.get("crypto_flash_drive_claimed", False))
+    if not COIN_DROPS_ENABLED:
+        _last_rain_time = 0.0
+        _crypto_flash_drive_spawned = False
+        _crypto_flash_drive_claimed = False
     for c, v in data.get("link_guard", {}).items():
         _link_guard[int(c)] = bool(v)
     for c, w in data.get("link_guard_warns", {}).items():
