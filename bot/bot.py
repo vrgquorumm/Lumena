@@ -206,29 +206,26 @@ def _decorate_caption_container(model):
     updates = {}
     try:
         if entities:
-            themed_caption = brand.downgrade_rich_html(
-                brand.decorate_message_html(
-                    html_decoration.unparse(caption, entities)
-                ),
-                strip_custom_emoji=True,
+            themed_caption = brand.plain_text(
+                html_decoration.unparse(caption, entities)
             )
             updates.update({
                 "caption": themed_caption,
                 "caption_entities": None,
-                "parse_mode": "HTML",
+                "parse_mode": None,
             })
         elif isinstance(parse_mode, Default) or parse_mode in ("HTML", None):
-            themed_caption = brand.downgrade_rich_html(
-                brand.decorate_message_html(caption),
-                strip_custom_emoji=True,
+            themed_caption = brand.plain_text(caption)
+            if themed_caption != caption:
+                updates["caption"] = themed_caption
+                updates["parse_mode"] = None
+        elif parse_mode in ("Markdown", "MarkdownV2"):
+            themed_caption = brand.plain_text(
+                brand.replace_emojis_markdown(caption, parse_mode)
             )
             if themed_caption != caption:
                 updates["caption"] = themed_caption
-                updates["parse_mode"] = "HTML"
-        elif parse_mode in ("Markdown", "MarkdownV2"):
-            themed_caption = brand.replace_emojis_markdown(caption, parse_mode)
-            if themed_caption != caption:
-                updates["caption"] = themed_caption
+                updates["parse_mode"] = None
     except Exception:
         return model
     return model.model_copy(update=updates) if updates else model
@@ -360,20 +357,18 @@ async def _rich_patched_call(self, method, request_timeout=None):
             )
             if themed_text != method.text:
                 method = method.model_copy(update={"text": themed_text})
-        # Не отправляем Rich Messages: h1-h3, hr и другие Rich-элементы
-        # визуально увеличивают сообщения в клиентах Telegram. Все исходящие
-        # ответы приводим к обычному компактному HTML.
+        # Полностью убираем Rich и HTML-оформление: в боте не должно быть
+        # крупных, жирных или декоративно увеличенных текстов.
         if isinstance(method, SendRichMessage):
             rich_message = method.rich_message
             rich_html = getattr(rich_message, "html", None)
-            compact_html = brand.downgrade_rich_html(
+            compact_text = brand.plain_text(
                 brand.decorate_message_html(rich_html),
-                strip_custom_emoji=True,
             )
             method = SendMessage(
                 chat_id=method.chat_id,
-                text=compact_html or "",
-                parse_mode="HTML",
+                text=compact_text or "",
+                parse_mode=None,
                 business_connection_id=method.business_connection_id,
                 message_thread_id=method.message_thread_id,
                 direct_messages_topic_id=method.direct_messages_topic_id,
@@ -387,29 +382,23 @@ async def _rich_patched_call(self, method, request_timeout=None):
             )
         if isinstance(method, SendMessage):
             html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
-            if html_text:
-                method = method.model_copy(update={
-                    "text": brand.downgrade_rich_html(
-                        html_text,
-                        strip_custom_emoji=True,
-                    ),
-                    "entities": None,
-                    "parse_mode": "HTML",
-                })
+            source_text = html_text if html_text is not None else method.text
+            method = method.model_copy(update={
+                "text": brand.plain_text(source_text) or "",
+                "entities": None,
+                "parse_mode": None,
+            })
         elif isinstance(method, EditMessageText):
             rich_html = getattr(getattr(method, "rich_message", None), "html", None)
             source_text = rich_html if rich_html is not None else method.text
             html_text = _to_rich_html(source_text, method.entities, method.parse_mode)
-            if html_text:
-                method = method.model_copy(update={
-                    "text": brand.downgrade_rich_html(
-                        html_text,
-                        strip_custom_emoji=True,
-                    ),
-                    "entities": None,
-                    "parse_mode": "HTML",
-                    "rich_message": None,
-                })
+            source_text = html_text if html_text is not None else source_text
+            method = method.model_copy(update={
+                "text": brand.plain_text(source_text) or "",
+                "entities": None,
+                "parse_mode": None,
+                "rich_message": None,
+            })
     except Exception as ex:
         print(f"⚠️ rich-message перехват не удался, отправляю как обычно: {ex}")
     return await _orig_bot_call(self, method, request_timeout)
