@@ -74,7 +74,7 @@ OWNER_ID       = 8655306548
 SUPER_IDS      = {OWNER_ID}
 # Постоянный заместитель с полным founder-доступом.
 # Это числовой Telegram ID, поэтому username не используется для авторизации.
-FOUNDER_DEPUTY_IDS = {1839566911, 6382583891}
+FOUNDER_DEPUTY_IDS = {1839566911}  # @Not_persons
 # Постоянная роль по числовому Telegram ID — не зависит от username.
 FIXED_LEAD_ADMIN_IDS = {6195355999}  # Ника
 # Разработчики проекта: их нельзя банить или мутить ни одной модерационной
@@ -91,7 +91,7 @@ MUTE_PROTECTED_IDS = frozenset({
 # Отзыв хранится в состоянии, поэтому не сбрасывается после редеплоя.
 REVOKED_FOUNDER_ACCESS_IDS: set[int] = {
     8663692155,
-    1839566911,  # @Not_persons — founder-deputy access revoked
+    6382583891,  # @vorop_30 — founder-deputy access revoked
 }
 FOUNDER_ACCESS_REVOCATIONS: dict[int, dict] = {}
 BOT_VERSION = "7.0"
@@ -18508,6 +18508,32 @@ async def main():
     await restore_bot_data()
     await brand.restore_brand()
     load_data()
+    # Передача founder-equivalent роли: Telegram-права администраторов
+    # намеренно не меняются, меняется только внутренняя роль бота.
+    founder_role_transfer_changed = False
+    if 1839566911 in REVOKED_FOUNDER_ACCESS_IDS:
+        REVOKED_FOUNDER_ACCESS_IDS.discard(1839566911)
+        founder_role_transfer_changed = True
+    if 6382583891 not in REVOKED_FOUNDER_ACCESS_IDS:
+        REVOKED_FOUNDER_ACCESS_IDS.add(6382583891)
+        founder_role_transfer_changed = True
+    if 1839566911 in FOUNDER_ACCESS_REVOCATIONS:
+        FOUNDER_ACCESS_REVOCATIONS.pop(1839566911, None)
+        founder_role_transfer_changed = True
+    previous_revocation = FOUNDER_ACCESS_REVOCATIONS.get(6382583891)
+    if not previous_revocation or "@Not_persons" not in str(previous_revocation.get("comment", "")):
+        FOUNDER_ACCESS_REVOCATIONS[6382583891] = {
+            "comment": "Founder-equivalent доступ передан @Not_persons.",
+            "revoked_by": OWNER_ID,
+            "revoked_at": now_kyiv().strftime("%Y-%m-%d %H:%M"),
+        }
+        founder_role_transfer_changed = True
+    if ROLES.pop(6382583891, None) is not None:
+        founder_role_transfer_changed = True
+    if _ROLE_USERNAMES.pop("vorop_30", None) is not None:
+        founder_role_transfer_changed = True
+    if founder_role_transfer_changed:
+        await save_state_now("передача founder-роли от @vorop_30 к @Not_persons")
     if apply_marriage_date_migrations():
         await save_state_now("миграция даты брака фаундера и заместителя")
     await _restore_night_mode_permissions()
