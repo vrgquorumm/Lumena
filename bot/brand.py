@@ -6,6 +6,7 @@
 from __future__ import annotations
 import os
 import re
+import html as _html
 
 _pack_ids: list[str] = []
 _pack_name: str = ""
@@ -22,8 +23,8 @@ STYLE_DEFS: dict[str, dict] = {
     # ── Оформление ────────────────────────────────────────
     "header_text":  {
         "desc":    "Текст заголовка",
-        "default": "✨ L U M E N A ✨",
-        "hint":    'Показывается в шапке каждого ответа. Пример: «L U M E N A» или «✨ LUMENA ✨»',
+        "default": "Lumenora",
+        "hint":    "Показывается в компактной шапке ответа.",
         "max":     40,
     },
     "divider_char": {
@@ -52,13 +53,13 @@ STYLE_DEFS: dict[str, dict] = {
     },
     "bot_display_name": {
         "desc":    "Имя бота в фразах",
-        "default": "Lumena",
-        "hint":    "Как бот называет себя. Пример: Лумена, Lumena, Lumena Bot",
+        "default": "Lumenora",
+        "hint":    "Как бот называет себя. Пример: Lumenora, Lumenora AI",
         "max":     30,
     },
     "community_name": {
         "desc":    "Название сообщества",
-        "default": "Lumena",
+        "default": "Lumenora",
         "hint":    "Название проекта/сообщества в приветствиях и описаниях.",
         "max":     30,
     },
@@ -176,9 +177,20 @@ STYLE_DEFS: dict[str, dict] = {
 }
 
 
+def _normalize_display_name(value: str) -> str:
+    if value.strip().casefold() in {
+        "lumena", "lumena bot", "лумена", "лумка", "люма",
+    }:
+        return "Lumenora"
+    return value
+
+
 def get_style(key: str) -> str:
     """Текущее значение стиля (кастомное или дефолтное)."""
-    return _custom_style.get(key) or STYLE_DEFS.get(key, {}).get("default", "")
+    value = _custom_style.get(key) or STYLE_DEFS.get(key, {}).get("default", "")
+    if key in {"header_text", "bot_display_name", "community_name"}:
+        return _normalize_display_name(value)
+    return value
 
 
 def em(style_key: str, fallback: str = "") -> str:
@@ -333,10 +345,9 @@ def get_role_id(role: str) -> str | None:
 
 
 def hdr() -> str:
-    """Премиальный заголовок — настоящий Rich Message <h1> (Bot API 10.1)."""
-    em   = e("header")
+    """Компактная шапка без Rich-заголовка и декоративных emoji."""
     name = get_style("header_text")
-    return f"<h1>{em} {name} {em}</h1>"
+    return f"<b>{name}</b>"
 
 
 def div(n: int | None = None) -> str:
@@ -557,23 +568,10 @@ def replace_emojis_html(text: str | None) -> str | None:
 
 
 def replace_emojis_markdown(text: str | None, parse_mode: str) -> str | None:
-    """Заменяет emoji в Markdown, сохраняя остальное форматирование."""
-    if not text or not has_pack():
+    """Убирает декоративные emoji из Markdown-сообщений."""
+    if not text:
         return text
-    markdown_v2 = parse_mode == "MarkdownV2"
-    def replace_match(match) -> str:
-        emoji = match.group(0)
-        custom_id = _emoji_map.get(emoji)
-        if custom_id is None:
-            custom_id = _emoji_map.get(emoji.replace("\ufe0f", ""))
-        custom_id = _variant_pack_id(custom_id)
-        if not custom_id:
-            return emoji
-        if markdown_v2:
-            return f"![](tg://emoji?id={custom_id})"
-        return f"[{emoji}](tg://emoji?id={custom_id})"
-
-    return _EMOJI_SEQUENCE_RE.sub(replace_match, text)
+    return _EMOJI_SEQUENCE_RE.sub("", text)
 
 
 def first_emoji_id(text: str | None) -> str | None:
@@ -599,19 +597,30 @@ def strip_mapped_emojis(text: str | None) -> str | None:
 
 
 def decorate_message_html(text: str | None) -> str | None:
-    """Заменяет emoji в HTML-сообщении на custom emoji."""
-    if not text or not has_pack():
+    """Применяет компактный стиль ко всем исходящим HTML-сообщениям.
+
+    Rich-заголовки и custom emoji делают даже короткие ответы визуально
+    огромными и перегруженными. Поэтому перед отправкой нормализуем heading-и,
+    удаляем декоративные emoji и оставляем обычный HTML-текст.
+    """
+    if not text:
         return text
-    themed = replace_emojis_html(text)
-    if "<tg-emoji" in (themed or "")[:500]:
-        return themed
-    return f'{e("header", _FALLBACK["header"])} {themed}'
+    compact = _TG_EMOJI_TAG_RE.sub("", text)
+    compact = _EMOJI_SEQUENCE_RE.sub("", compact)
+    compact = re.sub(r"<h[1-6]\b[^>]*>", "<b>", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"</h[1-6]\s*>", "</b>", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"[ \t]+\n", "\n", compact)
+    compact = re.sub(r"\n{3,}", "\n\n", compact)
+    return compact.strip()
 
 
 def prepare_rich_html(text: str | None) -> str | None:
-    """Делает fallback внутри tg-emoji безопасным для Rich Message."""
+    """Делает Rich HTML компактным и безопасным для отправки."""
     if not text:
         return text
+
+    text = re.sub(r"<h[1-6]\b[^>]*>", "<b>", text, flags=re.IGNORECASE)
+    text = re.sub(r"</h[1-6]\s*>", "</b>", text, flags=re.IGNORECASE)
 
     def replace_tag(match) -> str:
         opening, closing = match.group(1), match.group(2)
@@ -660,6 +669,31 @@ def downgrade_rich_html(
     result = re.sub(r"<li\s*>", "• ", result, flags=re.IGNORECASE)
     result = re.sub(r"</li\s*>", "\n", result, flags=re.IGNORECASE)
     return result
+
+
+def plain_text(text: str | None) -> str | None:
+    """Полностью убирает визуальное форматирование из исходящего текста."""
+    if not text:
+        return text
+    result = downgrade_rich_html(text, strip_custom_emoji=True) or ""
+    result = re.sub(
+        r"<a\b[^>]*>(.*?)</a>",
+        r"\1",
+        result,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    result = re.sub(r"<[^>]+>", "", result)
+    result = re.sub(r"!\[\]\(tg://emoji\?id=\d+\)", "", result)
+    result = re.sub(
+        r"\[([^\]]+)\]\(([^)]+)\)",
+        r"\1",
+        result,
+    )
+    result = re.sub(r"[*_~`]+", "", result)
+    result = _html.unescape(result)
+    result = re.sub(r"[ \t]+\n", "\n", result)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
 
 
 # ── Стили Telegram-кнопок ─────────────────────────────────────
@@ -732,11 +766,15 @@ def decorate_reply_markup(markup):
             callback_data = getattr(button, "callback_data", None)
             url = getattr(button, "url", None)
             updates = {}
+            compact_text = _EMOJI_SEQUENCE_RE.sub("", text).strip()
+            if compact_text != text:
+                updates["text"] = compact_text or text
             if getattr(button, "style", None) is None:
                 updates["style"] = button_style(text, callback_data, url)
-            icon_id = button_icon_id(text, callback_data, url)
-            if icon_id and getattr(button, "icon_custom_emoji_id", None) is None:
-                updates["icon_custom_emoji_id"] = icon_id
+            # Не добавляем отдельные custom-emoji к кнопкам: текст кнопки
+            # должен оставаться компактным и одинаково читаться на клиентах.
+            if getattr(button, "icon_custom_emoji_id", None) is not None:
+                updates["icon_custom_emoji_id"] = None
             decorated_row.append(
                 button.model_copy(update=updates) if updates else button
             )
@@ -755,37 +793,17 @@ _custom_texts: dict[str, dict] = {}
 # ─────────────────────────────────────────────────────────
 DEFAULT_TEXTS: dict[str, str] = {
     # ── Главный экран ──────────────────────────────────────
-    "start_text":          "🖤 Добро пожаловать, <b>{name}</b>!\n\nВыбери раздел — расскажу всё о командах и возможностях 👇\n\n<i>Команды работают без / — просто напиши нужное слово в чат</i>",
-    "start_unverified":    "👋 Привет, <b>{name}</b>!\n\nЧтобы получить доступ ко всем функциям, сначала пройди верификацию 👇",
+    "start_text":          "✨ Добро пожаловать в <b>Lumenora</b>, <b>{name}</b>!\n\nВыбери раздел ниже — здесь собраны общение, экономика, отношения, игры и магия.\n\n<i>Можно нажимать кнопки или писать команды обычным текстом.</i>",
+    "start_unverified":    "👋 Привет, <b>{name}</b>!\n\n<b>Lumenora</b> открывает доступ только реальным людям.\n\nПройди короткую проверку — и весь мир бота будет открыт.",
 
     # ── Верификация ────────────────────────────────────────
-    "verify_prompt":       "🔐 <b>Верификация</b>\n\nПодтверди, что ты не бот — нажми кнопку ниже.",
-    "verify_done":         "✅ <b>Верификация пройдена!</b>\n\nДобро пожаловать, <b>{name}</b>! Все функции бота теперь доступны.",
+    "verify_prompt":       "🔐 <b>Проверка человека</b>\n\nРеши пример и подтверди, что ты не бот. У тебя есть 5 минут.",
+    "verify_done":         "✅ <b>Проверка пройдена!</b>\n\nДобро пожаловать в <b>Lumenora</b>, <b>{name}</b>! Все разделы теперь доступны.",
 
     # ── Приветствие в группе ───────────────────────────────
-    "welcome_msg":         "👋 Добро пожаловать в чат, <b>{name}</b>!\n\nНапиши /start в личке боту чтобы узнать всё о командах.",
+    "welcome_msg":         "👋 Добро пожаловать, <b>{name}</b>!\n\nТы в сообществе Lumenora — здесь есть общение, игры, отношения и своя экономика.\n\nОткрой личку с ботом и напиши /start, чтобы пройти проверку и открыть навигацию.",
 
-    # ── Анкета — флоу ─────────────────────────────────────
-    "anketa_start":        "📋 <b>Анкета знакомств</b>\n\nВыберите язык:",
-    "anketa_cancel":       "❌ <b>Заполнение анкеты отменено.</b>\n\nНачать снова: /анкета",
-    "anketa_confirm":      "✅ <b>Анкета автоматически одобрена и опубликована!</b>\n\nТеперь её могут увидеть участники и поставить лайк.",
-    "anketa_auto_confirm": "✅ <b>Анкета автоматически одобрена и опубликована!</b>\n\nТеперь её могут увидеть участники и поставить лайк.",
-    "anketa_duplicate":    "📋 Ты уже заполняешь анкету!\n\nНапиши /отмена чтобы отменить.",
-    "anketa_cancel_none":  "У тебя нет активной анкеты.",
-    "anketa_private_only": "📋 Анкету можно заполнять только в личке с ботом.",
-    "anketa_no_verify":    "🔐 Сначала пройди верификацию — напиши /start боту в личку.",
     "step_accepted":       "✅ <b>Ответ принят!</b> Следующий вопрос 👇",
-    "anketa_no_mod":       "✅ Анкета заполнена и опубликована автоматически!",
-    "anketa_media_prompt": "📸 <b>Последний шаг — фото или видео!</b>\n\nОтправь до 10 медиафайлов. После загрузки анкета автоматически появится в ленте.\nМожно пропустить командой /пропустить",
-    "anketa_media_added":  "📎 Медиафайл добавлен ({count}/10). Отправь ещё или напиши /готово",
-    "anketa_media_done":   "✅ Медиа сохранено! Анкета автоматически опубликована.",
-
-    # ── Модерация анкет ────────────────────────────────────
-    "anketa_approve":      "✅ <b>Твоя анкета одобрена!</b>\n\nДобро пожаловать в сообщество 💙",
-    "anketa_reject":       "❌ <b>Твоя анкета отклонена.</b>\n\nПодать заново: /анкета",
-    "anketa_delete":       "🗑 Анкета удалена.",
-    "mod_comment":         "✏️ <b>Правки от модератора:</b>\n\n{comment}\n\n<i>Исправь и отправь снова: /анкета</i>",
-    "revoke_notify":       "🔄 <b>Твоя анкета была отозвана.</b>\n\nПодать заново: /анкета",
 
     # ── VIP & Поддержка ────────────────────────────────────
     "vip_activated":       "👑 <b>VIP активирован!</b>\n\nТебе открыты премиум-функции сообщества.",
@@ -867,13 +885,13 @@ DEFAULT_TEXTS: dict[str, str] = {
     "profile_no_partner":  "—",
     "info_project": (
         "ℹ️ <b>О проекте</b>\n\n"
-        "🌟 <b>Lumena</b> — официальный Telegram-бот сообщества\n\n"
+        "🌟 <b>Lumenora</b> — официальный Telegram-бот сообщества\n\n"
         "👑 <b>Основатель:</b> HYDRÆ\n\n"
         "👨‍💻 <b>Разработчики:</b> HYDRÆ · Дмитрий · Евгений\n\n"
         "🛡 <b>Администрация:</b> Диана · Вероника · Владислав · Егор · Алла\n\n"
         "<i>Отредактируй этот текст через /edit → ℹ️ Инфо</i>"
     ),
-    "info_founder_badge":  "✨ Создатель проекта Lumena",
+    "info_founder_badge":  "✨ Создатель проекта Lumenora",
 
     # ── Модерация ─────────────────────────────────────────
     "mute_done":           "🔇 <b>{name}</b> замучен на {duration}.\n📝 Причина: {reason}",
@@ -978,27 +996,7 @@ TEXT_LABELS: dict[str, str] = {
     "welcome_msg":         "Приветствие нового участника ({name})",
     "welcome_btn":         "Кнопка в приветствии",
 
-    # ── Анкета — флоу ─────────────────────────────────────
-    "anketa_start":        "Старт анкеты (выбор языка)",
-    "anketa_cancel":       "Анкета отменена",
-    "anketa_confirm":      "Анкета автоматически одобрена и опубликована",
-    "anketa_auto_confirm": "Анкета автоматически одобрена и опубликована (без модерации)",
-    "anketa_duplicate":    "Уже заполняешь анкету (повторный старт)",
-    "anketa_cancel_none":  "Нет активной анкеты для отмены",
-    "anketa_private_only": "Анкета только в ЛС (ответ в группе)",
-    "anketa_no_verify":    "Анкета без верификации",
-    "step_accepted":       "Ответ принят (каждый шаг анкеты)",
-    "anketa_no_mod":       "Анкета заполнена и опубликована автоматически",
-    "anketa_media_prompt": "Промпт загрузки фото/видео (последний шаг)",
-    "anketa_media_added":  "Медиафайл добавлен (счётчик)",
-    "anketa_media_done":   "Медиа сохранено, анкета опубликована автоматически",
-
-    # ── Модерация анкет ────────────────────────────────────
-    "anketa_approve":      "Анкета одобрена ✅ (юзеру)",
-    "anketa_reject":       "Анкета отклонена ❌ (юзеру)",
-    "anketa_delete":       "Анкета удалена (юзеру)",
-    "mod_comment":         "Правки от модератора (юзеру) [{comment}]",
-    "revoke_notify":       "Анкета отозвана (юзеру)",
+    "step_accepted":       "Ответ принят",
 
     # ── VIP & Поддержка ────────────────────────────────────
     "vip_activated":       "VIP активирован 👑",
@@ -1486,12 +1484,6 @@ BUTTON_DEFS: dict[str, dict] = {
         "label": "📜 Правила",
         "url":   "https://t.me/",
         "desc":  "Кнопка правил сообщества (ссылка)",
-        "type":  "url",
-    },
-    "anketa_link": {
-        "label": "💌 Анкеты",
-        "url":   "https://t.me/",
-        "desc":  "Кнопка анкет знакомств (ссылка)",
         "type":  "url",
     },
     "donate_link": {
