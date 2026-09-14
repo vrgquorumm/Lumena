@@ -10300,11 +10300,12 @@ async def cmd_chatinfo(msg: Message):
 
 def _psych_keyboard(uid: int, question_index: int) -> InlineKeyboardMarkup:
     options = PSYCH_QUESTIONS[question_index]["options"]
+    letters = ("А", "Б", "В", "Г")
     rows = []
     for start in range(0, len(options), 2):
         rows.append([
             InlineKeyboardButton(
-                text=option[0],
+                text=letters[option_index],
                 callback_data=f"psycho:{uid}:{question_index}:{option_index}",
             )
             for option_index, option in enumerate(options[start:start + 2], start)
@@ -10313,13 +10314,20 @@ def _psych_keyboard(uid: int, question_index: int) -> InlineKeyboardMarkup:
 
 
 def _psych_question_text(question_index: int) -> str:
-    question = PSYCH_QUESTIONS[question_index]["text"]
+    question_data = PSYCH_QUESTIONS[question_index]
+    question = question_data["text"]
+    letters = ("А", "Б", "В", "Г")
+    options_text = "\n".join(
+        f"<b>{letters[index]})</b> {html.escape(option[0])}"
+        for index, option in enumerate(question_data["options"])
+    )
     return (
         f"{brand.hdr()}\n\n"
         "🧠 <b>Психолог Lumenora</b>\n\n"
         f"Вопрос <b>{question_index + 1}/10</b>\n\n"
         f"{html.escape(question)}\n\n"
-        "Выбери вариант, который ближе всего к твоей первой реакции."
+        f"{options_text}\n\n"
+        "Выбери кнопку с буквой варианта, который ближе всего к твоей первой реакции."
     )
 
 
@@ -10484,12 +10492,12 @@ async def _psych_answer_callback(cb: CallbackQuery):
         return await cb.answer("Некорректный ответ", show_alert=True)
 
     if cb.from_user.id != uid:
-        return await cb.answer("Это не твоя анкета.", show_alert=True)
+        return await cb.answer("Это не твой тест.", show_alert=True)
     session = psych_sessions.get(uid)
     if not session or session.get("index") != question_index:
-        return await cb.answer("Анкета устарела. Запусти «психолог» заново.", show_alert=True)
+        return await cb.answer("Этот тест устарел. Запусти «психолог» заново.", show_alert=True)
     if not 0 <= question_index < len(PSYCH_QUESTIONS):
-        return await cb.answer("Анкета завершена.", show_alert=True)
+        return await cb.answer("Тест уже завершён.", show_alert=True)
     options = PSYCH_QUESTIONS[question_index]["options"]
     if not 0 <= option_index < len(options):
         return await cb.answer("Некорректный вариант.", show_alert=True)
