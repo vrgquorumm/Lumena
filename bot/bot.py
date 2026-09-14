@@ -450,6 +450,103 @@ hangman_games = {}
 roulette_players = {}
 profiles = {}
 user_locations: dict[int, str] = {}  # uid → явное место проживания для геостатистики
+# ── Психолог Lumenora ──────────────────────────────────────────
+# Ответы хранятся как числовые профили, а не как свободный текст: так
+# сравнение остаётся быстрым, предсказуемым и не требует внешнего AI-запроса.
+psych_profiles: dict[int, dict] = {}
+psych_sessions: dict[int, dict] = {}
+PSYCH_QUESTIONS = (
+    {
+        "text": "Ты находишь дверь без ручки. Что делаешь первым?",
+        "options": (
+            ("Ищу скрытый механизм", {"hidden": 8, "social": 1, "impulsive": 2, "strategy": 9, "creative": 5}),
+            ("Стучу и жду ответа", {"hidden": 2, "social": 8, "impulsive": 2, "strategy": 4, "creative": 3}),
+            ("Пробую выбить её", {"hidden": 1, "social": 2, "impulsive": 9, "strategy": 3, "creative": 2}),
+            ("Придумываю, зачем она здесь", {"hidden": 5, "social": 4, "impulsive": 3, "strategy": 6, "creative": 9}),
+        ),
+    },
+    {
+        "text": "Какой подарок ты бы оставил незнакомцу?",
+        "options": (
+            ("Записку без подписи", {"hidden": 9, "social": 3, "impulsive": 2, "strategy": 5, "creative": 7}),
+            ("Приглашение на разговор", {"hidden": 2, "social": 9, "impulsive": 2, "strategy": 4, "creative": 4}),
+            ("Что-то странное и неожиданное", {"hidden": 4, "social": 3, "impulsive": 8, "strategy": 3, "creative": 9}),
+            ("Полезную вещь на будущее", {"hidden": 3, "social": 4, "impulsive": 2, "strategy": 9, "creative": 5}),
+        ),
+    },
+    {
+        "text": "Когда план рушится за минуту до старта, ты…",
+        "options": (
+            ("Молча собираю запасной план", {"hidden": 7, "social": 2, "impulsive": 2, "strategy": 10, "creative": 5}),
+            ("Зову всех обсудить новый вариант", {"hidden": 2, "social": 10, "impulsive": 3, "strategy": 6, "creative": 5}),
+            ("Делаю первое, что приходит в голову", {"hidden": 2, "social": 2, "impulsive": 10, "strategy": 3, "creative": 6}),
+            ("Превращаю провал в другой эксперимент", {"hidden": 4, "social": 4, "impulsive": 6, "strategy": 5, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Что сильнее всего выдаёт человека?",
+        "options": (
+            ("Паузы между словами", {"hidden": 8, "social": 3, "impulsive": 2, "strategy": 7, "creative": 4}),
+            ("То, как он слушает других", {"hidden": 3, "social": 9, "impulsive": 2, "strategy": 5, "creative": 4}),
+            ("Резкая реакция на мелочи", {"hidden": 3, "social": 4, "impulsive": 9, "strategy": 3, "creative": 3}),
+            ("Необычные связи между мыслями", {"hidden": 5, "social": 4, "impulsive": 4, "strategy": 6, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Тебе предлагают стереть один неловкий момент. Ты…",
+        "options": (
+            ("Оставляю его как улику для себя", {"hidden": 8, "social": 2, "impulsive": 2, "strategy": 8, "creative": 5}),
+            ("Использую его, чтобы стать ближе к людям", {"hidden": 2, "social": 9, "impulsive": 3, "strategy": 5, "creative": 5}),
+            ("Стираю, не раздумывая", {"hidden": 3, "social": 3, "impulsive": 10, "strategy": 2, "creative": 3}),
+            ("Переписываю его в смешную историю", {"hidden": 4, "social": 6, "impulsive": 6, "strategy": 4, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Какой звук ты бы включил в пустом городе?",
+        "options": (
+            ("Тихий метроном", {"hidden": 8, "social": 1, "impulsive": 2, "strategy": 9, "creative": 5}),
+            ("Голоса людей на площади", {"hidden": 2, "social": 10, "impulsive": 3, "strategy": 4, "creative": 5}),
+            ("Громкий бит на всю улицу", {"hidden": 2, "social": 5, "impulsive": 10, "strategy": 3, "creative": 7}),
+            ("Звук, которого не существует", {"hidden": 5, "social": 3, "impulsive": 5, "strategy": 5, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Как ты читаешь незнакомую книгу?",
+        "options": (
+            ("Сначала ищу скрытый смысл", {"hidden": 9, "social": 2, "impulsive": 2, "strategy": 7, "creative": 7}),
+            ("Обсуждаю первые страницы с кем-то", {"hidden": 2, "social": 10, "impulsive": 2, "strategy": 4, "creative": 4}),
+            ("Открываю случайную страницу", {"hidden": 3, "social": 2, "impulsive": 9, "strategy": 3, "creative": 6}),
+            ("Представляю, что автор хотел изменить", {"hidden": 5, "social": 3, "impulsive": 4, "strategy": 6, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Если у тебя есть час полной невидимости, ты…",
+        "options": (
+            ("Наблюдаю за теми, кто меня не замечает", {"hidden": 10, "social": 2, "impulsive": 2, "strategy": 7, "creative": 5}),
+            ("Помогаю кому-то незаметно", {"hidden": 4, "social": 9, "impulsive": 3, "strategy": 6, "creative": 6}),
+            ("Проверяю самые рискованные границы", {"hidden": 3, "social": 2, "impulsive": 10, "strategy": 4, "creative": 7}),
+            ("Устраиваю невозможную сцену", {"hidden": 5, "social": 5, "impulsive": 7, "strategy": 4, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Какой вопрос ты задашь своему будущему «я»?",
+        "options": (
+            ("Кому ты так и не показал настоящего себя?", {"hidden": 10, "social": 3, "impulsive": 2, "strategy": 6, "creative": 6}),
+            ("Кого ты не забыл?", {"hidden": 3, "social": 10, "impulsive": 2, "strategy": 4, "creative": 5}),
+            ("Что ты сделал, хотя боялся?", {"hidden": 3, "social": 4, "impulsive": 9, "strategy": 4, "creative": 6}),
+            ("Какую невозможную идею ты воплотил?", {"hidden": 5, "social": 4, "impulsive": 5, "strategy": 7, "creative": 10}),
+        ),
+    },
+    {
+        "text": "Что ты выберешь в финале неизвестной игры?",
+        "options": (
+            ("Скрытую концовку", {"hidden": 9, "social": 2, "impulsive": 2, "strategy": 8, "creative": 6}),
+            ("Финал, который увидят все", {"hidden": 2, "social": 10, "impulsive": 3, "strategy": 5, "creative": 5}),
+            ("Самый опасный финал", {"hidden": 3, "social": 3, "impulsive": 10, "strategy": 3, "creative": 7}),
+            ("Финал, которого нет в правилах", {"hidden": 5, "social": 4, "impulsive": 6, "strategy": 5, "creative": 10}),
+        ),
+    },
+)
 # Пользователи, которые хотя бы раз взаимодействовали с ботом/чатом.
 # private_started позволяет безопасно отличать тех, кому Telegram разрешит
 # отправить личное сообщение после /start.
@@ -661,6 +758,20 @@ def _build_main_payload() -> dict:
         "founder_grant_version": founder_grant_version,
         "reputation":   {str(c): {str(u): v for u, v in r.items()} for c, r in reputation.items()},
         "profiles":     {str(u): v for u, v in profiles.items()},
+        "psych_profiles": {
+            str(u): {
+                "type": str(value.get("type", ""))[:80],
+                "metrics": {
+                    str(metric): max(0, min(100, int(score)))
+                    for metric, score in (value.get("metrics", {}) or {}).items()
+                    if str(metric) in {"hidden", "social", "impulsive", "strategy", "creative"}
+                },
+                "answers": [int(answer) for answer in (value.get("answers", []) or [])[:10]],
+                "updated_at": str(value.get("updated_at", ""))[:40],
+            }
+            for u, value in psych_profiles.items()
+            if isinstance(value, dict)
+        },
         "user_locations": {str(u): value for u, value in user_locations.items()},
         "known_users":  {str(u): v for u, v in known_users.items()},
         "anon_questions": {str(qid): q for qid, q in anon_questions.items()},
@@ -10187,6 +10298,234 @@ async def cmd_chatinfo(msg: Message):
         f"{brand.div()}",
         parse_mode="HTML")
 
+def _psych_keyboard(uid: int, question_index: int) -> InlineKeyboardMarkup:
+    options = PSYCH_QUESTIONS[question_index]["options"]
+    rows = []
+    for start in range(0, len(options), 2):
+        rows.append([
+            InlineKeyboardButton(
+                text=option[0],
+                callback_data=f"psycho:{uid}:{question_index}:{option_index}",
+            )
+            for option_index, option in enumerate(options[start:start + 2], start)
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _psych_question_text(question_index: int) -> str:
+    question = PSYCH_QUESTIONS[question_index]["text"]
+    return (
+        f"{brand.hdr()}\n\n"
+        "🧠 <b>Психолог Lumenora</b>\n\n"
+        f"Вопрос <b>{question_index + 1}/10</b>\n\n"
+        f"{html.escape(question)}\n\n"
+        "Выбери вариант, который ближе всего к твоей первой реакции."
+    )
+
+
+def _psych_type(metrics: dict[str, int]) -> str:
+    if metrics["strategy"] >= 72 and metrics["hidden"] >= 65:
+        return "Ночной стратег"
+    if metrics["social"] >= 72 and metrics["creative"] >= 60:
+        return "Социальный архитектор"
+    if metrics["creative"] >= 75:
+        return "Создатель невозможного"
+    if metrics["impulsive"] >= 75:
+        return "Искра перемен"
+    if metrics["hidden"] >= 72:
+        return "Тихий наблюдатель"
+    if metrics["strategy"] >= 70:
+        return "Холодный аналитик"
+    return "Гибкий исследователь"
+
+
+def _psych_profile_text(uid: int, display_name: str | None = None) -> str:
+    profile = psych_profiles.get(uid)
+    if not profile:
+        return "🧠 Профиль личности ещё не создан."
+    metrics = profile.get("metrics", {})
+    name = html.escape(display_name or "Игрок")
+    labels = (
+        ("hidden", "🎭 Скрытность"),
+        ("social", "🗣️ Социальность"),
+        ("impulsive", "🧨 Импульсивность"),
+        ("strategy", "♟ Стратегичность"),
+        ("creative", "✨ Воображение"),
+    )
+    lines = [
+        f"{brand.hdr()}\n\n"
+        f"🧠 <b>Профиль личности Lumenora</b>\n"
+        f"👤 {name}\n\n"
+        f"🎯 Твой тип: <b>{html.escape(str(profile.get('type', 'Исследователь')))}</b>",
+        brand.div(),
+    ]
+    for key, label in labels:
+        value = max(0, min(100, int(metrics.get(key, 0))))
+        filled = "▰" * (value // 10)
+        empty = "▱" * (10 - value // 10)
+        lines.append(f"{label}: <b>{value}%</b> {filled}{empty}")
+    lines.extend([
+        "",
+        "Профиль собран по 10 необычным вопросам.",
+        "Чтобы сравнить его с другим игроком: <code>психолог сравнить @username</code> "
+        "или ответь этой командой на сообщение игрока.",
+    ])
+    return "\n".join(lines)
+
+
+async def _psych_compare(msg: Message, target_ref: str = ""):
+    own = psych_profiles.get(msg.from_user.id)
+    if not own:
+        return await msg.reply(
+            "Сначала создай свой профиль: <code>психолог</code>.",
+            parse_mode="HTML",
+        )
+
+    target = msg.reply_to_message.from_user if msg.reply_to_message else None
+    if target is None and target_ref:
+        class _TargetCommand:
+            args = target_ref
+        target = await get_user(msg, _TargetCommand())
+    if target is None:
+        return await msg.reply(
+            "Ответь командой <code>психолог сравнить</code> на сообщение игрока "
+            "или укажи <code>@username</code>.",
+            parse_mode="HTML",
+        )
+    other = psych_profiles.get(target.id)
+    if not other:
+        return await msg.reply(
+            f"У <b>{html.escape(target.full_name)}</b> пока нет профиля. "
+            "Пусть он пройдёт <code>психолог</code>.",
+            parse_mode="HTML",
+        )
+
+    keys = ("hidden", "social", "impulsive", "strategy", "creative")
+    differences = [
+        abs(int(own["metrics"].get(key, 0)) - int(other["metrics"].get(key, 0)))
+        for key in keys
+    ]
+    compatibility = max(0, round(100 - sum(differences) / len(keys)))
+    shared = min(
+        keys,
+        key=lambda key: abs(
+            int(own["metrics"].get(key, 0))
+            - int(other["metrics"].get(key, 0))
+        ),
+    )
+    strongest = max(
+        keys,
+        key=lambda key: int(own["metrics"].get(key, 0)) + int(other["metrics"].get(key, 0)),
+    )
+    labels = {
+        "hidden": "скрытность",
+        "social": "социальность",
+        "impulsive": "импульсивность",
+        "strategy": "стратегичность",
+        "creative": "воображение",
+    }
+    await msg.reply(
+        f"{brand.hdr()}\n\n"
+        "🧠 <b>Сравнение профилей</b>\n\n"
+        f"👤 {html.escape(msg.from_user.full_name)} — "
+        f"<b>{html.escape(str(own.get('type', '')))}</b>\n"
+        f"👤 {html.escape(target.full_name)} — "
+        f"<b>{html.escape(str(other.get('type', '')))}</b>\n\n"
+        f"{brand.div()}\n"
+        f"🤝 Совместимость: <b>{compatibility}%</b>\n"
+        f"🔗 Ближе всего вы по параметру: <b>{labels[shared]}</b>\n"
+        f"⚡ Вместе сильнее всего выражено: <b>{labels[strongest]}</b>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("psychologist", "психолог"))
+async def _cmd_psychologist_slash(msg: Message, command: CommandObject):
+    await cmd_psychologist(msg, command)
+
+
+async def cmd_psychologist(msg: Message, command: CommandObject = None):
+    args = (getattr(command, "args", None) or "").strip()
+    parts = args.split()
+    if parts and parts[0].casefold() in {"сравнить", "сравни", "compare"}:
+        target_ref = parts[1] if len(parts) > 1 else ""
+        return await _psych_compare(msg, target_ref)
+
+    uid = msg.from_user.id
+    psych_sessions[uid] = {
+        "chat_id": msg.chat.id,
+        "index": 0,
+        "scores": {
+            "hidden": 0,
+            "social": 0,
+            "impulsive": 0,
+            "strategy": 0,
+            "creative": 0,
+        },
+        "answers": [],
+    }
+    await msg.reply(
+        _psych_question_text(0),
+        parse_mode="HTML",
+        reply_markup=_psych_keyboard(uid, 0),
+    )
+
+
+@dp.callback_query(F.data.startswith("psycho:"))
+async def _psych_answer_callback(cb: CallbackQuery):
+    if not cb.data or not cb.from_user:
+        return await cb.answer()
+    try:
+        _, uid_raw, question_raw, option_raw = cb.data.split(":", 3)
+        uid = int(uid_raw)
+        question_index = int(question_raw)
+        option_index = int(option_raw)
+    except (TypeError, ValueError):
+        return await cb.answer("Некорректный ответ", show_alert=True)
+
+    if cb.from_user.id != uid:
+        return await cb.answer("Это не твоя анкета.", show_alert=True)
+    session = psych_sessions.get(uid)
+    if not session or session.get("index") != question_index:
+        return await cb.answer("Анкета устарела. Запусти «психолог» заново.", show_alert=True)
+    if not 0 <= question_index < len(PSYCH_QUESTIONS):
+        return await cb.answer("Анкета завершена.", show_alert=True)
+    options = PSYCH_QUESTIONS[question_index]["options"]
+    if not 0 <= option_index < len(options):
+        return await cb.answer("Некорректный вариант.", show_alert=True)
+
+    for metric, score in options[option_index][1].items():
+        session["scores"][metric] += int(score)
+    session["answers"].append(option_index)
+    next_index = question_index + 1
+    if next_index < len(PSYCH_QUESTIONS):
+        session["index"] = next_index
+        await cb.message.edit_text(
+            _psych_question_text(next_index),
+            parse_mode="HTML",
+            reply_markup=_psych_keyboard(uid, next_index),
+        )
+        return await cb.answer()
+
+    metrics = {
+        metric: max(0, min(100, int(score)))
+        for metric, score in session["scores"].items()
+    }
+    psych_profiles[uid] = {
+        "type": _psych_type(metrics),
+        "metrics": metrics,
+        "answers": list(session["answers"]),
+        "updated_at": now_kyiv().isoformat(),
+    }
+    psych_sessions.pop(uid, None)
+    schedule_state_save("профиль психолога")
+    await cb.message.edit_text(
+        _psych_profile_text(uid, cb.from_user.full_name),
+        parse_mode="HTML",
+    )
+    await cb.answer("Профиль готов")
+
+
 @dp.message(Command("profile"))
 async def _cmd_profile_slash(msg: Message):
     await cmd_profile(msg)
@@ -13314,6 +13653,9 @@ _HELP_SECTIONS = {
         "✏️ <b>Настройки:</b>\n"
         "<code>сетбио [текст]</code> — описание профиля\n"
         "<code>сетзвание [текст]</code> — своё звание\n\n"
+        "🧠 <b>Психолог:</b>\n"
+        "<code>психолог</code> — пройти 10 вопросов и создать профиль личности\n"
+        "<code>психолог сравнить @username</code> — сравнить два профиля\n\n"
         "🕶 <b>Анонимные вопросы:</b>\n"
         "<code>/ask @username вопрос</code> — отправить вопрос анонимно\n"
         "<code>/answer текст</code> — ответить анонимно на полученный вопрос\n\n"
@@ -14041,6 +14383,9 @@ TEXT_COMMANDS.update({
     # Репутация
     "аура": cmd_aura, "ауру": cmd_aura, "моя аура": cmd_aura,
     "топауры": cmd_topaura, "топ ауры": cmd_topaura,
+    # Психолог
+    "психолог": cmd_psychologist, "psychologist": cmd_psychologist,
+    "профиль личности": cmd_psychologist,
     # Брак
     "брак": cmd_marry, "жениться": cmd_marry, "замуж": cmd_marry,
     "отношения": cmd_marriage_menu, "relationship": cmd_marriage_menu,
@@ -18850,6 +19195,27 @@ def _apply_data(data: dict) -> None:
         reputation[int(cid)] = {int(u): v for u, v in r.items()}
     for u, v in data.get("profiles", {}).items():
         profiles[int(u)] = v
+    for u, value in data.get("psych_profiles", {}).items():
+        try:
+            if not isinstance(value, dict):
+                continue
+            metrics = {
+                str(metric): max(0, min(100, int(score)))
+                for metric, score in (value.get("metrics", {}) or {}).items()
+                if str(metric) in {"hidden", "social", "impulsive", "strategy", "creative"}
+            }
+            if metrics:
+                psych_profiles[int(u)] = {
+                    "type": str(value.get("type", ""))[:80],
+                    "metrics": metrics,
+                    "answers": [
+                        int(answer)
+                        for answer in (value.get("answers", []) or [])[:10]
+                    ],
+                    "updated_at": str(value.get("updated_at", ""))[:40],
+                }
+        except (TypeError, ValueError):
+            pass
     for u, value in data.get("user_locations", {}).items():
         if isinstance(value, str) and value.strip():
             user_locations[int(u)] = value.strip()[:80]
