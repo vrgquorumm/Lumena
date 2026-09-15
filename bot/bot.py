@@ -147,6 +147,35 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# У callback-уведомлений нет chat_id внутри AnswerCallbackQuery, поэтому
+# локализуем их до создания метода через исходный CallbackQuery.
+_orig_callback_answer = CallbackQuery.answer
+
+
+def _ukrainian_callback_answer(
+    self,
+    text=None,
+    show_alert=None,
+    url=None,
+    cache_time=None,
+    **kwargs,
+):
+    callback_message = getattr(self, "message", None)
+    callback_chat = getattr(callback_message, "chat", None)
+    if getattr(callback_chat, "id", None) == MAIN_CHAT_ID and text:
+        text = _uk_localize_text(text)
+    return _orig_callback_answer(
+        self,
+        text=text,
+        show_alert=show_alert,
+        url=url,
+        cache_time=cache_time,
+        **kwargs,
+    )
+
+
+CallbackQuery.answer = _ukrainian_callback_answer
+
 # ═══════════════════════════════════════════════════════
 # ГЛОБАЛЬНЫЙ ПЕРЕХОД НА BOT API 10.1 RICH MESSAGES
 # ═══════════════════════════════════════════════════════
@@ -19219,6 +19248,49 @@ async def main():
                 BotCommand(command="destiny", description="🔮 Доля пари"),
                 BotCommand(command="contract", description="📜 Шлюбний контракт"),
                 BotCommand(command="helplum", description="📩 Скарги та запитання"),
+                BotCommand(command="messageschat", description="💬 Статистика повідомлень"),
+                BotCommand(command="psychologist", description="🧠 Профіль особистості"),
+                BotCommand(command="balance", description="💰 Баланс"),
+                BotCommand(command="work", description="💼 Робота"),
+                BotCommand(command="fish", description="🎣 Рибалка"),
+                BotCommand(command="hunt", description="🏹 Полювання"),
+                BotCommand(command="mine", description="⛏ Шахта"),
+                BotCommand(command="cook", description="🍳 Готування"),
+                BotCommand(command="explore", description="🧭 Експедиція"),
+                BotCommand(command="rob", description="🕵️ Пограбування"),
+                BotCommand(command="bank", description="🏦 Банк"),
+                BotCommand(command="auction", description="🔨 Аукціон"),
+                BotCommand(command="aura", description="🌑 Моя аура"),
+                BotCommand(command="topaura", description="✨ Топ аури"),
+                BotCommand(command="marry", description="💍 Шлюб"),
+                BotCommand(command="divorce", description="💔 Розлучення"),
+                BotCommand(command="marriages", description="💒 Список шлюбів"),
+                BotCommand(command="compatibility", description="💞 Сумісність"),
+                BotCommand(command="love", description="❤️ Кохання"),
+                BotCommand(command="friend", description="🤝 Дружба"),
+                BotCommand(command="couple", description="👩‍❤️‍👨 Пара"),
+                BotCommand(command="fortune", description="🔮 Передбачення"),
+                BotCommand(command="horoscope", description="♈ Гороскоп"),
+                BotCommand(command="tarot", description="🃏 Таро"),
+                BotCommand(command="predict", description="🌠 Передбачити"),
+                BotCommand(command="superpower", description="⚡ Суперсила"),
+                BotCommand(command="profession", description="🧭 Професія"),
+                BotCommand(command="numerology", description="🔢 Нумерологія"),
+                BotCommand(command="whois", description="🪪 Хто це"),
+                BotCommand(command="myid", description="🆔 Мій ID"),
+                BotCommand(command="info", description="ℹ️ Інформація"),
+                BotCommand(command="rules", description="📜 Правила"),
+                BotCommand(command="ask", description="❓ Анонімне запитання"),
+                BotCommand(command="answer", description="💬 Відповісти"),
+                BotCommand(command="users", description="👥 Користувачі"),
+                BotCommand(command="poll", description="📊 Опитування"),
+                BotCommand(command="inventory", description="🎒 Інвентар"),
+                BotCommand(command="premium", description="💎 Преміум"),
+                BotCommand(command="exchange", description="🔄 Обмін"),
+                BotCommand(command="ping", description="🏓 Перевірити зв'язок"),
+                BotCommand(command="version", description="📦 Версія бота"),
+                BotCommand(command="antilink", description="🔗 Антилинк"),
+                BotCommand(command="whitelist", description="✅ Білий список"),
             ],
             scope=BotCommandScopeChat(chat_id=MAIN_CHAT_ID),
         )
