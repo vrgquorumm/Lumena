@@ -42,7 +42,7 @@ from aiogram.types import (
     ChatMemberUpdated,
     User,
     BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeAllGroupChats,
-    BotCommandScopeDefault,
+    BotCommandScopeChat, BotCommandScopeDefault,
     InputMediaPhoto, InputMediaVideo,
     LabeledPrice, MessageEntity,
     WebAppInfo,
@@ -55,6 +55,7 @@ import brand
 import db as _db
 from uk_locale import localize_markup as _uk_localize_markup
 from uk_locale import localize_text as _uk_localize_text
+from uk_locale import resolve_command_alias as _uk_resolve_command_alias
 from auction import AuctionManager
 
 auction_manager = AuctionManager()
@@ -232,6 +233,20 @@ def _decorate_caption_container(model):
     return model.model_copy(update=updates) if updates else model
 
 
+def _localize_caption_container(model):
+    """Перекладає caption у головному чаті, включно з InputMedia."""
+    if model is None or not hasattr(model, "model_copy"):
+        return model
+    caption = getattr(model, "caption", None)
+    if not caption:
+        return model
+    localized = _uk_localize_text(caption)
+    return (
+        model.model_copy(update={"caption": localized})
+        if localized != caption else model
+    )
+
+
 async def _call_with_message_fallback(self, method, request_timeout=None):
     """Отправляет сообщение и убирает спорные entities при ошибке Telegram."""
     try:
@@ -341,6 +356,19 @@ async def _rich_patched_call(self, method, request_timeout=None):
             themed_media = _decorate_caption_container(nested_media)
             if themed_media is not nested_media:
                 method = method.model_copy(update={"media": themed_media})
+        if getattr(method, "chat_id", None) == MAIN_CHAT_ID:
+            method = _localize_caption_container(method)
+            localized_media = getattr(method, "media", None)
+            if isinstance(localized_media, (list, tuple)):
+                localized_media = [
+                    _localize_caption_container(media)
+                    for media in localized_media
+                ]
+                method = method.model_copy(update={"media": localized_media})
+            elif localized_media is not None:
+                method = method.model_copy(update={
+                    "media": _localize_caption_container(localized_media)
+                })
 
         # Bot API 9.4+ поддерживает style и icon_custom_emoji_id у кнопок.
         # Декорируем клавиатуры централизованно, чтобы не переписывать
@@ -366,6 +394,8 @@ async def _rich_patched_call(self, method, request_timeout=None):
             compact_text = brand.plain_text(
                 brand.decorate_message_html(rich_html),
             )
+            if method.chat_id == MAIN_CHAT_ID:
+                compact_text = _uk_localize_text(compact_text) or compact_text
             method = SendMessage(
                 chat_id=method.chat_id,
                 text=compact_text or "",
@@ -384,6 +414,8 @@ async def _rich_patched_call(self, method, request_timeout=None):
         if isinstance(method, SendMessage):
             html_text = _to_rich_html(method.text, method.entities, method.parse_mode)
             source_text = html_text if html_text is not None else method.text
+            if method.chat_id == MAIN_CHAT_ID:
+                source_text = _uk_localize_text(source_text)
             method = method.model_copy(update={
                 "text": brand.plain_text(source_text) or "",
                 "entities": None,
@@ -394,6 +426,8 @@ async def _rich_patched_call(self, method, request_timeout=None):
             source_text = rich_html if rich_html is not None else method.text
             html_text = _to_rich_html(source_text, method.entities, method.parse_mode)
             source_text = html_text if html_text is not None else source_text
+            if method.chat_id == MAIN_CHAT_ID:
+                source_text = _uk_localize_text(source_text)
             method = method.model_copy(update={
                 "text": brand.plain_text(source_text) or "",
                 "entities": None,
@@ -18113,6 +18147,7 @@ TEXT_COMMANDS[FOUNDER_BIND_CHAT_LEGACY] = cmd_founder_bind_main_chat
 TEXT_COMMANDS[FOUNDER_BIND_OBSERVER_LEGACY] = cmd_founder_bind_observer_chat
 TEXT_COMMANDS["флюди"] = cmd_founder_users
 TEXT_COMMANDS["game"] = cmd_game
+TEXT_COMMANDS["start"] = cmd_start_private
 
 
 
@@ -18614,6 +18649,8 @@ async def universal_handler(msg: Message):
         if not parts:
             return
         cmd_word = parts[0].lower()
+        if msg.chat.id == MAIN_CHAT_ID:
+            cmd_word = _uk_resolve_command_alias(cmd_word)
         args_str = parts[1] if len(parts) > 1 else ""
 
         # Конвертируем русские суффиксы ТОЛЬКО в первом слове (время),
@@ -18666,6 +18703,8 @@ async def universal_handler(msg: Message):
     if text.startswith("/"):
         slash_parts = text[1:].split(maxsplit=1)
         slash_word = (slash_parts[0] if slash_parts else "").split("@", 1)[0].lower()
+        if msg.chat.id == MAIN_CHAT_ID:
+            slash_word = _uk_resolve_command_alias(slash_word)
         if slash_word in TEXT_COMMANDS:
             class SlashFakeCmd:
                 args = slash_parts[1] if len(slash_parts) > 1 else ""
@@ -18683,6 +18722,10 @@ async def universal_handler(msg: Message):
         three_words = " ".join(parts[:3]) if len(parts) >= 3 else ""
         two_words = " ".join(parts[:2]) if len(parts) >= 2 else ""
         first_word = parts[0] if parts else ""
+        if msg.chat.id == MAIN_CHAT_ID:
+            three_words = _uk_resolve_command_alias(three_words)
+            two_words = _uk_resolve_command_alias(two_words)
+            first_word = _uk_resolve_command_alias(first_word)
 
         # Сначала пробуем составные команды (например "признаться в любви"),
         # затем двухсловные и обычные.
@@ -19155,6 +19198,29 @@ async def main():
                 BotCommand(command="contract", description="📜 Брачный контракт"),
             ],
             scope=BotCommandScopeAllGroupChats(),
+        )
+        # У главного чата отдельная команда-меню на украинском. Названия
+        # slash-команд остаются латинскими по ограничению Telegram Bot API,
+        # но их описания и украинские aliases работают локально в этом чате.
+        await bot.set_my_commands(
+            [
+                BotCommand(command="start", description="✨ Відкрити Lumenora"),
+                BotCommand(command="profile", description="👑 Мій профіль"),
+                BotCommand(command="help", description="📖 Усі команди"),
+                BotCommand(command="settings", description="🎨 Налаштування й оформлення"),
+                BotCommand(command="theme", description="🎨 Встановити emoji-пак"),
+                BotCommand(command="addtheme", description="➕ Змішати emoji-пак"),
+                BotCommand(command="top", description="⭐ Топ учасників"),
+                BotCommand(command="shop", description="💎 Крамниця"),
+                BotCommand(command="game", description="🏗 Відкрити Котобуд"),
+                BotCommand(command="date", description="💌 Побачення"),
+                BotCommand(command="history", description="📖 Літопис пари"),
+                BotCommand(command="wedding", description="💒 Весілля"),
+                BotCommand(command="destiny", description="🔮 Доля пари"),
+                BotCommand(command="contract", description="📜 Шлюбний контракт"),
+                BotCommand(command="helplum", description="📩 Скарги та запитання"),
+            ],
+            scope=BotCommandScopeChat(chat_id=MAIN_CHAT_ID),
         )
         await bot.set_my_description(
             "✨ L U M E N O R A ✨\n\n"
