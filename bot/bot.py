@@ -53,6 +53,8 @@ from lumena import get_lumena_response
 import ai_agent
 import brand
 import db as _db
+from uk_locale import localize_markup as _uk_localize_markup
+from uk_locale import localize_text as _uk_localize_text
 from auction import AuctionManager
 
 auction_manager = AuctionManager()
@@ -398,6 +400,19 @@ async def _rich_patched_call(self, method, request_timeout=None):
                 "parse_mode": None,
                 "rich_message": None,
             })
+        if getattr(method, "chat_id", None) == MAIN_CHAT_ID:
+            localized_updates = {}
+            for field_name in ("text", "caption"):
+                value = getattr(method, field_name, None)
+                if value:
+                    localized = _uk_localize_text(value)
+                    if localized != value:
+                        localized_updates[field_name] = localized
+            markup = getattr(method, "reply_markup", None)
+            if markup is not None:
+                localized_updates["reply_markup"] = _uk_localize_markup(markup)
+            if localized_updates and hasattr(method, "model_copy"):
+                method = method.model_copy(update=localized_updates)
     except Exception as ex:
         print(f"⚠️ rich-message перехват не удался, отправляю как обычно: {ex}")
     return await _orig_bot_call(self, method, request_timeout)
