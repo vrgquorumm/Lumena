@@ -32,7 +32,7 @@ def today_kyiv() -> date:
     return now_kyiv().date()
 
 import aiohttp
-from aiogram import Bot, Dispatcher, F
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
@@ -146,6 +146,52 @@ EXTRA_EMOJI_PACKS = (
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+
+def _track_main_chat_message(message: Message) -> None:
+    """Keeps today's incoming main-chat message IDs for founder purge."""
+    global _main_chat_ledger_events
+    if getattr(message, "chat", None) is None or message.chat.id != MAIN_CHAT_ID:
+        return
+    message_id = int(getattr(message, "message_id", 0) or 0)
+    if message_id <= 0:
+        return
+
+    stamp = getattr(message, "date", None)
+    if stamp is None:
+        day = today_kyiv().isoformat()
+    else:
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=KYIV_TZ)
+        day = stamp.astimezone(KYIV_TZ).date().isoformat()
+    today = today_kyiv().isoformat()
+    if day != today:
+        return
+
+    for stale_day in list(_main_chat_daily_messages):
+        if stale_day != today:
+            _main_chat_daily_messages.pop(stale_day, None)
+    ids = _main_chat_daily_messages.setdefault(today, [])
+    if message_id in ids:
+        return
+    ids.append(message_id)
+    # A pathological flood should not make the persisted bot snapshot grow
+    # without bounds. Telegram message IDs are monotonically increasing.
+    if len(ids) > 100_000:
+        del ids[: len(ids) - 100_000]
+    _main_chat_ledger_events += 1
+    if _main_chat_ledger_events % 50 == 0:
+        schedule_state_save("журнал сообщений главного чата")
+
+
+class _MainChatMessageLedgerMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message):
+            _track_main_chat_message(event)
+        return await handler(event, data)
+
+
+dp.message.outer_middleware(_MainChatMessageLedgerMiddleware())
 
 # У callback-уведомлений нет chat_id внутри AnswerCallbackQuery, поэтому
 # локализуем их до создания метода через исходный CallbackQuery.
@@ -654,6 +700,8 @@ COIN_DROPS_ENABLED = False
 _sticker_bursts: dict[int, int] = {}
 
 _link_guard:       dict[int, bool]        = {}
+_main_chat_daily_messages: dict[str, list[int]] = {}
+_main_chat_ledger_events = 0
 pending_notifications: list[dict] = []  # [{chat_id, text, parse_mode}] — одноразовые сообщения при старте
 _link_guard_warns: dict[int, dict]        = {}
 _link_whitelist:   dict[int, list[str]]   = {}
@@ -967,6 +1015,11 @@ def _build_main_payload() -> dict:
         # V6
         "user_xp":           {str(u): v for u, v in user_xp.items()},
         "user_messages":     {str(c): {str(u): v for u, v in m.items()} for c, m in user_messages.items()},
+        "main_chat_daily_messages": {
+            str(day): [int(message_id) for message_id in ids[-100_000:]]
+            for day, ids in _main_chat_daily_messages.items()
+            if str(day) == today_kyiv().isoformat()
+        },
         "daily_cooldown":    {str(u): v for u, v in daily_cooldown.items()},
         "user_achievements": {str(u): list(v) for u, v in user_achievements.items()},
         "founder_medals": {
@@ -4207,6 +4260,53 @@ async def cmd_moderation_slash_fallback(msg: Message):
         args = parts[1] if len(parts) > 1 else ""
 
     return await handler(msg, RawSlashCommand())
+
+
+@dp.message(
+    Command(
+        "purgetoday",
+        "clear_today",
+        "очиститьсегодня",
+        "очиститисьогодні",
+    )
+)
+async def cmd_purge_today(msg: Message):
+    """Founder-only private command for deleting today's tracked main-chat messages."""
+    if not is_owner(msg) or msg.chat.type != "private":
+        return
+
+    today = today_kyiv().isoformat()
+    message_ids = list(dict.fromkeys(_main_chat_daily_messages.get(today, [])))
+    if not message_ids:
+        return await msg.answer(
+            "ℹ️ За сьогодні в журналі немає повідомлень для видалення.\n"
+            "Бот може видаляти лише повідомлення, які отримав після запуску журналу."
+        )
+
+    try:
+        await bot.unpin_chat_message(MAIN_CHAT_ID)
+    except Exception:
+        # There may be no pinned message, or it may belong to an older date.
+        pass
+
+    deleted = 0
+    failed = 0
+    for index, message_id in enumerate(reversed(message_ids), 1):
+        try:
+            await bot.delete_message(MAIN_CHAT_ID, message_id)
+            deleted += 1
+        except Exception:
+            failed += 1
+        if index % 25 == 0:
+            await asyncio.sleep(1)
+
+    _main_chat_daily_messages.pop(today, None)
+    await save_state_now("очистка сегодняшней истории главного чата")
+    await msg.answer(
+        "🗑 Історію головного чату за сьогодні оброблено.\n\n"
+        f"Видалено: {deleted}\n"
+        f"Недоступно для видалення: {failed}"
+    )
 
 
 @dp.message(Command("purge"))
@@ -16799,6 +16899,10 @@ TEXT_COMMANDS.update({
 
 # ── V6 команды ─────────────────────────────────────────
 TEXT_COMMANDS.update({
+    "purgetoday":          cmd_purge_today,
+    "clear_today":         cmd_purge_today,
+    "очиститьсегодня":     cmd_purge_today,
+    "очиститисьогодні":    cmd_purge_today,
     # XP / уровни
     "уровень":       cmd_level,
     "ранг":          cmd_rank,
@@ -19611,6 +19715,14 @@ def _apply_data(data: dict) -> None:
         user_xp[int(u)] = int(v)
     for c, m in data.get("user_messages", {}).items():
         user_messages[int(c)] = {int(u): int(cnt) for u, cnt in m.items()}
+    for day, ids in data.get("main_chat_daily_messages", {}).items():
+        if str(day) != today_kyiv().isoformat() or not isinstance(ids, list):
+            continue
+        _main_chat_daily_messages[str(day)] = [
+            int(message_id)
+            for message_id in ids[-100_000:]
+            if str(message_id).lstrip("-").isdigit()
+        ]
     for u, v in data.get("daily_cooldown", {}).items():
         daily_cooldown[int(u)] = str(v)
     for u, v in data.get("user_achievements", {}).items():
