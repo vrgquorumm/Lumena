@@ -406,6 +406,10 @@ class MenuTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_former_scopes_and_locales_are_replaced_offline(self):
         from bot import configure_identity
         api = SimpleNamespace(set_my_commands=AsyncMock(), set_my_name=AsyncMock(),
+                              get_my_commands=AsyncMock(return_value=[]),
+                              get_my_name=AsyncMock(return_value=SimpleNamespace(name="Old name")),
+                              get_my_description=AsyncMock(return_value=SimpleNamespace(description="")),
+                              get_my_short_description=AsyncMock(return_value=SimpleNamespace(short_description="")),
                               set_my_description=AsyncMock(),
                               set_my_short_description=AsyncMock())
         await configure_identity(api, main_chat=-1004401287309)

@@ -29,14 +29,27 @@ async def configure_identity(bot, main_chat=None):
             localized = [BotCommand(command=cmd.command,
                                     description=translate(cmd.description, language))
                          for cmd in menu]
-            await bot.set_my_commands(localized, scope=scope, language_code=language)
-    await bot.set_my_name(name="AURELIA")
+            current = await bot.get_my_commands(scope=scope, language_code=language)
+            if current != localized:
+                await bot.set_my_commands(localized, scope=scope, language_code=language)
+    if (await bot.get_my_name()).name != "AURELIA":
+        await bot.set_my_name(name="AURELIA")
     for language in (None, "en", "ru", "sl"):
         description = translate("Community, identity and rewards. AI coming soon.", language)
-        await bot.set_my_description(description=f"✦ AURELIA\n\n{description}",
-                                     language_code=language)
-        await bot.set_my_short_description(description=f"✦ AURELIA — {description}",
-                                           language_code=language)
+        full = f"✦ AURELIA\n\n{description}"
+        short = f"✦ AURELIA — {description}"
+        if (await bot.get_my_description(language_code=language)).description != full:
+            await bot.set_my_description(description=full, language_code=language)
+        if (await bot.get_my_short_description(language_code=language)).short_description != short:
+            await bot.set_my_short_description(description=short, language_code=language)
+
+
+async def configure_identity_safely(bot):
+    """Cosmetic API failures must never prevent polling or trigger restart loops."""
+    try:
+        await configure_identity(bot)
+    except Exception:
+        logging.exception("Telegram profile/menu sync deferred; command polling continues")
 
 
 async def main():
@@ -44,12 +57,13 @@ async def main():
     state = await State.open()
     bot = Bot(token=token)
     reminder_task = None
+    identity_task = None
     try:
         identity = await bot.get_me()
         ui = Interface(state, token, identity.username or "")
         dispatcher = Dispatcher()
         dispatcher.include_router(ui.router)
-        await configure_identity(bot)
+        identity_task = asyncio.create_task(configure_identity_safely(bot))
         async def reminders():
             while True:
                 try:
@@ -66,10 +80,12 @@ async def main():
         reminder_task = asyncio.create_task(reminders())
         await dispatcher.start_polling(bot, allowed_updates=["message", "callback_query"])
     finally:
-        if reminder_task:
-            reminder_task.cancel()
+        for task in (reminder_task, identity_task):
+            if not task:
+                continue
+            task.cancel()
             try:
-                await reminder_task
+                await task
             except asyncio.CancelledError:
                 pass
         await bot.session.close()
