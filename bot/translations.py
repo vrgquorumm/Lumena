@@ -268,7 +268,7 @@ LANGUAGES = {
     "az": ("🇦🇿", "Azərbaycanca"), "ky": ("🇰🇬", "Кыргызча"),
     "tg": ("🇹🇯", "Тоҷикӣ"), "tk": ("🇹🇲", "Türkmençe"),
     "uz": ("🇺🇿", "O‘zbekcha"), "ro": ("🇲🇩", "Română (Moldova)"),
-    "sl": ("🇸🇮", "Slovenščina"),
+    "ka": ("🇬🇪", "ქართული"), "sl": ("🇸🇮", "Slovenščina"),
 }
 
 # Core navigation, language selection, and account-safety messages for the
@@ -389,6 +389,18 @@ _CORE = {
         "Selected": "Selectat", "Open": "Deschide", "Share": "Distribuie",
         "Solve": "Rezolvați", "Already claimed today.": "Recompensa de astăzi a fost deja revendicată.",
         "Verify your account to continue.": "Verificați-vă contul pentru a continua.",
+    },
+    "ka": {
+        "Home": "მთავარი", "Profile": "პროფილი", "Wallet": "საფულე",
+        "Rewards": "ჯილდოები", "Daily": "დღიური ჯილდო", "Quests": "დავალებები",
+        "Social": "სოციალური ქსელები", "Community": "საზოგადოება",
+        "Events": "ღონისძიებები", "News": "სიახლეები", "Settings": "პარამეტრები",
+        "Language": "ენა", "Notifications": "შეტყობინებები", "Back": "უკან",
+        "Cancel": "გაუქმება", "Help": "დახმარება",
+        "Select your preferred language.": "აირჩიეთ სასურველი ენა.",
+        "Selected": "არჩეულია", "Open": "გახსნა", "Share": "გაზიარება",
+        "Solve": "ამოხსენით", "Already claimed today.": "დღევანდელი ჯილდო უკვე მიღებულია.",
+        "Verify your account to continue.": "გასაგრძელებლად დაადასტურეთ თქვენი ანგარიში.",
     },
 }
 for _code, _words in _CORE.items():
