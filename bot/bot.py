@@ -41,7 +41,7 @@ async def configure_identity(bot, main_chat=None):
         if (await bot.get_my_description(language_code=language)).description != full:
             await bot.set_my_description(description=full, language_code=language)
         if (await bot.get_my_short_description(language_code=language)).short_description != short:
-            await bot.set_my_short_description(description=short, language_code=language)
+            await bot.set_my_short_description(short_description=short, language_code=language)
 
 
 async def configure_identity_safely(bot):

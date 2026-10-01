@@ -13,7 +13,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CopyTextBu
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from state import KYIV, StateError
-from translations import translate
+from translations import LANGUAGES, translate
 
 ROUTES = ("start home profile me wallet vault balance rewards daily claim streak quests "
           "missions achievements social links community events news ai notify settings "
@@ -182,9 +182,11 @@ class Interface:
                     [("🌐 Social", "social"), ("✦ AI", "ai")],
                     [("❌ Delete account", "delete")]]
         elif page == "language":
-            text = f"🌐 Language\n\nSelected: {a.get('language', 'en').upper()}"
-            rows = [[("🇷🇺 Русский", "lang_ru"), ("🇬🇧 English", "lang_en")],
-                    [("🇸🇮 Slovenščina", "lang_sl")]]
+            language = a.get("language", "en")
+            text = f"🌐 {translate('Language', language)}\n\n{translate('Select your preferred language.', language)}\n{translate('Selected', language)}: {LANGUAGES.get(language, LANGUAGES['en'])[1]}"
+            options = [(f"{flag} {name}" + (" ✓" if code == language else ""), f"lang_{code}")
+                       for code, (flag, name) in LANGUAGES.items()]
+            rows = [options[index:index + 2] for index in range(0, len(options), 2)]
         elif page == "privacy":
             text = "👤 Privacy\n\nDeleting a profile does not erase LMN, XP, financial history or referral attribution."
             rows = [[("❌ Delete account", "delete")]]
@@ -412,7 +414,7 @@ class Interface:
                         if category == "ai":
                             a["ai_waitlist"] = n[category]
                     target = "notify"
-                elif target[5:] in ("ru", "en", "sl"):
+                elif target[5:] in LANGUAGES:
                     language = target[5:]
                     def change(d):
                         d.setdefault("aurelia_accounts", {}).setdefault(str(uid), {})["language"] = language

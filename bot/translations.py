@@ -261,6 +261,139 @@ LABELS["sl"].update({
     "gambler": "Pretekli igralec", "winner": "Pretekli zmagovalec",
 })
 
+LANGUAGES = {
+    "en": ("🇬🇧", "English"), "ru": ("🇷🇺", "Русский"),
+    "uk": ("🇺🇦", "Українська"), "be": ("🇧🇾", "Беларуская"),
+    "kk": ("🇰🇿", "Қазақша"), "hy": ("🇦🇲", "Հայերեն"),
+    "az": ("🇦🇿", "Azərbaycanca"), "ky": ("🇰🇬", "Кыргызча"),
+    "tg": ("🇹🇯", "Тоҷикӣ"), "tk": ("🇹🇲", "Türkmençe"),
+    "uz": ("🇺🇿", "O‘zbekcha"), "ro": ("🇲🇩", "Română (Moldova)"),
+    "sl": ("🇸🇮", "Slovenščina"),
+}
+
+# Core navigation, language selection, and account-safety messages for the
+# national languages of CIS states (including associated Turkmenistan and
+# Moldova), together with Ukrainian. Unlisted long-form copy remains in English.
+_CORE = {
+    "uk": {
+        "Home": "Головна", "Profile": "Профіль", "Wallet": "Гаманець",
+        "Rewards": "Нагороди", "Daily": "Щоденна нагорода", "Quests": "Завдання",
+        "Social": "Соцмережі", "Community": "Спільнота", "Events": "Події",
+        "News": "Новини", "Settings": "Налаштування", "Language": "Мова",
+        "Notifications": "Сповіщення", "Back": "Назад", "Cancel": "Скасувати",
+        "Help": "Допомога", "Select your preferred language.": "Виберіть бажану мову.",
+        "Selected": "Вибрано", "Open": "Відкрити", "Share": "Поділитися",
+        "Solve": "Розв’яжіть", "Already claimed today.": "Сьогодні нагороду вже отримано.",
+        "Verify your account to continue.": "Підтвердьте обліковий запис, щоб продовжити.",
+        "Account storage is unavailable. No changes were applied.":
+            "Сховище облікового запису недоступне. Зміни не збережено.",
+    },
+    "be": {
+        "Home": "Галоўная", "Profile": "Профіль", "Wallet": "Кашалёк",
+        "Rewards": "Узнагароды", "Daily": "Штодзённая ўзнагарода", "Quests": "Заданні",
+        "Social": "Сацыяльныя сеткі", "Community": "Супольнасць", "Events": "Падзеі",
+        "News": "Навіны", "Settings": "Налады", "Language": "Мова",
+        "Notifications": "Апавяшчэнні", "Back": "Назад", "Cancel": "Скасаваць",
+        "Help": "Дапамога", "Select your preferred language.": "Выберыце пажаданую мову.",
+        "Selected": "Выбрана", "Open": "Адкрыць", "Share": "Падзяліцца",
+        "Solve": "Рашыце", "Already claimed today.": "Сёння ўзнагарода ўжо атрымана.",
+        "Verify your account to continue.": "Пацвердзіце ўліковы запіс, каб працягнуць.",
+    },
+    "kk": {
+        "Home": "Басты бет", "Profile": "Профиль", "Wallet": "Әмиян",
+        "Rewards": "Сыйақылар", "Daily": "Күнделікті сыйақы", "Quests": "Тапсырмалар",
+        "Social": "Әлеуметтік желілер", "Community": "Қауымдастық", "Events": "Оқиғалар",
+        "News": "Жаңалықтар", "Settings": "Баптаулар", "Language": "Тіл",
+        "Notifications": "Хабарландырулар", "Back": "Артқа", "Cancel": "Болдырмау",
+        "Help": "Көмек", "Select your preferred language.": "Қалаған тіліңізді таңдаңыз.",
+        "Selected": "Таңдалды", "Open": "Ашу", "Share": "Бөлісу",
+        "Solve": "Шешіңіз", "Already claimed today.": "Бүгінгі сыйақы алынды.",
+        "Verify your account to continue.": "Жалғастыру үшін тіркелгіңізді растаңыз.",
+    },
+    "hy": {
+        "Home": "Գլխավոր", "Profile": "Պրոֆիլ", "Wallet": "Դրամապանակ",
+        "Rewards": "Պարգևներ", "Daily": "Օրական պարգև", "Quests": "Առաջադրանքներ",
+        "Social": "Սոցիալական ցանցեր", "Community": "Համայնք",
+        "Events": "Իրադարձություններ", "News": "Նորություններ",
+        "Settings": "Կարգավորումներ", "Language": "Լեզու", "Notifications": "Ծանուցումներ",
+        "Back": "Հետ", "Cancel": "Չեղարկել", "Help": "Օգնություն",
+        "Select your preferred language.": "Ընտրեք նախընտրելի լեզուն։",
+        "Selected": "Ընտրված է", "Open": "Բացել", "Share": "Կիսվել",
+        "Solve": "Լուծեք", "Already claimed today.": "Այսօրվա պարգևն արդեն ստացվել է։",
+        "Verify your account to continue.": "Շարունակելու համար հաստատեք ձեր հաշիվը։",
+    },
+    "az": {
+        "Home": "Ana səhifə", "Profile": "Profil", "Wallet": "Pulqabı",
+        "Rewards": "Mükafatlar", "Daily": "Gündəlik mükafat", "Quests": "Tapşırıqlar",
+        "Social": "Sosial şəbəkələr", "Community": "İcma", "Events": "Tədbirlər",
+        "News": "Xəbərlər", "Settings": "Parametrlər", "Language": "Dil",
+        "Notifications": "Bildirişlər", "Back": "Geri", "Cancel": "Ləğv et",
+        "Help": "Kömək", "Select your preferred language.": "İstədiyiniz dili seçin.",
+        "Selected": "Seçildi", "Open": "Aç", "Share": "Paylaş",
+        "Solve": "Həll edin", "Already claimed today.": "Bugünkü mükafat artıq alınıb.",
+        "Verify your account to continue.": "Davam etmək üçün hesabınızı təsdiqləyin.",
+    },
+    "ky": {
+        "Home": "Башкы бет", "Profile": "Профиль", "Wallet": "Капчык",
+        "Rewards": "Сыйлыктар", "Daily": "Күнүмдүк сыйлык", "Quests": "Тапшырмалар",
+        "Social": "Социалдык тармактар", "Community": "Коомчулук",
+        "Events": "Окуялар", "News": "Жаңылыктар", "Settings": "Жөндөөлөр",
+        "Language": "Тил", "Notifications": "Билдирмелер", "Back": "Артка",
+        "Cancel": "Жокко чыгаруу", "Help": "Жардам",
+        "Select your preferred language.": "Каалаган тилиңизди тандаңыз.",
+        "Selected": "Тандалды", "Open": "Ачуу", "Share": "Бөлүшүү",
+        "Solve": "Чечиңиз", "Already claimed today.": "Бүгүнкү сыйлык мурунтан алынган.",
+        "Verify your account to continue.": "Улантуу үчүн аккаунтуңузду ырастаңыз.",
+    },
+    "tg": {
+        "Home": "Саҳифаи асосӣ", "Profile": "Профил", "Wallet": "Ҳамён",
+        "Rewards": "Мукофотҳо", "Daily": "Мукофоти ҳаррӯза", "Quests": "Вазифаҳо",
+        "Social": "Шабакаҳои иҷтимоӣ", "Community": "Ҷомеа", "Events": "Рӯйдодҳо",
+        "News": "Хабарҳо", "Settings": "Танзимот", "Language": "Забон",
+        "Notifications": "Огоҳиномаҳо", "Back": "Бозгашт",
+        "Cancel": "Бекор кардан", "Help": "Кӯмак",
+        "Select your preferred language.": "Забони дилхоҳатонро интихоб кунед.",
+        "Selected": "Интихоб шуд", "Open": "Кушодан", "Share": "Мубодила кардан",
+        "Solve": "Ҳал кунед", "Already claimed today.": "Мукофоти имрӯз аллакай гирифта шудааст.",
+        "Verify your account to continue.": "Барои идома ҳисобатонро тасдиқ кунед.",
+    },
+    "tk": {
+        "Home": "Baş sahypa", "Profile": "Profil", "Wallet": "Gapjyk",
+        "Rewards": "Baýraklar", "Daily": "Gündelik baýrak", "Quests": "Tabşyryklar",
+        "Social": "Sosial ulgamlar", "Community": "Jemgyýet", "Events": "Wakalar",
+        "News": "Täzelikler", "Settings": "Sazlamalar", "Language": "Dil",
+        "Notifications": "Bildirişler", "Back": "Yza", "Cancel": "Ýatyr",
+        "Help": "Kömek", "Select your preferred language.": "Isleýän diliňizi saýlaň.",
+        "Selected": "Saýlandy", "Open": "Aç", "Share": "Paýlaş",
+        "Solve": "Çözüň", "Already claimed today.": "Şu günki baýrak eýýäm alyndy.",
+        "Verify your account to continue.": "Dowam etmek üçin hasabyňyzy tassyklaň.",
+    },
+    "uz": {
+        "Home": "Bosh sahifa", "Profile": "Profil", "Wallet": "Hamyon",
+        "Rewards": "Mukofotlar", "Daily": "Kunlik mukofot", "Quests": "Vazifalar",
+        "Social": "Ijtimoiy tarmoqlar", "Community": "Hamjamiyat", "Events": "Tadbirlar",
+        "News": "Yangiliklar", "Settings": "Sozlamalar", "Language": "Til",
+        "Notifications": "Bildirishnomalar", "Back": "Orqaga", "Cancel": "Bekor qilish",
+        "Help": "Yordam", "Select your preferred language.": "Oʻzingizga qulay tilni tanlang.",
+        "Selected": "Tanlandi", "Open": "Ochish", "Share": "Ulashish",
+        "Solve": "Yeching", "Already claimed today.": "Bugungi mukofot allaqachon olingan.",
+        "Verify your account to continue.": "Davom etish uchun hisobingizni tasdiqlang.",
+    },
+    "ro": {
+        "Home": "Acasă", "Profile": "Profil", "Wallet": "Portofel",
+        "Rewards": "Recompense", "Daily": "Recompensă zilnică", "Quests": "Misiuni",
+        "Social": "Rețele sociale", "Community": "Comunitate", "Events": "Evenimente",
+        "News": "Noutăți", "Settings": "Setări", "Language": "Limbă",
+        "Notifications": "Notificări", "Back": "Înapoi", "Cancel": "Anulează",
+        "Help": "Ajutor", "Select your preferred language.": "Alegeți limba preferată.",
+        "Selected": "Selectat", "Open": "Deschide", "Share": "Distribuie",
+        "Solve": "Rezolvați", "Already claimed today.": "Recompensa de astăzi a fost deja revendicată.",
+        "Verify your account to continue.": "Verificați-vă contul pentru a continua.",
+    },
+}
+for _code, _words in _CORE.items():
+    LABELS.setdefault(_code, {}).update(_words)
+
 
 def translate(text, language):
     """Translate labels while preserving URLs; IDs and callback data are never touched."""

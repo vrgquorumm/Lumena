@@ -13,6 +13,32 @@ runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
 
 
+class LanguagePickerTests(unittest.TestCase):
+    def test_language_picker_lists_every_supported_native_name(self):
+        from interface import Interface
+        from translations import LANGUAGES
+
+        state = SimpleNamespace(
+            raw={"aurelia_accounts": {}},
+            account=lambda uid: {"language": "en"},
+            balance=lambda uid: 0,
+            get=lambda table, uid, default=0: default,
+        )
+        ui = Interface(state, "test-token", "AureliaBot")
+        _, keyboard = ui.screen(42, "language")
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        choices = [button for button in buttons
+                   if button.callback_data.split(":")[2].startswith("lang_")]
+        self.assertEqual(
+            {button.callback_data.split(":")[2][5:] for button in choices},
+            set(LANGUAGES),
+        )
+        self.assertEqual(
+            {button.text.removesuffix(" ✓") for button in choices},
+            {f"{flag} {name}" for flag, name in LANGUAGES.values()},
+        )
+
+
 class StartupTests(unittest.IsolatedAsyncioTestCase):
     async def test_unchanged_identity_is_not_written(self):
         bot = SimpleNamespace(
